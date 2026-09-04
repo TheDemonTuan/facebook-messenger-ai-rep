@@ -2,9 +2,23 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { settings, settingRevisions } from "../schema/index.js";
 import { SystemSettingsSchema, type SystemSettings } from "@messenger/contracts";
+import { getEnv } from "@messenger/config";
 
 export class SettingsRepository {
   constructor(private db: Database) {}
+
+  private getEnvDefaults(): Partial<SystemSettings> {
+    try {
+      const env = getEnv();
+      return {
+        aiBaseUrl: env.OMNIROUTE_BASE_URL,
+        aiApiKey: env.OMNIROUTE_API_KEY,
+        aiModel: env.DEFAULT_AI_MODEL,
+      };
+    } catch {
+      return {};
+    }
+  }
 
   async getSettings(channelAccountId: string): Promise<{ settings: SystemSettings; revision: number }> {
     const rows = await this.db
@@ -13,13 +27,18 @@ export class SettingsRepository {
       .where(eq(settings.channelAccountId, channelAccountId))
       .limit(1);
 
+    const envDefaults = this.getEnvDefaults();
+
     if (rows.length === 0 || !rows[0]) {
       // Default initial settings
-      const defaultSettings = SystemSettingsSchema.parse({});
+      const defaultSettings = SystemSettingsSchema.parse(envDefaults);
       return { settings: defaultSettings, revision: 1 };
     }
 
-    const parsed = SystemSettingsSchema.parse(rows[0].settings);
+    const parsed = SystemSettingsSchema.parse({
+      ...envDefaults,
+      ...rows[0].settings,
+    });
     return {
       settings: parsed,
       revision: rows[0].currentRevision,
@@ -39,12 +58,16 @@ export class SettingsRepository {
         .where(eq(settings.channelAccountId, channelAccountId))
         .limit(1);
 
+      const envDefaults = this.getEnvDefaults();
       let currentRevision = 1;
-      let existingSettings = SystemSettingsSchema.parse({});
+      let existingSettings = SystemSettingsSchema.parse(envDefaults);
 
       if (current.length > 0 && current[0]) {
         currentRevision = current[0].currentRevision;
-        existingSettings = SystemSettingsSchema.parse(current[0].settings);
+        existingSettings = SystemSettingsSchema.parse({
+          ...envDefaults,
+          ...current[0].settings,
+        });
       }
 
       const merged = SystemSettingsSchema.parse({

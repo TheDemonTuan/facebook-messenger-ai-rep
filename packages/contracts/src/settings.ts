@@ -6,6 +6,8 @@ export const SystemSettingsSchema = z.object({
   stickyMaxTurns: z.number().int().min(1).max(10).default(3),
   stickyMaxDurationMs: z.number().int().min(10000).max(600000).default(120000),
   aiModel: z.string().min(1).default("gemini-3.7-flash-low"),
+  aiBaseUrl: z.string().min(1).default("http://127.0.0.1:8000/v1"),
+  aiApiKey: z.string().default("omniroute-default-key"),
   aiTimeoutMs: z.number().int().min(2000).max(60000).default(20000),
   aiMaxResponseCount: z.number().int().min(1).max(3).default(3),
   aiTotalMaxChars: z.number().int().min(50).max(2000).default(480),

@@ -24,7 +24,11 @@ export async function seedDatabase(channelAccountId?: string) {
     .onConflictDoNothing();
 
   // 2. Ensure initial settings exist
-  const defaultSettings = SystemSettingsSchema.parse({});
+  const defaultSettings = SystemSettingsSchema.parse({
+    aiBaseUrl: env.OMNIROUTE_BASE_URL,
+    aiApiKey: env.OMNIROUTE_API_KEY,
+    aiModel: env.DEFAULT_AI_MODEL,
+  });
   const existing = await db.query.settings.findFirst({
     where: (t, { eq }) => eq(t.channelAccountId, accountId),
   });

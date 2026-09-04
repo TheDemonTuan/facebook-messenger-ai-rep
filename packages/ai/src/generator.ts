@@ -18,7 +18,11 @@ export interface GenerationResult {
 
 export class AiReplyGenerator {
   async generateReply(context: ConversationContext): Promise<GenerationResult> {
-    const client = getAiClient();
+    const client = getAiClient({
+      baseURL: context.settings.aiBaseUrl,
+      apiKey: context.settings.aiApiKey,
+      timeoutMs: context.settings.aiTimeoutMs,
+    });
     const model = context.settings.aiModel;
     const startTime = Date.now();
 

@@ -1,13 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch } from "../api";
 import type { SettingItem } from "../types";
-import { Save, History } from "lucide-react";
+import { Save, History, Eye, EyeOff, CheckCircle2, AlertCircle, Wifi, Loader2 } from "lucide-react";
 
 export const SettingsPage: React.FC = () => {
   const [data, setData] = useState<SettingItem | null>(null);
   const [formData, setFormData] = useState<any>({});
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [testingAi, setTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const loadSettings = async () => {
     try {
@@ -22,6 +25,26 @@ export const SettingsPage: React.FC = () => {
   useEffect(() => {
     loadSettings();
   }, []);
+
+  const handleTestAi = async () => {
+    setTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const res = await apiFetch<{ ok: boolean; message: string }>("/api/settings/test-ai", {
+        method: "POST",
+        body: JSON.stringify({
+          aiBaseUrl: formData.aiBaseUrl,
+          aiApiKey: formData.aiApiKey,
+          aiModel: formData.aiModel,
+        }),
+      });
+      setAiTestResult(res);
+    } catch (err: unknown) {
+      setAiTestResult({ ok: false, message: (err as Error).message });
+    } finally {
+      setTestingAi(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,18 +154,125 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* AI Model & Persona */}
+        {/* AI API & Auth Configuration */}
         <div style={{ borderTop: "1px solid #f1f5f9", paddingTop: "20px" }}>
-          <h2 style={{ fontSize: "1.1rem", fontWeight: "bold", margin: "0 0 12px 0", color: "#1e293b" }}>Mô hình AI & Persona</h2>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+            <div>
+              <h2 style={{ fontSize: "1.1rem", fontWeight: "bold", margin: 0, color: "#1e293b" }}>Cấu hình AI API & Xác thực (Auth)</h2>
+              <span style={{ fontSize: "0.8rem", color: "#64748b" }}>Cập nhật trực tiếp API Key / Endpoint lưu vào Database không cần chỉnh sửa file .env</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleTestAi}
+              disabled={testingAi}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "8px 14px",
+                borderRadius: "6px",
+                border: "1px solid #cbd5e1",
+                backgroundColor: "#f8fafc",
+                color: "#1e293b",
+                fontSize: "0.85rem",
+                fontWeight: "600",
+                cursor: testingAi ? "not-allowed" : "pointer",
+              }}
+            >
+              {testingAi ? <Loader2 size={16} className="animate-spin" /> : <Wifi size={16} color="#2563eb" />}
+              {testingAi ? "Đang kiểm tra..." : "Kiểm tra kết nối"}
+            </button>
+          </div>
+
+          {aiTestResult && (
+            <div
+              style={{
+                marginBottom: "16px",
+                padding: "12px 16px",
+                borderRadius: "6px",
+                border: `1px solid ${aiTestResult.ok ? "#86efac" : "#fca5a5"}`,
+                backgroundColor: aiTestResult.ok ? "#f0fdf4" : "#fef2f2",
+                color: aiTestResult.ok ? "#166534" : "#991b1b",
+                fontSize: "0.85rem",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+              }}
+            >
+              {aiTestResult.ok ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
+              <span>{aiTestResult.message}</span>
+            </div>
+          )}
+
           <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             <div>
-              <label style={labelStyle}>AI Model</label>
+              <label style={labelStyle}>AI Gateway / Base URL</label>
               <input
                 type="text"
-                value={formData.aiModel || "gemini-3.7-flash-low"}
-                onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
+                value={formData.aiBaseUrl || ""}
+                onChange={(e) => setFormData({ ...formData, aiBaseUrl: e.target.value })}
+                placeholder="http://127.0.0.1:8000/v1"
                 style={inputStyle}
               />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Địa chỉ OmniRoute hoặc OpenAI API endpoint (VD: http://127.0.0.1:8000/v1)</span>
+            </div>
+
+            <div>
+              <label style={labelStyle}>API Key / Auth Token</label>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input
+                  type={showApiKey ? "text" : "password"}
+                  value={formData.aiApiKey || ""}
+                  onChange={(e) => setFormData({ ...formData, aiApiKey: e.target.value })}
+                  placeholder="Nhập API Key hoặc token xác thực..."
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  style={{
+                    padding: "0 12px",
+                    borderRadius: "6px",
+                    border: "1px solid #cbd5e1",
+                    backgroundColor: "#f8fafc",
+                    color: "#64748b",
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                  title={showApiKey ? "Ẩn API Key" : "Hiện API Key"}
+                >
+                  {showApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Khóa xác thực API lưu trong Database thay thế biến môi trường OMNIROUTE_API_KEY</span>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
+              <div>
+                <label style={labelStyle}>AI Model</label>
+                <input
+                  type="text"
+                  value={formData.aiModel || "gemini-3.7-flash-low"}
+                  onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
+                  style={inputStyle}
+                />
+                <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Model dùng tạo phản hồi (VD: gemini-3.7-flash-low)</span>
+              </div>
+
+              <div>
+                <label style={labelStyle}>AI Timeout (ms)</label>
+                <input
+                  type="number"
+                  value={formData.aiTimeoutMs || 20000}
+                  onChange={(e) => setFormData({ ...formData, aiTimeoutMs: parseInt(e.target.value, 10) })}
+                  style={inputStyle}
+                  min={2000}
+                  max={60000}
+                />
+                <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Thời gian chờ phản hồi tối đa (mặc định 20000ms)</span>
+              </div>
             </div>
 
             <div>
@@ -203,7 +333,7 @@ export const SettingsPage: React.FC = () => {
             type="text"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Ví dụ: Tăng debounce lên 4000ms do khách hay gõ ngắt câu..."
+            placeholder="Ví dụ: Cập nhật API Key mới cho OmniRoute..."
             style={inputStyle}
           />
         </div>

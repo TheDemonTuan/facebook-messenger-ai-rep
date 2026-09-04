@@ -10,6 +10,7 @@ import { channelAccounts, conversations, messages, conversationQueue, incidents 
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { SseBroadcaster } from "../sse/broadcaster.js";
 import { SystemSettingsSchema, type SessionUser } from "@messenger/contracts";
+import { checkAiHealth } from "@messenger/ai";
 
 export interface AdminRoutesOptions {
   db: Database;
@@ -29,6 +30,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     fastify.addHook("preHandler", async (request, reply) => {
       const user = await requireAuth(request, reply);
       if (!user) return;
+      (request as unknown as { user: SessionUser }).user = user;
     });
 
     // 1. Overview metrics
@@ -232,6 +234,21 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       broadcaster.broadcast("settings:updated", { revision: updated.revision });
       return reply.send(updated);
+    });
+
+    fastify.post("/api/settings/test-ai", async (request, reply) => {
+      const body = (request.body || {}) as {
+        aiBaseUrl?: string;
+        aiApiKey?: string;
+        aiModel?: string;
+      };
+      const current = await settingsRepo.getSettings(channelAccountId);
+      const baseURL = body.aiBaseUrl || current.settings.aiBaseUrl;
+      const apiKey = body.aiApiKey || current.settings.aiApiKey;
+      const model = body.aiModel || current.settings.aiModel;
+
+      const health = await checkAiHealth({ baseURL, apiKey, model });
+      return reply.send(health);
     });
 
     // 5. Incidents

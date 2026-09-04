@@ -9,14 +9,12 @@ import {
   IncidentRepository,
 } from "@messenger/db";
 import { getRedis, closeRedis, AppQueues } from "@messenger/queue";
+import { getEnv } from "@messenger/config";
 import { checkAiHealth } from "@messenger/ai";
 import { AiWorkerService } from "./worker.js";
 
 async function main() {
-  console.log("Checking AI Gateway connectivity...");
-  const health = await checkAiHealth();
-  console.log(`[AI Health] ${health.message}`);
-
+  const env = getEnv();
   const db = getDb();
   const redis = getRedis();
   const queues = new AppQueues(redis);
@@ -27,6 +25,15 @@ async function main() {
   const eventRepo = new EventRepository(db);
   const settingsRepo = new SettingsRepository(db);
   const incidentRepo = new IncidentRepository(db);
+
+  console.log("Checking AI Gateway connectivity...");
+  const { settings } = await settingsRepo.getSettings(env.DEFAULT_CHANNEL_ACCOUNT_ID);
+  const health = await checkAiHealth({
+    baseURL: settings.aiBaseUrl,
+    apiKey: settings.aiApiKey,
+    model: settings.aiModel,
+  });
+  console.log(`[AI Health] ${health.message}`);
 
   const workerService = new AiWorkerService(
     db,

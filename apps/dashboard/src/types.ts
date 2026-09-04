@@ -88,6 +88,8 @@ export interface SettingItem {
     stickyMaxTurns: number;
     stickyMaxDurationMs: number;
     aiModel: string;
+    aiBaseUrl: string;
+    aiApiKey: string;
     aiTimeoutMs: number;
     aiMaxResponseCount: number;
     aiTotalMaxChars: number;
