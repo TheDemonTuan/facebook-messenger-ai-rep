@@ -64,6 +64,7 @@ command -v curl >/dev/null || die "curl is required"
 [ -f "$COMPOSE" ] || die "$COMPOSE is missing"
 [ -f "$APP_ENV" ] || die "$APP_ENV is missing"
 chmod 600 "$APP_ENV"
+CLOUDFLARE_TUNNEL_TOKEN="${CLOUDFLARE_TUNNEL_TOKEN:-$(grep -E '^CLOUDFLARE_TUNNEL_TOKEN=' "$APP_ENV" 2>/dev/null | cut -d= -f2- | tr -d '\r"' || true)}"
 
 mkdir -p "$APP_DIR" "$BACKUP_DIR"
 exec 9>"$LOCK_FILE"
