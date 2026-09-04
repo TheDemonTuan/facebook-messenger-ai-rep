@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import {
   getDb,
+  getSql,
   closeDb,
   ConversationRepository,
   QueueRepository,
@@ -73,8 +75,28 @@ async function main() {
 
   senderWorker.start();
 
+  const HEARTBEAT_FILE = "/tmp/healthy";
+  const heartbeatInterval = setInterval(async () => {
+    try {
+      if (!adapter.isAlive()) return;
+      const ping = await redis.ping();
+      await getSql().unsafe("SELECT 1");
+      if (ping === "PONG") {
+        fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
+      }
+    } catch (err) {
+      console.warn("[Browser Agent] Health check failed:", err);
+    }
+  }, 5000);
+
+  try {
+    fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
+  } catch {}
+
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}. Shutting down Browser Agent...`);
+    clearInterval(heartbeatInterval);
+    try { fs.unlinkSync(HEARTBEAT_FILE); } catch {}
     await senderWorker.stop();
     await adapter.close();
     await queues.close();

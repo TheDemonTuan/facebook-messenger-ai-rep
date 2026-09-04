@@ -40,7 +40,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.control-plane
     container_name: messenger-migrate
-    command: ["sh", "-c", "bun packages/db/dist/migrate.js && bun packages/db/dist/seed.js"]
+    command: ["bun", "packages/db/dist/migrate.js"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
@@ -49,6 +49,24 @@ services:
         condition: service_healthy
     networks:
       - messenger_net
+
+  seed:
+    image: ${CONTROL_PLANE_IMAGE:-messenger-control-plane:local}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.control-plane
+    container_name: messenger-seed
+    command: ["bun", "packages/db/dist/seed.js"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
+      DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - messenger_net
+    profiles:
+      - tools
 
   control-plane:
     image: ${CONTROL_PLANE_IMAGE:-messenger-control-plane:local}
@@ -106,7 +124,7 @@ services:
     networks:
       - messenger_net
     healthcheck:
-      test: ["CMD-SHELL", "bun -e 'process.kill(1, 0)'"]
+      test: ["CMD-SHELL", "bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -136,7 +154,7 @@ services:
     networks:
       - messenger_net
     healthcheck:
-      test: ["CMD-SHELL", "bun -e 'process.kill(1, 0)'"]
+      test: ["CMD-SHELL", "bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -169,7 +187,7 @@ services:
     networks:
       - messenger_net
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent --max-time 5 http://127.0.0.1:6080/ || exit 1"]
+      test: ["CMD-SHELL", "curl --fail --silent --max-time 5 http://127.0.0.1:6080/ >/dev/null && bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
       interval: 10s
       timeout: 5s
       retries: 3

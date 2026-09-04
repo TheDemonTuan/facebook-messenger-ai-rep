@@ -28,6 +28,10 @@ export class SchedulerService {
   private loopTimeout: NodeJS.Timeout | null = null;
   private debounceWorker: Worker<DebounceJobData> | null = null;
 
+  get active(): boolean {
+    return this.isRunning;
+  }
+
   constructor(
     private db: Database,
     private redis: Redis,

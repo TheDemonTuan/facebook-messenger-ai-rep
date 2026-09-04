@@ -27,12 +27,13 @@ RUN bun install --frozen-lockfile
 
 COPY packages/contracts/ ./packages/contracts/
 COPY packages/config/ ./packages/config/
-COPY packages/db/ ./packages/db/
+COPY packages/db/src/ ./packages/db/src/
+COPY packages/db/tsconfig.json ./packages/db/
 COPY packages/queue/ ./packages/queue/
 COPY packages/channel/ ./packages/channel/
 COPY apps/browser-agent/ ./apps/browser-agent/
 
-RUN bun run --filter='@messenger/*' build && cd apps/browser-agent && bun x playwright install chromium
+RUN bun run --filter='@messenger/*' build
 
 COPY docker/entrypoint-browser.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

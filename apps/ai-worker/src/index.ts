@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import {
   getDb,
+  getSql,
   closeDb,
   ConversationRepository,
   QueueRepository,
@@ -49,8 +51,28 @@ async function main() {
 
   workerService.start();
 
+  const HEARTBEAT_FILE = "/tmp/healthy";
+  const heartbeatInterval = setInterval(async () => {
+    try {
+      if (!workerService.active) return;
+      const ping = await redis.ping();
+      await getSql().unsafe("SELECT 1");
+      if (ping === "PONG") {
+        fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
+      }
+    } catch (err) {
+      console.warn("[AI Worker] Health check failed:", err);
+    }
+  }, 5000);
+
+  try {
+    fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
+  } catch {}
+
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}. Shutting down AI worker service...`);
+    clearInterval(heartbeatInterval);
+    try { fs.unlinkSync(HEARTBEAT_FILE); } catch {}
     await workerService.stop();
     await queues.close();
     await closeRedis();

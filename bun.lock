@@ -26,7 +26,7 @@
         "ioredis": "^5.5.0",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "apps/browser-agent": {
@@ -44,7 +44,7 @@
         "playwright": "1.50.1",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "apps/control-plane": {
@@ -67,8 +67,8 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "@types/node": "^22.13.5",
-        "typescript": "^5.7.3",
+        "@types/node": "^22.20.1",
+        "typescript": "^5.9.3",
       },
     },
     "apps/dashboard": {
@@ -84,7 +84,7 @@
         "@types/react": "^18.3.18",
         "@types/react-dom": "^18.3.5",
         "@vitejs/plugin-react": "^4.3.4",
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
         "vite": "^6.2.0",
       },
     },
@@ -101,7 +101,7 @@
         "ioredis": "^5.5.0",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/ai": {
@@ -115,7 +115,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/channel": {
@@ -125,7 +125,7 @@
         "@messenger/contracts": "workspace:*",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/config": {
@@ -137,7 +137,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/contracts": {
@@ -147,7 +147,7 @@
         "zod": "^3.24.2",
       },
       "devDependencies": {
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/db": {
@@ -161,7 +161,7 @@
       },
       "devDependencies": {
         "drizzle-kit": "^0.30.4",
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
     "packages/queue": {
@@ -176,7 +176,7 @@
       },
       "devDependencies": {
         "@types/ioredis": "^5.0.0",
-        "typescript": "^5.7.3",
+        "typescript": "^5.9.3",
       },
     },
   },

@@ -10,6 +10,8 @@ grep -q 'curl --fail' "$script"
 grep -q 'source "$APP_DIR/image-retention.sh"' "$script"
 grep -q '\-\-status' "$script"
 grep -q '\-\-migrate' "$script"
+grep -q '\-\-reconcile' "$script"
+grep -q 'trap .* ERR INT TERM HUP' "$script"
 grep -q 'ensure_infra' "$script"
 
 echo "deploy script checks passed"

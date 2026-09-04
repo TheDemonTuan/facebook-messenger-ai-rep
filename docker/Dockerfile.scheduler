@@ -12,7 +12,8 @@ RUN bun install --frozen-lockfile
 
 COPY packages/contracts/ ./packages/contracts/
 COPY packages/config/ ./packages/config/
-COPY packages/db/ ./packages/db/
+COPY packages/db/src/ ./packages/db/src/
+COPY packages/db/tsconfig.json ./packages/db/
 COPY packages/queue/ ./packages/queue/
 COPY apps/scheduler/ ./apps/scheduler/
 

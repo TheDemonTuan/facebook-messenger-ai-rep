@@ -17,10 +17,6 @@ on:
         type: boolean
         default: false
 
-concurrency:
-  group: facebook-messenger-ai-production
-  cancel-in-progress: true
-
 permissions:
   contents: read
 
@@ -30,20 +26,24 @@ env:
 jobs:
   verify:
     name: Verify source
+    concurrency:
+      group: verify-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     outputs:
       has_images: ${{ steps.set-matrix.outputs.has_images }}
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       db_migration: ${{ steps.filter.outputs.db_migration }}
+      compose_config: ${{ steps.filter.outputs.compose_config }}
       deploy_scripts: ${{ steps.filter.outputs.deploy_scripts }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Detect changed paths
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             control_plane:
@@ -60,7 +60,9 @@ jobs:
               - 'apps/scheduler/**'
               - 'packages/contracts/**'
               - 'packages/config/**'
-              - 'packages/db/**'
+              - 'packages/db/src/**'
+              - 'packages/db/package.json'
+              - 'packages/db/tsconfig.json'
               - 'packages/queue/**'
               - 'docker/Dockerfile.scheduler'
               - 'package.json'
@@ -70,7 +72,9 @@ jobs:
               - 'packages/ai/**'
               - 'packages/contracts/**'
               - 'packages/config/**'
-              - 'packages/db/**'
+              - 'packages/db/src/**'
+              - 'packages/db/package.json'
+              - 'packages/db/tsconfig.json'
               - 'packages/queue/**'
               - 'docker/Dockerfile.ai-worker'
               - 'package.json'
@@ -80,20 +84,22 @@ jobs:
               - 'packages/channel/**'
               - 'packages/contracts/**'
               - 'packages/config/**'
-              - 'packages/db/**'
+              - 'packages/db/src/**'
+              - 'packages/db/package.json'
+              - 'packages/db/tsconfig.json'
               - 'packages/queue/**'
               - 'docker/Dockerfile.browser-agent'
               - 'docker/entrypoint-browser.sh'
               - 'package.json'
               - 'bun.lock'
             db_migration:
-              - 'packages/db/src/migrations/**'
-              - 'packages/db/drizzle/**'
+              - 'packages/db/migrations/**'
               - 'packages/db/src/schema/**'
+            compose_config:
+              - 'compose.prod.yml'
             deploy_scripts:
               - 'scripts/deploy.sh'
               - 'scripts/image-retention.sh'
-              - 'compose.prod.yml'
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -103,6 +109,14 @@ jobs:
       - run: bun run typecheck
       - run: bun run build
       - run: bun run test
+      - name: Verify database schema and migrations are in sync
+        run: |
+          bun --filter=@messenger/db run db:generate
+          if [ -n "$(git status --porcelain packages/db/migrations)" ]; then
+            echo "::error::Database schema was modified without generating migrations! Run 'bun --filter=@messenger/db run db:generate' and commit the migration files."
+            git status --porcelain packages/db/migrations
+            exit 1
+          fi
       - name: Test deploy and retention scripts
         run: |
           bash tests/deploy-script.test.sh
@@ -140,6 +154,9 @@ jobs:
 
   images:
     name: Build image → GHCR (${{ matrix.name }})
+    concurrency:
+      group: images-${{ github.ref }}-${{ matrix.name }}
+      cancel-in-progress: true
     needs: verify
     if: ${{ needs.verify.outputs.has_images == 'true' }}
     runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
@@ -150,11 +167,11 @@ jobs:
       fail-fast: true
       matrix: ${{ fromJson(needs.verify.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -170,7 +187,7 @@ jobs:
           echo "image=ghcr.io/${owner_lc}/facebook-messenger-ai-${SERVICE}" >> "$GITHUB_OUTPUT"
       - name: Build and publish image
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -189,20 +206,23 @@ jobs:
         run: |
           mkdir -p digests
           echo "${IMAGE}@${DIGEST}" > "digests/${SERVICE}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.name }}
           path: digests/
 
   deploy:
     name: Deploy to VPS
+    concurrency:
+      group: facebook-messenger-ai-production-deploy
+      cancel-in-progress: false
     needs: [verify, images]
     if: |
       always() &&
       needs.verify.result == 'success' &&
       (needs.images.result == 'success' || needs.images.result == 'skipped') &&
       !(github.event_name == 'workflow_dispatch' && inputs.skip_deploy) &&
-      (needs.verify.outputs.has_images == 'true' || needs.verify.outputs.db_migration == 'true' || needs.verify.outputs.deploy_scripts == 'true' || inputs.force_all == true)
+      (needs.verify.outputs.has_images == 'true' || needs.verify.outputs.db_migration == 'true' || needs.verify.outputs.compose_config == 'true' || needs.verify.outputs.deploy_scripts == 'true' || inputs.force_all == true)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -210,13 +230,13 @@ jobs:
     environment:
       name: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: Download image digests
         if: ${{ needs.verify.outputs.has_images == 'true' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: digests-*
           path: all-digests
@@ -267,11 +287,15 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
           DB_MIGRATE: ${{ needs.verify.outputs.db_migration }}
+          COMPOSE_CONFIG: ${{ needs.verify.outputs.compose_config }}
         run: |
           set -euo pipefail
           deploy_args=()
           if [ "$DB_MIGRATE" = "true" ]; then
             deploy_args+=(--migrate)
+          fi
+          if [ "$COMPOSE_CONFIG" = "true" ]; then
+            deploy_args+=(--reconcile)
           fi
           if [ -d all-digests ]; then
             if [ -f all-digests/control-plane ]; then
@@ -292,7 +316,7 @@ jobs:
             ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes \
               "$VPS_USER@$VPS_HOST" "/opt/facebook-messenger-ai-rep/deploy.sh ${deploy_args[*]}"
           else
-            echo "Deployment files synchronized. No image or migration updates required."
+            echo "Deployment files synchronized. No image, migration, or compose updates required."
           fi
 
       - name: Report deployment status

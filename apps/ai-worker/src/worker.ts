@@ -19,6 +19,10 @@ export class AiWorkerService {
   private worker: Worker<AiJobData> | null = null;
   private generator = new AiReplyGenerator();
 
+  get active(): boolean {
+    return Boolean(this.worker && this.worker.isRunning());
+  }
+
   constructor(
     private db: Database,
     private redis: Redis,

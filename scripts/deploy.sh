@@ -44,6 +44,7 @@ status() {
 
 # Parse options and images
 DO_MIGRATE=false
+RECONCILE=false
 NEW_CONTROL_PLANE=""
 NEW_SCHEDULER=""
 NEW_AI_WORKER=""
@@ -62,7 +63,7 @@ if [[ "${1:-}" == "--status" ]]; then
 fi
 
 if [[ $# -eq 0 ]]; then
-  die "usage: $0 [--migrate] [--control-plane <image>] [--scheduler <image>] [--ai-worker <image>] [--browser-agent <image>] | <control-plane-image> <scheduler-image> <ai-worker-image> <browser-agent-image> | --status"
+  die "usage: $0 [--migrate] [--reconcile] [--control-plane <image>] [--scheduler <image>] [--ai-worker <image>] [--browser-agent <image>] | <control-plane-image> <scheduler-image> <ai-worker-image> <browser-agent-image> | --status"
 fi
 
 # Backward compatibility: 4 positional image arguments
@@ -76,6 +77,10 @@ else
     case "$1" in
       --migrate)
         DO_MIGRATE=true
+        shift
+        ;;
+      --reconcile)
+        RECONCILE=true
         shift
         ;;
       --control-plane)
@@ -119,8 +124,8 @@ if [[ -n "$NEW_BROWSER_AGENT" ]]; then
   DEPLOYED_SERVICES+=(browser-agent)
 fi
 
-if [[ "${#DEPLOYED_SERVICES[@]}" -eq 0 && "$DO_MIGRATE" != true ]]; then
-  die "no services or migration specified to deploy"
+if [[ "${#DEPLOYED_SERVICES[@]}" -eq 0 && "$DO_MIGRATE" != true && "$RECONCILE" != true ]]; then
+  die "no services, migration, or reconcile specified to deploy"
 fi
 
 command -v docker >/dev/null || die "docker is required"
@@ -139,9 +144,9 @@ PREVIOUS_DEPLOY_CONFIG="$(cat "$DEPLOY_ENV" 2>/dev/null || true)"
 
 rollback() {
   local exit_code=$?
-  trap - ERR
+  trap - ERR INT TERM HUP
+  log "Deployment failed; rolling back to previous images (exit code: $exit_code)"
   if [[ -n "$PREVIOUS_DEPLOY_CONFIG" ]]; then
-    log "Deployment failed; rolling back to previous images"
     printf '%s\n' "$PREVIOUS_DEPLOY_CONFIG" > "$DEPLOY_ENV"
     if [[ "${#DEPLOYED_SERVICES[@]}" -gt 0 ]]; then
       dc up -d --no-deps --no-build "${DEPLOYED_SERVICES[@]}" || true
@@ -152,7 +157,31 @@ rollback() {
   fi
   exit "$exit_code"
 }
-trap rollback ERR
+trap rollback ERR INT TERM HUP
+
+# P0: Resolve and write new deploy environment before pulling and migrating
+CURRENT_CONTROL_PLANE="${NEW_CONTROL_PLANE:-$(grep -E '^CONTROL_PLANE_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
+CURRENT_SCHEDULER="${NEW_SCHEDULER:-$(grep -E '^SCHEDULER_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
+CURRENT_AI_WORKER="${NEW_AI_WORKER:-$(grep -E '^AI_WORKER_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
+CURRENT_BROWSER_AGENT="${NEW_BROWSER_AGENT:-$(grep -E '^BROWSER_AGENT_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
+
+cat > "$DEPLOY_ENV" <<EOF
+CONTROL_PLANE_IMAGE=$CURRENT_CONTROL_PLANE
+SCHEDULER_IMAGE=$CURRENT_SCHEDULER
+AI_WORKER_IMAGE=$CURRENT_AI_WORKER
+BROWSER_AGENT_IMAGE=$CURRENT_BROWSER_AGENT
+EOF
+chmod 600 "$DEPLOY_ENV"
+
+# Pull new images using updated DEPLOY_ENV
+PULL_SERVICES=("${DEPLOYED_SERVICES[@]}")
+if [[ "$DO_MIGRATE" == true && ! " ${DEPLOYED_SERVICES[*]:-} " =~ " control-plane " ]]; then
+  PULL_SERVICES+=(migrate)
+fi
+if [[ "${#PULL_SERVICES[@]}" -gt 0 ]]; then
+  log "Pulling immutable images for: ${PULL_SERVICES[*]}"
+  dc pull "${PULL_SERVICES[@]}"
+fi
 
 # P0: Ensure infra (Postgres & Redis) is running, but DO NOT recreate/restart if already running
 ensure_infra() {
@@ -172,7 +201,7 @@ ensure_infra() {
 }
 ensure_infra
 
-# P0: DB Backup ONLY before migration
+# P0: DB Backup ONLY before migration, and run migration using the newly resolved & pulled image
 if [[ "$DO_MIGRATE" == true ]]; then
   if dc ps --status running --services 2>/dev/null | grep -qx postgres; then
     backup_file="$BACKUP_DIR/messenger_ai_$(date -u '+%Y%m%d_%H%M%S').sql.gz"
@@ -181,65 +210,59 @@ if [[ "$DO_MIGRATE" == true ]]; then
     test -s "$backup_file" || die "database backup is empty"
   fi
 
-  log "Running database migrations"
+  log "Running database migrations with updated control-plane image"
   dc run --rm migrate
 fi
 
-# Load current deploy env values or defaults
-CURRENT_CONTROL_PLANE="${NEW_CONTROL_PLANE:-$(grep -E '^CONTROL_PLANE_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
-CURRENT_SCHEDULER="${NEW_SCHEDULER:-$(grep -E '^SCHEDULER_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
-CURRENT_AI_WORKER="${NEW_AI_WORKER:-$(grep -E '^AI_WORKER_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
-CURRENT_BROWSER_AGENT="${NEW_BROWSER_AGENT:-$(grep -E '^BROWSER_AGENT_IMAGE=' "$DEPLOY_ENV" 2>/dev/null | cut -d= -f2- || true)}"
-
-# Update DEPLOY_ENV with new values
-cat > "$DEPLOY_ENV" <<EOF
-CONTROL_PLANE_IMAGE=$CURRENT_CONTROL_PLANE
-SCHEDULER_IMAGE=$CURRENT_SCHEDULER
-AI_WORKER_IMAGE=$CURRENT_AI_WORKER
-BROWSER_AGENT_IMAGE=$CURRENT_BROWSER_AGENT
-EOF
-chmod 600 "$DEPLOY_ENV"
-
 if [[ "${#DEPLOYED_SERVICES[@]}" -gt 0 ]]; then
-  log "Pulling immutable images for: ${DEPLOYED_SERVICES[*]}"
-  dc pull "${DEPLOYED_SERVICES[@]}"
-
   log "Starting updated application services: ${DEPLOYED_SERVICES[*]}"
   dc up -d --no-deps --no-build "${DEPLOYED_SERVICES[@]}"
 
   if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
     dc --profile tunnel up -d --no-deps tunnel
   fi
+elif [[ "$RECONCILE" == true ]]; then
+  log "Reconciling Compose configuration for running services"
+  dc up -d --no-build
 
-  # Health check only the services that were deployed
-  for svc in "${DEPLOYED_SERVICES[@]}"; do
-    log "Waiting for $svc to become healthy (timeout: ${READY_TIMEOUT}s)"
-    for ((elapsed = 0; elapsed < READY_TIMEOUT; elapsed += 2)); do
-      st="$(health_status "$svc")"
-      if [[ "$st" == "healthy" ]]; then
-        # Additional HTTP probe for control-plane
-        if [[ "$svc" == "control-plane" ]]; then
-          if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3100/health >/dev/null; then
-            break
-          fi
-        else
+  if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
+    dc --profile tunnel up -d --no-deps tunnel || true
+  fi
+fi
+
+# Health check deployed or reconciled services
+CHECK_SERVICES=("${DEPLOYED_SERVICES[@]}")
+if [[ "${#CHECK_SERVICES[@]}" -eq 0 && "$RECONCILE" == true ]]; then
+  CHECK_SERVICES=(control-plane scheduler ai-worker browser-agent)
+fi
+
+for svc in "${CHECK_SERVICES[@]}"; do
+  log "Waiting for $svc to become healthy (timeout: ${READY_TIMEOUT}s)"
+  for ((elapsed = 0; elapsed < READY_TIMEOUT; elapsed += 2)); do
+    st="$(health_status "$svc")"
+    if [[ "$st" == "healthy" ]]; then
+      # Additional HTTP probe for control-plane
+      if [[ "$svc" == "control-plane" ]]; then
+        if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:3100/health >/dev/null; then
           break
         fi
-      elif [[ "$st" == "running" ]]; then
-        # Fallback for services without formal HEALTHCHECK in container definition
+      else
         break
       fi
-      sleep 2
-    done
-
-    st="$(health_status "$svc")"
-    if [[ "$st" != "healthy" && "$st" != "running" ]]; then
-      dc logs --tail=100 "$svc" >&2 || true
-      die "$svc did not become healthy within ${READY_TIMEOUT}s (status: $st)"
+    elif [[ "$st" == "running" ]]; then
+      # Fallback for services without formal HEALTHCHECK in container definition
+      break
     fi
-    log "Service $svc is healthy ($st)"
+    sleep 2
   done
-fi
+
+  st="$(health_status "$svc")"
+  if [[ "$st" != "healthy" && "$st" != "running" ]]; then
+    dc logs --tail=100 "$svc" >&2 || true
+    die "$svc did not become healthy within ${READY_TIMEOUT}s (status: $st)"
+  fi
+  log "Service $svc is healthy ($st)"
+done
 
 if [[ -f "$IMAGES_STATE" ]]; then
   cp "$IMAGES_STATE" "$PREVIOUS_IMAGES_STATE"
@@ -251,7 +274,7 @@ ${CURRENT_AI_WORKER:-none}
 ${CURRENT_BROWSER_AGENT:-none}
 EOF
 
-trap - ERR
+trap - ERR INT TERM HUP
 
 # Prune old images only for deployed services
 log "Pruning old application images while retaining active and rollback digests"

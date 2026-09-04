@@ -389,7 +389,16 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     };
   }
 
+  isAlive(): boolean {
+    return Boolean(this.context && this.page && !this.page.isClosed() && this.isObserving);
+  }
+
   async close(): Promise<void> {
+    this.isObserving = false;
+    if (this.observeTimer) {
+      clearTimeout(this.observeTimer);
+      this.observeTimer = null;
+    }
     if (this.context) {
       await this.context.close();
       this.context = null;
