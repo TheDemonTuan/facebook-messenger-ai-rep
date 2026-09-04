@@ -6,6 +6,7 @@ import { InboxPage } from "./pages/InboxPage";
 import { ConversationDetailPage } from "./pages/ConversationDetailPage";
 import { QueuePage } from "./pages/QueuePage";
 import { IncidentsPage } from "./pages/IncidentsPage";
+import { AiLogsPage } from "./pages/AiLogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { SessionConsolePage } from "./pages/SessionConsolePage";
@@ -55,6 +56,14 @@ export const App: React.FC = () => {
           element={
             <Layout>
               <IncidentsPage />
+            </Layout>
+          }
+        />
+        <Route
+          path="/ai-logs"
+          element={
+            <Layout>
+              <AiLogsPage />
             </Layout>
           }
         />

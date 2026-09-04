@@ -6,11 +6,11 @@ import type {
   IncidentRepository,
   EventRepository,
 } from "@messenger/db";
-import { channelAccounts, conversations, messages, conversationQueue, incidents } from "@messenger/db";
+import { channelAccounts, conversations, messages, conversationQueue, incidents, aiRuns } from "@messenger/db";
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { SseBroadcaster } from "../sse/broadcaster.js";
 import { SystemSettingsSchema, type SessionUser } from "@messenger/contracts";
-import { checkAiHealth } from "@messenger/ai";
+import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
 
 export interface AdminRoutesOptions {
   db: Database;
@@ -249,6 +249,72 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       const health = await checkAiHealth({ baseURL, apiKey, model });
       return reply.send(health);
+    });
+
+    // 4b. AI Runs & Proxy Debug Logs
+    fastify.get<{ Querystring: { conversationId?: string; status?: string; limit?: string } }>(
+      "/api/ai-runs",
+      async (request, reply) => {
+        const limit = Math.min(parseInt(request.query.limit || "50", 10), 100);
+        const conditions = [eq(aiRuns.channelAccountId, channelAccountId)];
+        if (request.query.conversationId) {
+          conditions.push(eq(aiRuns.conversationId, request.query.conversationId));
+        }
+        if (request.query.status) {
+          conditions.push(eq(aiRuns.status, request.query.status));
+        }
+        const items = await db
+          .select()
+          .from(aiRuns)
+          .where(and(...conditions))
+          .orderBy(desc(aiRuns.createdAt))
+          .limit(limit);
+
+        return reply.send({ items });
+      }
+    );
+
+    fastify.post<{
+      Body: {
+        message?: string;
+        model?: string;
+        aiBaseUrl?: string;
+        aiApiKey?: string;
+      };
+    }>("/api/ai-runs/test", async (request, reply) => {
+      const current = await settingsRepo.getSettings(channelAccountId);
+      const settings = current.settings;
+      const baseURL = request.body?.aiBaseUrl || settings.aiBaseUrl;
+      const apiKey = request.body?.aiApiKey || settings.aiApiKey;
+      const model = request.body?.model || settings.aiModel;
+      const testText = request.body?.message || "Xin chào, shop có bán áo thun không?";
+
+      const generator = new AiReplyGenerator();
+      const result = await generator.generateReply({
+        customerName: "Khách test debug",
+        customerSummary: "Khách hàng thử nghiệm kết nối proxy",
+        recentMessages: [{ direction: "INBOUND", text: testText }],
+        settings: {
+          ...settings,
+          aiBaseUrl: baseURL,
+          aiApiKey: apiKey,
+          aiModel: model,
+        },
+      });
+
+      return reply.send({
+        success: result.success,
+        model: result.model,
+        baseURL,
+        latencyMs: result.latencyMs,
+        promptTokens: result.promptTokens,
+        completionTokens: result.completionTokens,
+        totalTokens: result.totalTokens,
+        requestMessages: result.requestMessages,
+        rawResponse: result.rawResponse,
+        data: result.data,
+        errorMessage: result.errorMessage,
+      });
     });
 
     // 5. Incidents

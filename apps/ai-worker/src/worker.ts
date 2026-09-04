@@ -122,6 +122,18 @@ export class AiWorkerService {
     });
 
     // 4. Save AI Run record
+    const isGuardRejected = !result.success && Boolean(result.errorMessage?.includes("Guard rejection"));
+    const runStatus = result.success ? "SUCCESS" : isGuardRejected ? "GUARD_REJECTED" : "ERROR";
+
+    const parsedOutputToSave: Record<string, unknown> = {
+      ...(result.data ? (result.data as unknown as Record<string, unknown>) : {}),
+      _request: {
+        model: result.model,
+        baseUrl: settings.aiBaseUrl,
+        messages: result.requestMessages || [],
+      },
+    };
+
     const [runRecord] = await this.db
       .insert(aiRuns)
       .values({
@@ -133,9 +145,9 @@ export class AiWorkerService {
         completionTokens: result.completionTokens,
         totalTokens: result.totalTokens,
         latencyMs: result.latencyMs,
-        status: result.success ? "SUCCESS" : "GUARD_REJECTED",
+        status: runStatus,
         rawResponse: result.rawResponse || null,
-        parsedOutput: result.data ? (result.data as unknown as Record<string, unknown>) : null,
+        parsedOutput: parsedOutputToSave,
         errorMessage: result.errorMessage || null,
       })
       .returning();
@@ -154,18 +166,21 @@ export class AiWorkerService {
         type: "ERROR",
         inboundVersion,
         actor: "AI_WORKER",
-        payload: { error: result.errorMessage, rawResponse: result.rawResponse },
+        payload: { error: result.errorMessage, rawResponse: result.rawResponse, requestMessages: result.requestMessages },
       });
 
       await this.incidentRepo.createIncident({
         channelAccountId,
         conversationId,
         type: "AI_ERROR",
-        title: "AI Draft Guard Rejection",
+        title: isGuardRejected ? "AI Draft Guard Rejection" : "AI Gateway Error",
         description: result.errorMessage || "Unknown generation failure",
         metadata: {
           rawResponse: result.rawResponse,
           inboundVersion,
+          requestMessages: result.requestMessages,
+          model: result.model,
+          baseUrl: settings.aiBaseUrl,
         },
       });
 

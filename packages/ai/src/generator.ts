@@ -14,6 +14,7 @@ export interface GenerationResult {
   completionTokens: number;
   totalTokens: number;
   errorMessage?: string;
+  requestMessages?: Array<{ role: string; content: string }>;
 }
 
 export class AiReplyGenerator {
@@ -28,6 +29,15 @@ export class AiReplyGenerator {
 
     const initialMessages = buildChatMessages(context);
 
+    console.log(`[AI Proxy] ---> POST ${context.settings.aiBaseUrl}/chat/completions`);
+    console.log(`[AI Proxy] Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
+    console.log(`[AI Proxy] Request Payload:`, JSON.stringify({
+      model,
+      messages: initialMessages,
+      temperature: 0.3,
+      response_format: { type: "json_object" },
+    }, null, 2));
+
     try {
       // 1. Initial attempt
       const completion = await client.chat.completions.create({
@@ -38,7 +48,36 @@ export class AiReplyGenerator {
       });
 
       const latencyMs = Date.now() - startTime;
-      const rawResponse = completion.choices[0]?.message?.content || "";
+      console.log(`[AI Proxy] <--- Response in ${latencyMs}ms:`, JSON.stringify(completion, null, 2));
+
+      const choice = completion?.choices?.[0];
+      const rawResponse = choice?.message?.content || "";
+
+      if (!choice || !completion?.choices) {
+        const compAny = completion as unknown as Record<string, unknown> | undefined;
+        const proxyError = (compAny?.error as { message?: string })?.message
+          || compAny?.error
+          || compAny?.message
+          || compAny?.detail
+          || compAny?.msg;
+        const rawDump = typeof completion === "object" ? JSON.stringify(completion) : String(completion);
+        const errMsg = proxyError
+          ? `AI Proxy returned error: ${typeof proxyError === "object" ? JSON.stringify(proxyError) : proxyError}`
+          : `AI Proxy returned unexpected format (missing choices array): ${rawDump}`;
+        console.error(`[AI Proxy] Bad response:`, errMsg);
+        return {
+          success: false,
+          errorMessage: errMsg,
+          rawResponse: rawDump,
+          model,
+          latencyMs,
+          promptTokens: 0,
+          completionTokens: 0,
+          totalTokens: 0,
+          requestMessages: initialMessages,
+        };
+      }
+
       const usage = completion.usage;
       const promptTokens = usage?.prompt_tokens || 0;
       const completionTokens = usage?.completion_tokens || 0;
@@ -59,6 +98,7 @@ export class AiReplyGenerator {
           promptTokens,
           completionTokens,
           totalTokens,
+          requestMessages: initialMessages,
         };
       }
 
@@ -77,6 +117,14 @@ export class AiReplyGenerator {
         },
       ];
 
+      console.log(`[AI Proxy Retry] ---> POST ${context.settings.aiBaseUrl}/chat/completions (retry with error feedback)`);
+      console.log(`[AI Proxy Retry] Request Payload:`, JSON.stringify({
+        model,
+        messages: retryMessages,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      }, null, 2));
+
       const retryCompletion = await client.chat.completions.create({
         model,
         messages: retryMessages,
@@ -85,7 +133,36 @@ export class AiReplyGenerator {
       });
 
       const totalLatencyMs = Date.now() - startTime;
-      const retryRaw = retryCompletion.choices[0]?.message?.content || "";
+      console.log(`[AI Proxy Retry] <--- Response in ${totalLatencyMs}ms:`, JSON.stringify(retryCompletion, null, 2));
+
+      const retryChoice = retryCompletion?.choices?.[0];
+      const retryRaw = retryChoice?.message?.content || "";
+
+      if (!retryChoice || !retryCompletion?.choices) {
+        const compAny = retryCompletion as unknown as Record<string, unknown> | undefined;
+        const proxyError = (compAny?.error as { message?: string })?.message
+          || compAny?.error
+          || compAny?.message
+          || compAny?.detail
+          || compAny?.msg;
+        const rawDump = typeof retryCompletion === "object" ? JSON.stringify(retryCompletion) : String(retryCompletion);
+        const errMsg = proxyError
+          ? `AI Proxy retry error: ${typeof proxyError === "object" ? JSON.stringify(proxyError) : proxyError}`
+          : `AI Proxy retry returned unexpected format: ${rawDump}`;
+        console.error(`[AI Proxy Retry] Bad response:`, errMsg);
+        return {
+          success: false,
+          errorMessage: errMsg,
+          rawResponse: rawDump,
+          model,
+          latencyMs: totalLatencyMs,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          requestMessages: retryMessages,
+        };
+      }
+
       const retryUsage = retryCompletion.usage;
       const finalPromptTokens = promptTokens + (retryUsage?.prompt_tokens || 0);
       const finalCompletionTokens = completionTokens + (retryUsage?.completion_tokens || 0);
@@ -106,6 +183,7 @@ export class AiReplyGenerator {
           promptTokens: finalPromptTokens,
           completionTokens: finalCompletionTokens,
           totalTokens: finalTotalTokens,
+          requestMessages: retryMessages,
         };
       }
 
@@ -119,18 +197,22 @@ export class AiReplyGenerator {
         promptTokens: finalPromptTokens,
         completionTokens: finalCompletionTokens,
         totalTokens: finalTotalTokens,
+        requestMessages: retryMessages,
       };
     } catch (err: unknown) {
-      const error = err as Error;
+      const error = err as Error & { status?: number; response?: { data?: unknown } };
       const latencyMs = Date.now() - startTime;
+      console.error(`[AI Proxy Error] Call failed in ${latencyMs}ms:`, error.message, error.stack);
       return {
         success: false,
         errorMessage: `AI service error: ${error.message}`,
+        rawResponse: error.response?.data ? JSON.stringify(error.response.data) : (error.stack || error.message),
         model,
         latencyMs,
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
+        requestMessages: initialMessages,
       };
     }
   }

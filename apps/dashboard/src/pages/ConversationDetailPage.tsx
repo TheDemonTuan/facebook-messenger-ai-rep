@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { MessageItem, OutboundActionItem } from "../types";
-import { ArrowLeft, UserCheck, ShieldAlert, Send, RefreshCw, CheckCircle2 } from "lucide-react";
+import { ArrowLeft, UserCheck, ShieldAlert, Send, RefreshCw, CheckCircle2, Cpu } from "lucide-react";
 
 export const ConversationDetailPage: React.FC = () => {
   const { conversationId } = useParams<{ conversationId: string }>();
@@ -114,6 +114,27 @@ export const ConversationDetailPage: React.FC = () => {
         </div>
 
         <div style={{ display: "flex", gap: "8px" }}>
+          <Link
+            to={`/ai-logs?conversationId=${conversationId}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              padding: "6px 12px",
+              borderRadius: "6px",
+              border: "1px solid #bfdbfe",
+              backgroundColor: "#eff6ff",
+              color: "#1e40af",
+              textDecoration: "none",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              fontWeight: "600",
+            }}
+          >
+            <Cpu size={16} />
+            AI Proxy Logs
+          </Link>
+
           <button
             onClick={handleTakeoverToggle}
             style={{
