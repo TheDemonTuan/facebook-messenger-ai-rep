@@ -18,18 +18,53 @@ const FORBIDDEN_LEAK_PATTERNS = [
   /instruction:/i,
 ];
 
+export function isHtmlPayload(text: string): boolean {
+  const trimmed = text.trim().toLowerCase();
+  return (
+    trimmed.startsWith("<!doctype") ||
+    trimmed.startsWith("<html") ||
+    /<html[\s>]/i.test(trimmed) ||
+    /<head[\s>]/i.test(trimmed) ||
+    /<body[\s>]/i.test(trimmed)
+  );
+}
+
 export function extractJsonFromRaw(raw: string): string {
   let cleaned = raw.trim();
-  // Remove markdown code blocks if present
-  if (cleaned.startsWith("```json")) {
-    cleaned = cleaned.slice(7);
-  } else if (cleaned.startsWith("```")) {
-    cleaned = cleaned.slice(3);
+
+  // 1. Strip reasoning / thinking tags (e.g. <think>...</think>, <reasoning>...</reasoning>)
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
+  const lastThinkEnd = cleaned.lastIndexOf("</think>");
+  if (lastThinkEnd !== -1) {
+    cleaned = cleaned.substring(lastThinkEnd + "</think>".length).trim();
   }
-  if (cleaned.endsWith("```")) {
-    cleaned = cleaned.slice(0, -3);
+  cleaned = cleaned.trim();
+
+  // 2. Extract content from markdown code fences if present anywhere
+  const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch && fenceMatch[1]) {
+    cleaned = fenceMatch[1].trim();
+  } else {
+    if (cleaned.startsWith("```json")) {
+      cleaned = cleaned.slice(7);
+    } else if (cleaned.startsWith("```")) {
+      cleaned = cleaned.slice(3);
+    }
+    if (cleaned.endsWith("```")) {
+      cleaned = cleaned.slice(0, -3);
+    }
+    cleaned = cleaned.trim();
   }
-  return cleaned.trim();
+
+  // 3. Extract substring between first '{' and last '}' if wrapped by text or XML tags
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1).trim();
+  }
+
+  return cleaned;
 }
 
 export function validateAiOutput(
@@ -37,20 +72,57 @@ export function validateAiOutput(
   options: {
     maxResponseCount?: number;
     totalMaxChars?: number;
+    allowPlainTextFallback?: boolean;
   } = {}
 ): GuardValidationResult {
   const maxResponseCount = options.maxResponseCount || 3;
   const totalMaxChars = options.totalMaxChars || 480;
+
+  // Check if rawText is an upstream HTML error page (Cloudflare / Nginx 502/504)
+  if (isHtmlPayload(rawText)) {
+    const titleMatch = rawText.match(/<title>([^<]+)<\/title>/i);
+    const htmlTitle = titleMatch && titleMatch[1] ? titleMatch[1].trim() : "Upstream Server Error";
+    return {
+      valid: false,
+      error: `AI Gateway error: Upstream server returned HTML error page (${htmlTitle}) instead of JSON API response.`,
+    };
+  }
 
   let parsedJson: unknown;
   try {
     const jsonStr = extractJsonFromRaw(rawText);
     parsedJson = JSON.parse(jsonStr);
   } catch (err) {
-    return {
-      valid: false,
-      error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
-    };
+    if (options.allowPlainTextFallback) {
+      const plainText = rawText
+        .replace(/<think>[\s\S]*?<\/think>/gi, "")
+        .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+        .replace(/^.*<\/think>/is, "")
+        .replace(/```[a-z]*\s*|\s*```/gi, "")
+        .trim();
+
+      if (
+        plainText.length >= 10 &&
+        plainText.length <= totalMaxChars &&
+        !isHtmlPayload(plainText) &&
+        !FORBIDDEN_LEAK_PATTERNS.some((pattern) => pattern.test(plainText))
+      ) {
+        parsedJson = {
+          messages: [plainText],
+          needsClarification: false,
+        };
+      } else {
+        return {
+          valid: false,
+          error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
+        };
+      }
+    } else {
+      return {
+        valid: false,
+        error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
+      };
+    }
   }
 
   if (parsedJson && typeof parsedJson === "object" && "messages" in parsedJson && Array.isArray(parsedJson.messages)) {

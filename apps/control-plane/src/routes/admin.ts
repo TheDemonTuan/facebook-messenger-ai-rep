@@ -341,6 +341,19 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       }
     );
 
+    fastify.post("/api/incidents/resolve-all", async (request, reply) => {
+      const user = (request as unknown as { user: SessionUser }).user;
+      const allIncidents = await incidentRepo.getOpenIncidents(channelAccountId);
+      const openItems = allIncidents.filter((i) => i.status === "OPEN");
+
+      for (const item of openItems) {
+        await incidentRepo.resolveIncident(item.id, user.email, "Đã đóng hàng loạt từ trang quản lý sự cố");
+      }
+
+      broadcaster.broadcast("incident:resolved", { count: openItems.length });
+      return reply.send({ success: true, count: openItems.length });
+    });
+
     // 6. Audit logs
     fastify.get<{ Querystring: { conversationId?: string; limit?: string } }>(
       "/api/audit",

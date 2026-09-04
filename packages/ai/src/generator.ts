@@ -1,6 +1,6 @@
 import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
-import { validateAiOutput } from "./guards.js";
+import { validateAiOutput, isHtmlPayload } from "./guards.js";
 import { getAiClient } from "./client.js";
 import type { AiStructuredOutput } from "@messenger/contracts";
 
@@ -102,6 +102,22 @@ export class AiReplyGenerator {
         };
       }
 
+      // If response is an upstream HTML error (e.g. 502/504 Bad Gateway), abort immediately without prompt retry
+      if (firstValidation.error?.includes("AI Gateway error") || isHtmlPayload(rawResponse)) {
+        console.error(`[AI Generator] Upstream gateway returned HTML error:`, firstValidation.error);
+        return {
+          success: false,
+          errorMessage: firstValidation.error || "AI Gateway returned HTML error page",
+          rawResponse,
+          model,
+          latencyMs,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          requestMessages: initialMessages,
+        };
+      }
+
       console.warn(`[AI Generator] First attempt failed guard check: ${firstValidation.error}. Retrying once with error feedback...`);
 
       // 2. Single retry with validation feedback
@@ -171,12 +187,27 @@ export class AiReplyGenerator {
       const secondValidation = validateAiOutput(retryRaw, {
         maxResponseCount: context.settings.aiMaxResponseCount,
         totalMaxChars: context.settings.aiTotalMaxChars,
+        allowPlainTextFallback: true,
       });
 
       if (secondValidation.valid && secondValidation.data) {
         return {
           success: true,
           data: secondValidation.data,
+          rawResponse: retryRaw,
+          model,
+          latencyMs: totalLatencyMs,
+          promptTokens: finalPromptTokens,
+          completionTokens: finalCompletionTokens,
+          totalTokens: finalTotalTokens,
+          requestMessages: retryMessages,
+        };
+      }
+
+      if (secondValidation.error?.includes("AI Gateway error") || isHtmlPayload(retryRaw)) {
+        return {
+          success: false,
+          errorMessage: secondValidation.error || "AI Gateway returned HTML error page",
           rawResponse: retryRaw,
           model,
           latencyMs: totalLatencyMs,
