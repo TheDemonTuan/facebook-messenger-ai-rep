@@ -24,6 +24,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private isObserving = false;
   private observeTimer: NodeJS.Timeout | null = null;
   private lastSeenSnippets = new Map<string, string>();
+  public isSendingOrTyping = false;
   private typingEngine = new TypingEngine();
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
   constructor(options: PlaywrightAdapterOptions) {
@@ -78,6 +79,11 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
     const poll = async () => {
       if (!this.isObserving || !this.page) return;
+      if (this.isSendingOrTyping) {
+        // Skip polling while actively typing/sending to avoid self-abort race conditions
+        this.observeTimer = setTimeout(poll, 2000);
+        return;
+      }
 
       try {
         const currentUrl = this.page.url();
@@ -99,22 +105,30 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const match = href.match(/\/messages\/t\/([^/?#]+)/);
             const threadId = match && match[1] ? match[1] : "";
             const textContent = (a as HTMLElement).innerText || "";
-            const lines = textContent.split("\n").map((l) => l.trim()).filter(Boolean);
+            const lines = textContent.split("\n").map((l: string) => l.trim()).filter(Boolean);
 
-            const customerName = lines[0] || "Khách hàng";
-            const snippet = lines.slice(1).join(" ");
+            // Filter out presence text like "Active now", "Đang hoạt động", timestamps
+            const cleanLines = lines.filter(
+              (l: string) =>
+                !/^(active now|đang hoạt động|\d+[mhdw])$/i.test(l) &&
+                !l.startsWith("Unread message:")
+            );
+
+            const customerName = cleanLines[0] || "Khách hàng";
+            const rawSnippet = cleanLines.slice(1).join(" ") || lines.slice(1).join(" ");
 
             return {
               href,
               threadId,
               customerName,
-              snippet,
+              snippet: rawSnippet,
             };
           });
         });
 
         for (const t of threads) {
           if (!t.threadId || !t.snippet) continue;
+
           // Skip group chats to prevent bot chatting into friend groups
           const isGroupChat =
             t.customerName.toLowerCase().includes("group") ||
@@ -125,20 +139,23 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             t.snippet.includes("đã thêm");
 
           if (isGroupChat) {
+            this.lastSeenSnippets.set(t.threadId, t.snippet);
             continue;
           }
 
+          // Check if snippet is outgoing from bot/owner or is an in-progress draft
           const isOutgoingSnippet =
-            t.snippet.startsWith("Bạn: ") ||
-            t.snippet.startsWith("You: ") ||
-            t.snippet.startsWith("Bạn đã gửi") ||
-            t.snippet.startsWith("You sent") ||
-            t.snippet.startsWith("Draft:") ||
-            t.snippet.startsWith("Draft ") ||
-            t.snippet.startsWith("Bản nháp:") ||
-            t.snippet.startsWith("Bản nháp ");
+            t.snippet.includes("Bạn:") ||
+            t.snippet.includes("You:") ||
+            t.snippet.includes("Bạn đã gửi") ||
+            t.snippet.includes("You sent") ||
+            t.snippet.includes("Draft:") ||
+            t.snippet.includes("Draft ") ||
+            t.snippet.includes("Bản nháp:") ||
+            t.snippet.includes("Bản nháp ");
 
           if (isOutgoingSnippet) {
+            this.lastSeenSnippets.set(t.threadId, t.snippet);
             continue;
           }
 
@@ -147,6 +164,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             this.lastSeenSnippets.set(t.threadId, t.snippet);
 
             let messageText = t.snippet;
+            // Remove name prefix if present
+            if (messageText.startsWith(t.customerName)) {
+              messageText = messageText.slice(t.customerName.length).trim();
+            }
+            // Remove unread message prefix if present
+            if (messageText.startsWith("Unread message:")) {
+              messageText = messageText.slice(15).trim();
+            }
             const splitDot = messageText.split("·");
             if (splitDot.length > 1 && splitDot[0]) {
               messageText = splitDot[0].trim();
@@ -177,7 +202,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       } catch (err) {
         // Transient evaluation or navigation error
       } finally {
-        if (this.isObserving) {
+        if (this.isObserving && !this.isSendingOrTyping) {
           this.observeTimer = setTimeout(poll, 2500);
         }
       }
@@ -245,6 +270,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       signal?: AbortSignal;
     }
   ): Promise<{ completed: boolean; aborted?: boolean }> {
+    this.isSendingOrTyping = true;
     if (!this.page) await this.init();
     if (!this.page) throw new Error("Browser page not ready");
 
@@ -253,7 +279,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
     // Clear any existing composer text first
     await this.clearComposer();
-
     const result = await this.typingEngine.typeWithPacing(
       text,
       async (char) => {
@@ -266,6 +291,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
     if (result.aborted) {
       await this.clearComposer();
+      this.isSendingOrTyping = false;
     }
 
     return result;
@@ -292,6 +318,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     } catch (err) {
       console.error("[BrowserAdapter] Failed to press Enter to send draft:", err);
       return { sent: false };
+    } finally {
+      this.isSendingOrTyping = false;
     }
   }
 
@@ -300,13 +328,13 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     _expectedHash: string,
     timeoutMs = 10000
   ): Promise<{ verified: boolean; messageRef?: string }> {
+    this.isSendingOrTyping = false;
     if (!this.page) return { verified: false };
 
     const startTime = Date.now();
     const normalizedExpected = expectedText.trim();
 
     while (Date.now() - startTime < timeoutMs) {
-      // Query outgoing message elements
       const bubbles = await this.page.locator('div[role="row"], div[data-scope="messages_table"]').allInnerTexts();
       for (const b of bubbles) {
         if (b.includes(normalizedExpected)) {
