@@ -19,9 +19,9 @@
     "bullmq": "^5.41.6",
     "drizzle-orm": "^0.39.3",
     "ioredis": "^5.5.0",
-    "playwright": "1.50.1"
+    "playwright": "1.62.1"
   },
   "devDependencies": {
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   }
 }
