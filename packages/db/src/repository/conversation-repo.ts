@@ -1,4 +1,4 @@
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, gte } from "drizzle-orm";
 import type { Database } from "../client.js";
 import {
   customers,
@@ -46,6 +46,30 @@ export class ConversationRepository {
           conversationId: existingMsg[0].conversationId,
           inboundVersion: existingMsg[0].inboundVersion,
           messageId: existingMsg[0].id,
+        };
+      }
+
+      // Also prevent rapid double-ingest jitter (identical text in the same channel within last 5 seconds)
+      const fiveSecondsAgo = new Date(Date.now() - 5000);
+      const recentIdentical = await tx
+        .select({ id: messages.id, conversationId: messages.conversationId, inboundVersion: messages.inboundVersion })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.channelAccountId, payload.channelAccountId),
+            eq(messages.textHash, textHash),
+            eq(messages.direction, "INBOUND"),
+            gte(messages.createdAt, fiveSecondsAgo)
+          )
+        )
+        .limit(1);
+
+      if (recentIdentical.length > 0 && recentIdentical[0]) {
+        return {
+          isDuplicate: true,
+          conversationId: recentIdentical[0].conversationId,
+          inboundVersion: recentIdentical[0].inboundVersion,
+          messageId: recentIdentical[0].id,
         };
       }
 

@@ -24,6 +24,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private isObserving = false;
   private observeTimer: NodeJS.Timeout | null = null;
   private lastSeenSnippets = new Map<string, string>();
+  private isInitializedBaseline = false;
+  private pollCount = 0;
   public isSendingOrTyping = false;
   private typingEngine = new TypingEngine();
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
@@ -44,16 +46,28 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       locale: "vi-VN",
       timezoneId: "Asia/Ho_Chi_Minh",
+      permissions: ["notifications"],
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-features=CalculateNativeWinOcclusion",
+        "--disable-ipc-flooding-protection",
+        "--disable-session-crashed-bubble",
+        "--disable-infobars",
+        "--no-first-run",
       ],
     });
 
     await this.context.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      // Keep page active and prevent Facebook Web from sleeping or throttling real-time WebSockets
+      Object.defineProperty(document, "hidden", { get: () => false });
+      Object.defineProperty(document, "visibilityState", { get: () => "visible" });
     });
 
     const pages = this.context.pages();
@@ -69,6 +83,33 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       });
     }
   }
+  private async dismissOverlays(): Promise<void> {
+    if (!this.page) return;
+    try {
+      await this.page.evaluate(() => {
+        const dialogButtons = Array.from(
+          document.querySelectorAll('div[role="dialog"] button, div[role="dialog"] div[role="button"]')
+        );
+        for (const btn of dialogButtons) {
+          const text = (btn as HTMLElement).innerText?.trim().toLowerCase();
+          if (
+            text === "để sau" ||
+            text === "not now" ||
+            text === "bỏ qua" ||
+            text === "skip" ||
+            text === "đóng" ||
+            text === "close" ||
+            text === "lúc khác"
+          ) {
+            (btn as HTMLElement).click();
+          }
+        }
+      });
+    } catch {
+      // Ignore evaluation errors during page transitions
+    }
+  }
+
   async observeInbound(callback: (inbound: InboundMessagePayload) => Promise<void>): Promise<void> {
     this.inboundCallback = callback;
     if (!this.page) await this.init();
@@ -92,6 +133,16 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             waitUntil: "domcontentloaded",
             timeout: 30000,
           });
+        }
+
+        // Periodic keep-alive pulse to ensure Facebook real-time Comet/WebSocket stays awake
+        this.pollCount++;
+        if (this.pollCount % 10 === 0) {
+          await this.page.evaluate(() => {
+            window.dispatchEvent(new Event("focus"));
+            document.dispatchEvent(new Event("visibilitychange"));
+          });
+          await this.dismissOverlays();
         }
 
         // Scan conversation thread items in sidebar
@@ -125,6 +176,20 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             };
           });
         });
+
+        // Initialize baseline state on first poll so startup doesn't fire stale historical inbounds
+        if (!this.isInitializedBaseline) {
+          for (const t of threads) {
+            if (t.threadId && t.snippet) {
+              this.lastSeenSnippets.set(t.threadId, t.snippet);
+            }
+          }
+          this.isInitializedBaseline = true;
+          console.log(`[BrowserAdapter] Baseline snapshot captured for ${threads.length} threads. Listening for new inbounds...`);
+          await this.dismissOverlays();
+          this.observeTimer = setTimeout(poll, 2500);
+          return;
+        }
 
         for (const t of threads) {
           if (!t.threadId || !t.snippet) continue;
@@ -179,7 +244,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
             if (messageText.length > 0 && this.inboundCallback) {
               const msgId = createHash("sha256")
-                .update(`${t.threadId}:${messageText}`)
+                .update(`${t.threadId}:${messageText}:${Date.now()}`)
                 .digest("hex");
 
               console.log(
@@ -224,15 +289,35 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     if (!this.page) await this.init();
     if (!this.page) return false;
 
-    const targetUrl = threadRef.startsWith("http")
-      ? threadRef
-      : `https://www.facebook.com/messages/t/${threadRef}`;
+    const threadMatch = threadRef.match(/\/messages\/t\/([^/?#]+)/);
+    const threadId = threadMatch && threadMatch[1] ? threadMatch[1] : threadRef;
 
-    console.log(`[BrowserAdapter] Opening conversation: ${targetUrl}`);
+    console.log(`[BrowserAdapter] Opening conversation: ${threadRef} (threadId: ${threadId})`);
     const currentUrl = this.page.url();
-    if (!currentUrl.includes(threadRef)) {
-      await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    if (!currentUrl.includes(threadId)) {
+      // Try fast client-side navigation by clicking the sidebar link if already present in DOM
+      let clicked = false;
+      try {
+        const link = await this.page.$(`a[href*="/messages/t/${threadId}"]`);
+        if (link) {
+          await link.click();
+          clicked = true;
+          console.log(`[BrowserAdapter] Navigated via sidebar click: ${threadId}`);
+        }
+      } catch {
+        clicked = false;
+      }
+
+      if (!clicked) {
+        const targetUrl = threadRef.startsWith("http")
+          ? threadRef
+          : `https://www.facebook.com/messages/t/${threadId}`;
+        await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      }
     }
+
+    await this.dismissOverlays();
 
     // Wait for composer textbox to be visible
     try {
