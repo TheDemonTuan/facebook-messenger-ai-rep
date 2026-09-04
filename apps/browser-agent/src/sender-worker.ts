@@ -128,6 +128,11 @@ export class SenderWorkerService {
       }
 
       const { settings } = await this.settingsRepo.getSettings(channelAccountId);
+      // Wait for debounce to ensure no new inbound is arriving (debounceMs + safety buffer)
+      await new Promise((resolve) =>
+        setTimeout(resolve, settings.debounceMs + 1500)
+      );
+
       const typingResult = await this.adapter.typeDraft(text, {
         targetWpmMin: settings.typingTargetWpmMin,
         targetWpmMax: settings.typingTargetWpmMax,
@@ -153,7 +158,10 @@ export class SenderWorkerService {
 
       // 5. Final check immediately before Send
       const preSendConv = await this.convRepo.getConversationById(conversationId);
-      if (!preSendConv || preSendConv.conversation.inboundVersion !== inboundVersion) {
+      if (!preSendConv) {
+        throw new Error("Conversation disappeared before send");
+      }
+      if (preSendConv.conversation.inboundVersion !== inboundVersion) {
         console.warn(`[Sender Worker] Aborting immediately before send: new inbound received!`);
         await this.outboundRepo.updateStatus(actionId, "ABORTED", {
           errorMessage: "New inbound received right before send",
