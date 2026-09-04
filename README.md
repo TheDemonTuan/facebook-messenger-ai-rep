@@ -30,7 +30,46 @@ Hệ thống AI CSKH tự động cho Facebook Messenger cá nhân, vận hành 
 
 ---
 
-## 2. Phát triển cục bộ (Local Development)
+## 2. Triển khai tự động lên VPS
+
+Mỗi commit được push lên nhánh `main` (hoặc chạy qua `workflow_dispatch`) sẽ kích hoạt `.github/workflows/deploy.yml` theo mô hình chuẩn từ các repository khác (`tuan-portfolio`, `OmniRoute`):
+
+1. **Verify**: Cài dependencies, typecheck, build toàn bộ monorepo, chạy unit & invariant tests và kiểm tra tính đúng đắn của script deploy + image retention.
+2. **Build & Publish images**: Build 4 container images riêng biệt cho các microservices (`control-plane`, `scheduler`, `ai-worker`, `browser-agent`), gắn tag commit và đẩy lên GitHub Container Registry (`ghcr.io`) dưới dạng digest bất biến (`@sha256:...`).
+3. **Deploy VPS**: Kết nối SSH vào VPS qua `secrets.VPS_SSH_KEY`, đồng bộ `compose.prod.yml`, `scripts/deploy.sh`, `scripts/image-retention.sh` vào `/opt/facebook-messenger-ai-rep/`, đăng nhập GHCR tạm thời và chạy `deploy.sh`.
+4. **Safety & Rollback**: Tự động dump backup cơ sở dữ liệu PostgreSQL trước khi chạy migration (`drizzle-orm`), khởi động container và kiểm tra health check `/health`. Nếu có lỗi xảy ra, hệ thống tự động rollback về bộ image trước đó.
+5. **Dọn dẹp VPS an toàn**: Tự động dọn dẹp các image digest cũ không còn dùng (chỉ giữ lại image đang chạy và image của phiên trước để rollback), xóa dangling images và các bản backup cũ quá 14 ngày. Toàn bộ volumes dữ liệu (`messenger_postgres_data`, `messenger_redis_data`, `messenger_browser_profile`) và cấu hình `.env` được bảo toàn tuyệt đối.
+
+### Khởi tạo VPS một lần
+
+1. Cài đặt Docker Engine và Docker Compose v2 trên VPS.
+2. Tạo thư mục ứng dụng và file cấu hình:
+   ```bash
+   sudo mkdir -p /opt/facebook-messenger-ai-rep/backups
+   sudo chown -R $USER:$USER /opt/facebook-messenger-ai-rep
+   ```
+3. Tạo file `/opt/facebook-messenger-ai-rep/.env` dựa trên `.env.example` và điền đầy đủ các giá trị production:
+   ```bash
+   chmod 600 /opt/facebook-messenger-ai-rep/.env
+   ```
+
+### Cấu hình GitHub Environment `production`
+
+Pipeline sử dụng environment `production` với các secrets và variables tương tự các repo hiện có của bạn:
+
+| Tên | Loại | Mô tả |
+|---|---|---|
+| `VPS_HOST` | Secret | IP hoặc hostname của VPS |
+| `VPS_PORT` | Secret | Cổng SSH (mặc định `22`) |
+| `VPS_USER` | Secret | Tài khoản người dùng SSH (ví dụ: `opc` hoặc `root`) |
+| `VPS_SSH_KEY` | Secret | Khóa SSH Private Key tương ứng |
+| `VPS_KNOWN_HOSTS` | Secret | Dòng host key từ `ssh-keyscan -p <port> <host>` |
+| `BUILD_RUNNER` | Variable | Runner build image (mặc định `ubuntu-24.04-arm`) |
+| `DEPLOY_PLATFORM` | Variable | Kiến trúc container (mặc định `linux/arm64`) |
+
+---
+
+## 3. Phát triển cục bộ (Local Development)
 
 ### Yêu cầu:
 - Node.js >= 22
@@ -79,7 +118,7 @@ pnpm dev:browser-agent
 
 ---
 
-## 3. Triển khai Production (Docker Compose)
+## 4. Triển khai Production (Docker Compose)
 
 ```bash
 # 1. Chuẩn bị file .env
@@ -98,7 +137,7 @@ docker compose -f compose.prod.yml exec control-plane node apps/control-plane/di
 
 ---
 
-## 4. Kiểm thử tự động (Unit & Invariant Tests)
+## 5. Kiểm thử tự động (Unit & Invariant Tests)
 
 Hệ thống đi kèm bộ test toàn diện bảo vệ các nguyên lý vận hành:
 ```bash

@@ -10,4 +10,5 @@ coverage
 .drizzle
 data/
 browser_profile/
+backups/
 *.tsbuildinfo

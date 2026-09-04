@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g pnpm@11.25.0
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json .npmrc ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/config/package.json ./packages/config/
 COPY packages/db/package.json ./packages/db/
