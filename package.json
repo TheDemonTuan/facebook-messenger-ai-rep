@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.5",
-    "drizzle-orm": "^0.39.3",
+    "drizzle-orm": "^0.45.2",
     "tsx": "^4.19.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.7"
