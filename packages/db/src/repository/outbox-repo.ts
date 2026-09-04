@@ -122,4 +122,51 @@ export class OutboxRepository {
       `);
     }
   }
+
+  /**
+   * Prunes old processed outbox events older than retentionDays.
+   */
+  async cleanProcessedEvents(retentionDays = 7, tx?: DatabaseOrTx): Promise<number> {
+    const executor = tx || this.db;
+    const result = await executor.execute(sql`
+      DELETE FROM ${outboxEvents}
+      WHERE status = 'PROCESSED'
+        AND processed_at < clock_timestamp() - (${retentionDays} || ' days')::interval
+      RETURNING id;
+    `);
+    const rows = (result as unknown as { rows?: unknown[] }).rows || (result as unknown as unknown[]) || [];
+    return rows.length;
+  }
+
+  /**
+   * Gets outbox events created after a specific event id (cursor) or recent events.
+   */
+  async getEventsSince(
+    channelAccountId: string,
+    afterId?: string,
+    limit = 50,
+    tx?: DatabaseOrTx
+  ): Promise<Array<typeof outboxEvents.$inferSelect>> {
+    const executor = tx || this.db;
+    if (afterId) {
+      const result = await executor.execute<typeof outboxEvents.$inferSelect>(sql`
+        SELECT * FROM ${outboxEvents}
+        WHERE channel_account_id = ${channelAccountId}
+          AND created_at > COALESCE((SELECT created_at FROM ${outboxEvents} WHERE id = ${afterId}), '1970-01-01'::timestamptz)
+        ORDER BY created_at ASC
+        LIMIT ${limit};
+      `);
+      const rows = (result as unknown as { rows?: typeof outboxEvents.$inferSelect[] }).rows || (result as unknown as typeof outboxEvents.$inferSelect[]);
+      return rows || [];
+    }
+
+    const result = await executor.execute<typeof outboxEvents.$inferSelect>(sql`
+      SELECT * FROM ${outboxEvents}
+      WHERE channel_account_id = ${channelAccountId}
+      ORDER BY created_at DESC
+      LIMIT ${limit};
+    `);
+    const rows = (result as unknown as { rows?: typeof outboxEvents.$inferSelect[] }).rows || (result as unknown as typeof outboxEvents.$inferSelect[]);
+    return (rows || []).slice().reverse();
+  }
 }

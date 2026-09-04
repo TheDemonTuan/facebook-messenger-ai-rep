@@ -226,4 +226,35 @@ export class TurnRepository {
     const rows = await this.db.select().from(turns).where(eq(turns.id, turnId)).limit(1);
     return rows[0] || null;
   }
+
+  async cancelTurn(turnId: string, reason?: string, tx?: DatabaseOrTx): Promise<void> {
+    const executor = tx || this.db;
+    await executor
+      .update(turns)
+      .set({
+        status: "CANCELLED",
+        errorMessage: reason || null,
+        completedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(turns.id, turnId));
+  }
+
+  async failTurn(
+    turnId: string,
+    ownerToken: string,
+    fencingEpoch: number,
+    errorMessage?: string,
+    tx?: DatabaseOrTx
+  ): Promise<void> {
+    await this.transitionStatus(
+      turnId,
+      "THINKING",
+      "FAILED",
+      ownerToken,
+      fencingEpoch,
+      { errorMessage },
+      tx
+    );
+  }
 }

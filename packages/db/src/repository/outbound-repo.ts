@@ -359,6 +359,24 @@ export class OutboundRepository {
   }
 
   /**
+   * Fetches pending outbound actions ordered by creation time.
+   */
+  async getPendingActions(channelAccountId: string, limit = 20, tx?: DatabaseOrTx) {
+    const executor = tx || this.db;
+    return await executor
+      .select()
+      .from(outboundActions)
+      .where(
+        and(
+          eq(outboundActions.channelAccountId, channelAccountId),
+          eq(outboundActions.status, "PENDING")
+        )
+      )
+      .orderBy(outboundActions.createdAt)
+      .limit(limit);
+  }
+
+  /**
    * Abort remaining pending actions for a conversation if inbound version advanced
    */
   async abortStaleActions(conversationId: string, currentInboundVersion: number, tx?: DatabaseOrTx) {

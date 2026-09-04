@@ -300,4 +300,19 @@ export class JobRepository {
 
     return result.length > 0;
   }
+
+  /**
+   * Prunes completed, failed, or cancelled jobs older than retentionDays.
+   */
+  async cleanOldJobs(retentionDays = 7, tx?: DatabaseOrTx): Promise<number> {
+    const executor = tx || this.db;
+    const result = await executor.execute(sql`
+      DELETE FROM ${jobs}
+      WHERE status IN ('SUCCEEDED', 'CANCELLED', 'FAILED')
+        AND updated_at < clock_timestamp() - (${retentionDays} || ' days')::interval
+      RETURNING id;
+    `);
+    const rows = (result as unknown as { rows?: unknown[] }).rows || (result as unknown as unknown[]) || [];
+    return rows.length;
+  }
 }
