@@ -13,7 +13,13 @@ READY_TIMEOUT="${READY_TIMEOUT:-120}"
 
 log() { printf '%s  %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die() { log "ERROR: $*" >&2; exit 1; }
-dc() { docker compose --env-file "$APP_ENV" --env-file "$DEPLOY_ENV" -f "$COMPOSE" "$@"; }
+dc() {
+  local env_args=(--env-file "$APP_ENV")
+  if [[ -f "$DEPLOY_ENV" ]]; then
+    env_args+=(--env-file "$DEPLOY_ENV")
+  fi
+  docker compose "${env_args[@]}" -f "$COMPOSE" "$@"
+}
 
 # shellcheck source=scripts/image-retention.sh
 source "$APP_DIR/image-retention.sh"
