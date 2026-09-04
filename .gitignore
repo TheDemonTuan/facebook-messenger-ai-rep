@@ -1,0 +1,13 @@
+node_modules
+dist
+build
+.env
+.env.local
+.env.*.local
+*.log
+coverage
+.turbo
+.drizzle
+data/
+browser_profile/
+*.tsbuildinfo

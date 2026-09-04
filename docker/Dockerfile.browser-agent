@@ -1,0 +1,40 @@
+FROM mcr.microsoft.com/playwright:v1.50.1-noble AS base
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
+    net-tools \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g pnpm@11.25.0
+
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json .npmrc ./
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/config/package.json ./packages/config/
+COPY packages/db/package.json ./packages/db/
+COPY packages/queue/package.json ./packages/queue/
+COPY packages/channel/package.json ./packages/channel/
+COPY apps/browser-agent/package.json ./apps/browser-agent/
+
+RUN pnpm install --no-frozen-lockfile
+
+COPY packages/ ./packages/
+COPY apps/browser-agent/ ./apps/browser-agent/
+
+RUN pnpm -r build && cd apps/browser-agent && pnpm exec playwright install chromium
+
+COPY docker/entrypoint-browser.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV NODE_ENV=production
+ENV BROWSER_HEADLESS=false
+ENV BROWSER_PROFILE_DIR=/app/browser_profile
+ENV DISPLAY=:99
+
+EXPOSE 6080
+
+ENTRYPOINT ["/entrypoint.sh"]

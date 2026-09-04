@@ -1,0 +1,31 @@
+{
+  "name": "facebook-messenger-ai-rep",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Single-Agent Facebook Messenger AI Customer Service Representative",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r --filter=!@messenger/dashboard build && pnpm --filter=@messenger/dashboard build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "db:generate": "pnpm --filter=@messenger/db db:generate",
+    "db:migrate": "pnpm --filter=@messenger/db db:migrate",
+    "db:seed": "pnpm --filter=@messenger/db db:seed",
+    "dev:control-plane": "pnpm --filter=@messenger/control-plane dev",
+    "dev:scheduler": "pnpm --filter=@messenger/scheduler dev",
+    "dev:ai-worker": "pnpm --filter=@messenger/ai-worker dev",
+    "dev:browser-agent": "pnpm --filter=@messenger/browser-agent dev",
+    "dev:dashboard": "pnpm --filter=@messenger/dashboard dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "drizzle-orm": "^0.39.3",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

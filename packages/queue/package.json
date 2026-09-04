@@ -1,0 +1,29 @@
+{
+  "name": "@messenger/queue",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@messenger/contracts": "workspace:*",
+    "@messenger/config": "workspace:*",
+    "@messenger/db": "workspace:*",
+    "bullmq": "^5.41.6",
+    "ioredis": "^5.5.0"
+  },
+  "devDependencies": {
+    "@types/ioredis": "^5.0.0",
+    "typescript": "^5.7.3"
+  }
+}
