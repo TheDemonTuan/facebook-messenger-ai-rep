@@ -50,9 +50,15 @@ export function buildChatMessages(context: ConversationContext): Array<{ role: "
         content: msg.text,
       });
     } else {
+      const trimmed = msg.text.trim();
+      const content =
+        trimmed.startsWith("{") && trimmed.endsWith("}")
+          ? trimmed
+          : JSON.stringify({ messages: [trimmed], needsClarification: false });
+
       chatMessages.push({
         role: "assistant",
-        content: msg.text,
+        content,
       });
     }
   }

@@ -86,6 +86,7 @@ export class AiReplyGenerator {
       const firstValidation = validateAiOutput(rawResponse, {
         maxResponseCount: context.settings.aiMaxResponseCount,
         totalMaxChars: context.settings.aiTotalMaxChars,
+        allowPlainTextFallback: true,
       });
 
       if (firstValidation.valid && firstValidation.data) {
@@ -121,6 +122,8 @@ export class AiReplyGenerator {
       console.warn(`[AI Generator] First attempt failed guard check: ${firstValidation.error}. Retrying once with error feedback...`);
 
       // 2. Single retry with validation feedback
+      const retryPrompt = `Lần trả lời trước chưa đúng định dạng yêu cầu. Vui lòng phản hồi lại và CHỈ trả về đúng duy nhất 1 JSON object hợp lệ theo định dạng:\n{\n  "messages": ["nội dung phản hồi khách"],\n  "needsClarification": false\n}`;
+
       const retryMessages = [
         ...initialMessages,
         {
@@ -129,7 +132,7 @@ export class AiReplyGenerator {
         },
         {
           role: "user" as const,
-          content: `Lần trả lời trước vi phạm quy tắc: ${firstValidation.error}. Vui lòng sửa lại và chỉ trả về đúng JSON chuẩn: { "messages": [...], "needsClarification": boolean }`,
+          content: retryPrompt,
         },
       ];
 

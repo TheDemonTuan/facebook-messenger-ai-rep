@@ -147,4 +147,46 @@ hello! Em chào anh/chị ạ rất vui được hỗ trợ. Anh/chị cần em 
     expect(res.valid).toBe(true);
     expect(res.data?.messages[0]).toBe("hello! Em chào anh/chị ạ rất vui được hỗ trợ. Anh/chị cần em giúp gì hôm nay ạ?");
   });
+
+  it("handles plain text starting with 'D' when allowPlainTextFallback is enabled", () => {
+    const rawStartingWithD = "Dạ shop em chào bạn, bên em vẫn còn hàng size L màu đen anh nhé!";
+    const res = validateAiOutput(rawStartingWithD, { allowPlainTextFallback: true });
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages[0]).toBe(rawStartingWithD);
+    expect(res.data?.needsClarification).toBe(false);
+  });
+
+  it("handles short Vietnamese plain text responses (e.g. 'Dạ có ạ!')", () => {
+    const shortText = "Dạ có ạ!";
+    const res = validateAiOutput(shortText, { allowPlainTextFallback: true });
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages[0]).toBe("Dạ có ạ!");
+  });
+
+  it("normalizes singular 'message' key to 'messages' array", () => {
+    const singular = JSON.stringify({
+      message: "Dạ em chào anh/chị, em hỗ trợ gì cho mình ạ?",
+    });
+    const res = validateAiOutput(singular);
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages[0]).toContain("Dạ em chào anh/chị");
+    expect(res.data?.needsClarification).toBe(false);
+  });
+
+  it("normalizes string 'messages' value to array", () => {
+    const strMessages = JSON.stringify({
+      messages: "Dạ sản phẩm này giá 250k bạn nha.",
+    });
+    const res = validateAiOutput(strMessages);
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages[0]).toContain("giá 250k");
+  });
+
+  it("normalizes direct JSON array to structured output", () => {
+    const rawArray = JSON.stringify(["Dạ chào bạn ạ", "Shop có thể giúp gì cho bạn?"]);
+    const res = validateAiOutput(rawArray);
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages.length).toBe(2);
+    expect(res.data?.messages[0]).toBe("Dạ chào bạn ạ");
+  });
 });

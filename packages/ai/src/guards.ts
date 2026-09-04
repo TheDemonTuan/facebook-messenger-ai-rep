@@ -57,11 +57,17 @@ export function extractJsonFromRaw(raw: string): string {
     cleaned = cleaned.trim();
   }
 
-  // 3. Extract substring between first '{' and last '}' if wrapped by text or XML tags
+  // 3. Extract substring between first '{' and last '}' (or '[' and ']') if wrapped by text or XML tags
   const firstBrace = cleaned.indexOf("{");
   const lastBrace = cleaned.lastIndexOf("}");
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
     cleaned = cleaned.substring(firstBrace, lastBrace + 1).trim();
+  } else {
+    const firstBracket = cleaned.indexOf("[");
+    const lastBracket = cleaned.lastIndexOf("]");
+    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+      cleaned = cleaned.substring(firstBracket, lastBracket + 1).trim();
+    }
   }
 
   return cleaned;
@@ -102,13 +108,21 @@ export function validateAiOutput(
         .trim();
 
       if (
-        plainText.length >= 10 &&
+        plainText.length >= 2 &&
         plainText.length <= totalMaxChars &&
         !isHtmlPayload(plainText) &&
         !FORBIDDEN_LEAK_PATTERNS.some((pattern) => pattern.test(plainText))
       ) {
+        // Split multi-line messages by paragraphs if appropriate
+        const lines = plainText
+          .split(/\n{2,}|\n(?=[A-ZĐÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴÝỶỸ])/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+
+        const msgs = lines.length > 1 && lines.length <= maxResponseCount ? lines : [plainText];
+
         parsedJson = {
-          messages: [plainText],
+          messages: msgs,
           needsClarification: false,
         };
       } else {
@@ -122,6 +136,38 @@ export function validateAiOutput(
         valid: false,
         error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
       };
+    }
+  }
+
+  // Normalize JSON output variations from different LLM models
+  if (parsedJson && typeof parsedJson === "object") {
+    if (Array.isArray(parsedJson)) {
+      parsedJson = {
+        messages: parsedJson.map(String).map((s) => s.trim()).filter(Boolean),
+        needsClarification: false,
+      };
+    } else {
+      const record = parsedJson as Record<string, unknown>;
+
+      // If "messages" is a single string: { messages: "..." }
+      if (typeof record.messages === "string") {
+        record.messages = [record.messages.trim()];
+      }
+
+      // If alternative singular key used: message, reply, response, text
+      if (!record.messages) {
+        const alt = record.message || record.reply || record.response || record.text;
+        if (typeof alt === "string" && alt.trim().length > 0) {
+          record.messages = [alt.trim()];
+        } else if (Array.isArray(alt) && alt.length > 0) {
+          record.messages = alt.map(String).map((s) => s.trim()).filter(Boolean);
+        }
+      }
+
+      // Default needsClarification if omitted
+      if (record.needsClarification === undefined) {
+        record.needsClarification = false;
+      }
     }
   }
 

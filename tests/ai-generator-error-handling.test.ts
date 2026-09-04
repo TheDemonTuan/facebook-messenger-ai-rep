@@ -113,6 +113,45 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(result.requestMessages!.length).toBeGreaterThan(0);
   });
 
+  it("accepts plain text customer response starting with 'D' on first attempt without triggering retry", async () => {
+    const plainTextResponse = "Dạ shop em chào anh ạ! Áo này bên em vẫn còn size M nha anh.";
+
+    const mockCreate = vi.fn(async () => {
+      return {
+        choices: [
+          {
+            message: {
+              content: plainTextResponse,
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: 120,
+          completion_tokens: 25,
+          total_tokens: 145,
+        },
+      } as any;
+    });
+
+    const mockOpenAiClient = {
+      chat: {
+        completions: {
+          create: mockCreate,
+        },
+      },
+    };
+
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+
+    const generator = new AiReplyGenerator();
+    const result = await generator.generateReply(dummyContext);
+
+    expect(result.success).toBe(true);
+    expect(result.data?.messages[0]).toBe(plainTextResponse);
+    // Verified that only 1 call was made (no retry needed!)
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+  });
+
   it("admin routes provide GET /api/ai-runs to retrieve runs list", async () => {
     const mockRuns = [
       {
