@@ -1,33 +1,54 @@
 import { describe, it, expect, vi } from "vitest";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import { getAiClient } from "../packages/ai/src/client.js";
+import { EnvSchema } from "../packages/config/src/index.js";
 import Fastify from "../apps/control-plane/node_modules/fastify";
 import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
 
-describe("Settings API Auth & Dynamic AI Client Configuration", () => {
-  it("SystemSettingsSchema validates and defaults aiBaseUrl and aiApiKey", () => {
+describe("Settings API & Server-Side xAI Configuration", () => {
+  it("SystemSettingsSchema does not store aiApiKey and sets safe defaults", () => {
     const defaultSettings = SystemSettingsSchema.parse({});
-    expect(defaultSettings.aiBaseUrl).toBe("http://127.0.0.1:8000/v1");
-    expect(defaultSettings.aiApiKey).toBe("omniroute-default-key");
-    expect(defaultSettings.aiModel).toBe("gemini-3.7-flash-low");
+    expect(defaultSettings.aiBaseUrl).toBe("https://api.x.ai/v1");
+    expect(defaultSettings.aiModel).toBe("grok-2-latest");
+    // aiApiKey must NOT exist on settings
+    expect((defaultSettings as any).aiApiKey).toBeUndefined();
 
     const customSettings = SystemSettingsSchema.parse({
-      aiBaseUrl: "https://api.openai.com/v1",
-      aiApiKey: "sk-custom-secret-key-12345",
-      aiModel: "gpt-4o-mini",
+      aiBaseUrl: "https://api.x.ai/v1",
+      aiModel: "grok-beta",
     });
 
-    expect(customSettings.aiBaseUrl).toBe("https://api.openai.com/v1");
-    expect(customSettings.aiApiKey).toBe("sk-custom-secret-key-12345");
-    expect(customSettings.aiModel).toBe("gpt-4o-mini");
+    expect(customSettings.aiBaseUrl).toBe("https://api.x.ai/v1");
+    expect(customSettings.aiModel).toBe("grok-beta");
+    expect((customSettings as any).aiApiKey).toBeUndefined();
   });
 
-  it("getAiClient dynamically switches baseURL and apiKey based on settings config", () => {
+  it("fails fast in production when XAI_API_KEY is missing", () => {
+    const prodWithoutKey = EnvSchema.safeParse({
+      NODE_ENV: "production",
+      XAI_API_KEY: "",
+    });
+    expect(prodWithoutKey.success).toBe(false);
+    if (!prodWithoutKey.success) {
+      const errorMsg = prodWithoutKey.error.issues[0]?.message;
+      expect(errorMsg).toContain("XAI_API_KEY is required");
+    }
+
+    const prodWithKey = EnvSchema.safeParse({
+      NODE_ENV: "production",
+      XAI_API_KEY: "xai-test-secret-key-12345",
+      SESSION_SECRET: "super-secret-session-key-must-be-at-least-32-chars-long!",
+      INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
+    });
+    expect(prodWithKey.success).toBe(true);
+  });
+
+  it("getAiClient dynamically switches baseURL and apiKey based on config", () => {
     const clientA = getAiClient({
-      baseURL: "http://127.0.0.1:8000/v1",
+      baseURL: "https://api.x.ai/v1",
       apiKey: "key-a",
     });
-    expect(clientA.baseURL).toBe("http://127.0.0.1:8000/v1");
+    expect(clientA.baseURL).toBe("https://api.x.ai/v1");
     expect(clientA.apiKey).toBe("key-a");
 
     const clientB = getAiClient({
@@ -45,10 +66,10 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
     expect(clientB2).toBe(clientB);
   });
 
-  it("admin routes correctly update settings and handle test-ai endpoint", async () => {
+  it("admin routes correctly update settings without storing API keys", async () => {
     let storedSettings = SystemSettingsSchema.parse({
-      aiBaseUrl: "http://127.0.0.1:8000/v1",
-      aiApiKey: "initial-key",
+      aiBaseUrl: "https://api.x.ai/v1",
+      aiModel: "grok-2-latest",
     });
     let revision = 1;
 
@@ -82,7 +103,6 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
           id: "u-1",
           email: "owner@example.com",
           role: "OWNER",
-          sessionId: "s-1",
         }),
         channelAccountId: "personal-messenger",
       })
@@ -95,25 +115,24 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
     });
     expect(getRes.statusCode).toBe(200);
     const getData = JSON.parse(getRes.body);
-    expect(getData.settings.aiBaseUrl).toBe("http://127.0.0.1:8000/v1");
-    expect(getData.settings.aiApiKey).toBe("initial-key");
+    expect(getData.settings.aiBaseUrl).toBe("https://api.x.ai/v1");
+    expect(getData.settings.aiApiKey).toBeUndefined();
 
-    // 2. PUT /api/settings updating API auth & model
+    // 2. PUT /api/settings updating model & prompt
     const putRes = await fastify.inject({
       method: "PUT",
       url: "/api/settings",
       payload: {
-        aiBaseUrl: "https://gateway.example.com/v1",
-        aiApiKey: "sk-new-super-secret-key",
-        aiModel: "gemini-1.5-pro",
-        reason: "Updated AI API auth credentials from web UI",
+        aiBaseUrl: "https://api.x.ai/v1",
+        aiModel: "grok-beta",
+        reason: "Updated AI model from web UI",
       },
     });
     expect(putRes.statusCode).toBe(200);
     const putData = JSON.parse(putRes.body);
-    expect(putData.settings.aiBaseUrl).toBe("https://gateway.example.com/v1");
-    expect(putData.settings.aiApiKey).toBe("sk-new-super-secret-key");
-    expect(putData.settings.aiModel).toBe("gemini-1.5-pro");
+    expect(putData.settings.aiBaseUrl).toBe("https://api.x.ai/v1");
+    expect(putData.settings.aiModel).toBe("grok-beta");
+    expect(putData.settings.aiApiKey).toBeUndefined();
     expect(putData.revision).toBe(2);
     expect(mockBroadcaster.broadcast).toHaveBeenCalledWith("settings:updated", { revision: 2 });
 
@@ -123,7 +142,6 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
       url: "/api/settings/test-ai",
       payload: {
         aiBaseUrl: "http://127.0.0.1:9999/v1",
-        aiApiKey: "test-key",
         aiModel: "test-model",
       },
     });

@@ -21,6 +21,21 @@ export const MessageSchema = z.object({
 });
 export type Message = z.infer<typeof MessageSchema>;
 
+export const InboundMessageSchema = z.object({
+  id: z.string().uuid(),
+  channelAccountId: z.string(),
+  conversationId: z.string().uuid(),
+  sourceMessageId: z.string(),
+  senderExternalId: z.string().nullable().optional(),
+  text: z.string(),
+  textHash: z.string(),
+  inboundVersion: z.number().int().default(1),
+  receivedAt: z.coerce.date(),
+  rawPayload: z.record(z.string(), z.unknown()).default({}),
+  createdAt: z.coerce.date(),
+});
+export type InboundMessage = z.infer<typeof InboundMessageSchema>;
+
 export const InboundMessagePayloadSchema = z.object({
   channelAccountId: z.string(),
   externalThreadId: z.string(),

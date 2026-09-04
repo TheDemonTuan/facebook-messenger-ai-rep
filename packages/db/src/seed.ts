@@ -1,5 +1,5 @@
 import { getDb, closeDb } from "./client.js";
-import { channelAccounts, settings, settingRevisions } from "./schema/index.js";
+import { channelAccounts, settings, settingRevisions, users } from "./schema/index.js";
 import { SystemSettingsSchema } from "@messenger/contracts";
 import { getEnv } from "@messenger/config";
 
@@ -23,11 +23,10 @@ export async function seedDatabase(channelAccountId?: string) {
     })
     .onConflictDoNothing();
 
-  // 2. Ensure initial settings exist
+  // 2. Ensure initial settings exist (without any API key)
   const defaultSettings = SystemSettingsSchema.parse({
-    aiBaseUrl: env.OMNIROUTE_BASE_URL,
-    aiApiKey: env.OMNIROUTE_API_KEY,
-    aiModel: env.DEFAULT_AI_MODEL,
+    aiBaseUrl: env.XAI_BASE_URL || env.OMNIROUTE_BASE_URL,
+    aiModel: env.XAI_MODEL || env.DEFAULT_AI_MODEL,
   });
   const existing = await db.query.settings.findFirst({
     where: (t, { eq }) => eq(t.channelAccountId, accountId),
@@ -48,6 +47,16 @@ export async function seedDatabase(channelAccountId?: string) {
       reason: "Initial baseline settings",
     });
   }
+
+  // 3. Ensure default admin user exists
+  await db
+    .insert(users)
+    .values({
+      email: "admin@example.com",
+      name: "Default Admin",
+      role: "OWNER",
+    })
+    .onConflictDoNothing();
 
   console.log("✅ Seed completed successfully.");
 }

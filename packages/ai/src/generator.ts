@@ -1,7 +1,8 @@
 import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
-import { validateAiOutput, isHtmlPayload } from "./guards.js";
+import { validateAiOutput } from "./guards.js";
 import { getAiClient } from "./client.js";
+import { getEnv } from "@messenger/config";
 import type { AiStructuredOutput } from "@messenger/contracts";
 
 export interface GenerationResult {
@@ -19,24 +20,16 @@ export interface GenerationResult {
 
 export class AiReplyGenerator {
   async generateReply(context: ConversationContext): Promise<GenerationResult> {
+    const env = getEnv();
+    const model = context.settings.aiModel || env.XAI_MODEL;
     const client = getAiClient({
-      baseURL: context.settings.aiBaseUrl,
-      apiKey: context.settings.aiApiKey,
+      baseURL: context.settings.aiBaseUrl || env.XAI_BASE_URL,
       timeoutMs: context.settings.aiTimeoutMs,
     });
-    const model = context.settings.aiModel;
     const startTime = Date.now();
-
     const initialMessages = buildChatMessages(context);
 
-    console.log(`[AI Proxy] ---> POST ${context.settings.aiBaseUrl}/chat/completions`);
-    console.log(`[AI Proxy] Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
-    console.log(`[AI Proxy] Request Payload:`, JSON.stringify({
-      model,
-      messages: initialMessages,
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-    }, null, 2));
+    console.log(`[AI Proxy] ---> POST chat/completions | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
 
     try {
       // 1. Initial attempt
@@ -48,8 +41,6 @@ export class AiReplyGenerator {
       });
 
       const latencyMs = Date.now() - startTime;
-      console.log(`[AI Proxy] <--- Response in ${latencyMs}ms:`, JSON.stringify(completion, null, 2));
-
       const choice = completion?.choices?.[0];
       const rawResponse = choice?.message?.content || "";
 
@@ -63,7 +54,7 @@ export class AiReplyGenerator {
         const rawDump = typeof completion === "object" ? JSON.stringify(completion) : String(completion);
         const errMsg = proxyError
           ? `AI Proxy returned error: ${typeof proxyError === "object" ? JSON.stringify(proxyError) : proxyError}`
-          : `AI Proxy returned unexpected format (missing choices array): ${rawDump}`;
+          : "AI Proxy returned unexpected format (missing choices array)";
         console.error(`[AI Proxy] Bad response:`, errMsg);
         return {
           success: false,
@@ -82,6 +73,8 @@ export class AiReplyGenerator {
       const promptTokens = usage?.prompt_tokens || 0;
       const completionTokens = usage?.completion_tokens || 0;
       const totalTokens = usage?.total_tokens || 0;
+
+      console.log(`[AI Proxy] <--- Response in ${latencyMs}ms | prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}`);
 
       const firstValidation = validateAiOutput(rawResponse, {
         maxResponseCount: context.settings.aiMaxResponseCount,
@@ -104,8 +97,10 @@ export class AiReplyGenerator {
       }
 
       // If response is an upstream HTML error (e.g. 502/504 Bad Gateway), abort immediately without prompt retry
-      if (firstValidation.error?.includes("AI Gateway error") || isHtmlPayload(rawResponse)) {
-        console.error(`[AI Generator] Upstream gateway returned HTML error:`, firstValidation.error);
+      if (firstValidation.error?.includes("AI Gateway error") ||
+          firstValidation.error?.includes("HTML error page") ||
+          rawResponse.trim().toLowerCase().startsWith("<!doctype") ||
+          rawResponse.trim().toLowerCase().startsWith("<html")) {
         return {
           success: false,
           errorMessage: firstValidation.error || "AI Gateway returned HTML error page",
@@ -136,13 +131,7 @@ export class AiReplyGenerator {
         },
       ];
 
-      console.log(`[AI Proxy Retry] ---> POST ${context.settings.aiBaseUrl}/chat/completions (retry with error feedback)`);
-      console.log(`[AI Proxy Retry] Request Payload:`, JSON.stringify({
-        model,
-        messages: retryMessages,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      }, null, 2));
+      console.log(`[AI Proxy Retry] ---> POST chat/completions (retry with error feedback) | Model: ${model}`);
 
       const retryCompletion = await client.chat.completions.create({
         model,
@@ -152,8 +141,6 @@ export class AiReplyGenerator {
       });
 
       const totalLatencyMs = Date.now() - startTime;
-      console.log(`[AI Proxy Retry] <--- Response in ${totalLatencyMs}ms:`, JSON.stringify(retryCompletion, null, 2));
-
       const retryChoice = retryCompletion?.choices?.[0];
       const retryRaw = retryChoice?.message?.content || "";
 
@@ -164,15 +151,14 @@ export class AiReplyGenerator {
           || compAny?.message
           || compAny?.detail
           || compAny?.msg;
-        const rawDump = typeof retryCompletion === "object" ? JSON.stringify(retryCompletion) : String(retryCompletion);
         const errMsg = proxyError
           ? `AI Proxy retry error: ${typeof proxyError === "object" ? JSON.stringify(proxyError) : proxyError}`
-          : `AI Proxy retry returned unexpected format: ${rawDump}`;
+          : "AI Proxy retry returned unexpected format";
         console.error(`[AI Proxy Retry] Bad response:`, errMsg);
         return {
           success: false,
           errorMessage: errMsg,
-          rawResponse: rawDump,
+          rawResponse: "",
           model,
           latencyMs: totalLatencyMs,
           promptTokens,
@@ -186,6 +172,8 @@ export class AiReplyGenerator {
       const finalPromptTokens = promptTokens + (retryUsage?.prompt_tokens || 0);
       const finalCompletionTokens = completionTokens + (retryUsage?.completion_tokens || 0);
       const finalTotalTokens = totalTokens + (retryUsage?.total_tokens || 0);
+
+      console.log(`[AI Proxy Retry] <--- Response in ${totalLatencyMs}ms | prompt_tokens=${finalPromptTokens}, completion_tokens=${finalCompletionTokens}`);
 
       const secondValidation = validateAiOutput(retryRaw, {
         maxResponseCount: context.settings.aiMaxResponseCount,
@@ -207,24 +195,9 @@ export class AiReplyGenerator {
         };
       }
 
-      if (secondValidation.error?.includes("AI Gateway error") || isHtmlPayload(retryRaw)) {
-        return {
-          success: false,
-          errorMessage: secondValidation.error || "AI Gateway returned HTML error page",
-          rawResponse: retryRaw,
-          model,
-          latencyMs: totalLatencyMs,
-          promptTokens: finalPromptTokens,
-          completionTokens: finalCompletionTokens,
-          totalTokens: finalTotalTokens,
-          requestMessages: retryMessages,
-        };
-      }
-
-      // Second attempt also failed
       return {
         success: false,
-        errorMessage: `Guard rejection after retry: ${secondValidation.error}`,
+        errorMessage: `Validation failed after retry: ${secondValidation.error}`,
         rawResponse: retryRaw,
         model,
         latencyMs: totalLatencyMs,
@@ -234,15 +207,14 @@ export class AiReplyGenerator {
         requestMessages: retryMessages,
       };
     } catch (err: unknown) {
-      const error = err as Error & { status?: number; response?: { data?: unknown } };
-      const latencyMs = Date.now() - startTime;
-      console.error(`[AI Proxy Error] Call failed in ${latencyMs}ms:`, error.message, error.stack);
+      const error = err as Error;
+      const totalLatencyMs = Date.now() - startTime;
+      console.error(`[AI Generator] Error calling AI Gateway (${error.name}):`, error.message);
       return {
         success: false,
-        errorMessage: `AI service error: ${error.message}`,
-        rawResponse: error.response?.data ? JSON.stringify(error.response.data) : (error.stack || error.message),
+        errorMessage: error.message || "Failed to generate reply",
         model,
-        latencyMs,
+        latencyMs: totalLatencyMs,
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,

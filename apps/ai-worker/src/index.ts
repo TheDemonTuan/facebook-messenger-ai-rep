@@ -32,7 +32,6 @@ async function main() {
   const { settings } = await settingsRepo.getSettings(env.DEFAULT_CHANNEL_ACCOUNT_ID);
   const health = await checkAiHealth({
     baseURL: settings.aiBaseUrl,
-    apiKey: settings.aiApiKey,
     model: settings.aiModel,
   });
   console.log(`[AI Health] ${health.message}`);

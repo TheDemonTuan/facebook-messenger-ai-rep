@@ -244,7 +244,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       };
       const current = await settingsRepo.getSettings(channelAccountId);
       const baseURL = body.aiBaseUrl || current.settings.aiBaseUrl;
-      const apiKey = body.aiApiKey || current.settings.aiApiKey;
+      const apiKey = body.aiApiKey;
       const model = body.aiModel || current.settings.aiModel;
 
       const health = await checkAiHealth({ baseURL, apiKey, model });
@@ -285,7 +285,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       const current = await settingsRepo.getSettings(channelAccountId);
       const settings = current.settings;
       const baseURL = request.body?.aiBaseUrl || settings.aiBaseUrl;
-      const apiKey = request.body?.aiApiKey || settings.aiApiKey;
+      const apiKey = request.body?.aiApiKey;
       const model = request.body?.model || settings.aiModel;
       const testText = request.body?.message || "Xin chào, shop có bán áo thun không?";
 
@@ -297,7 +297,6 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         settings: {
           ...settings,
           aiBaseUrl: baseURL,
-          aiApiKey: apiKey,
           aiModel: model,
         },
       });

@@ -11,9 +11,14 @@ let cachedClient: { client: OpenAI; baseURL: string; apiKey: string; timeout: nu
 
 export function getAiClient(config?: AiClientConfig): OpenAI {
   const env = getEnv();
-  const baseURL = config?.baseURL || env.OMNIROUTE_BASE_URL;
-  const apiKey = config?.apiKey || env.OMNIROUTE_API_KEY;
+  // Server-side xAI configuration takes precedence, fallback to omniroute / config overrides
+  const baseURL = config?.baseURL || env.XAI_BASE_URL || env.OMNIROUTE_BASE_URL;
+  const apiKey = config?.apiKey || env.XAI_API_KEY || env.OMNIROUTE_API_KEY;
   const timeout = config?.timeoutMs || 30000;
+
+  if (env.NODE_ENV === "production" && (!apiKey || apiKey.trim() === "")) {
+    throw new Error("Missing XAI_API_KEY: Server-side AI configuration is required in production.");
+  }
 
   if (
     cachedClient &&
@@ -39,8 +44,9 @@ export async function checkAiHealth(config?: {
   apiKey?: string;
   model?: string;
 }): Promise<{ ok: boolean; message: string }> {
+  const env = getEnv();
   const client = getAiClient(config);
-  const model = config?.model || getEnv().DEFAULT_AI_MODEL;
+  const model = config?.model || env.XAI_MODEL || env.DEFAULT_AI_MODEL;
   try {
     // Attempt smoke call or list models
     const models = await client.models.list();

@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const UserRoleSchema = z.enum(["OWNER", "OPERATOR", "VIEWER"]);
+export type UserRole = z.infer<typeof UserRoleSchema>;
+
 export const ConversationStatusSchema = z.enum([
   "QUEUED",
   "CLAIMED",
@@ -20,6 +23,7 @@ export const ChannelStatusSchema = z.enum([
   "RUNNING",
   "PAUSED",
   "SUSPENDED",
+  "DEGRADED",
   "ERROR",
 ]);
 export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
@@ -27,13 +31,46 @@ export type ChannelStatus = z.infer<typeof ChannelStatusSchema>;
 export const OutboundActionStatusSchema = z.enum([
   "PENDING",
   "TYPING",
+  "SEND_INTENT",
+  "CONFIRMED",
+  "SEND_UNCERTAIN",
+  "RETRY_APPROVED",
+  "CANCELLED",
+  "FAILED",
+  // Legacy aliases for backwards compatibility
   "SENDING",
   "SENT",
   "ABORTED",
   "UNCONFIRMED",
-  "FAILED",
 ]);
 export type OutboundActionStatus = z.infer<typeof OutboundActionStatusSchema>;
+
+export const JobStatusSchema = z.enum([
+  "READY",
+  "RUNNING",
+  "RETRY_WAIT",
+  "SUCCEEDED",
+  "FAILED",
+  "CANCELLED",
+]);
+export type JobStatus = z.infer<typeof JobStatusSchema>;
+
+export const TurnStatusSchema = z.enum([
+  "PENDING",
+  "THINKING",
+  "DRAFT_READY",
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+]);
+export type TurnStatus = z.infer<typeof TurnStatusSchema>;
+
+export const OutboxStatusSchema = z.enum([
+  "PENDING",
+  "PROCESSED",
+  "FAILED",
+]);
+export type OutboxStatus = z.infer<typeof OutboxStatusSchema>;
 
 export const EventTypeSchema = z.enum([
   "INBOUND_RECEIVED",
@@ -48,7 +85,9 @@ export const EventTypeSchema = z.enum([
   "TYPING_STARTED",
   "TYPING_ABORTED",
   "SEND_STARTED",
+  "SEND_INTENT",
   "SEND_CONFIRMED",
+  "SEND_UNCERTAIN",
   "SEND_UNCONFIRMED",
   "CONVERSATION_RELEASED",
   "ERROR",
@@ -64,6 +103,7 @@ export const IncidentTypeSchema = z.enum([
   "DOM_CHANGED",
   "CHECKPOINT",
   "UNCONFIRMED_SEND",
+  "SEND_UNCERTAIN",
   "RATE_LIMITED",
   "CHANNEL_SUSPENDED",
   "AI_ERROR",

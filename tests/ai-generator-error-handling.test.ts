@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { AiReplyGenerator } from "../packages/ai/src/generator.js";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import * as clientModule from "../packages/ai/src/client.js";
@@ -6,9 +6,11 @@ import Fastify from "../apps/control-plane/node_modules/fastify";
 import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
 
 describe("AI Generator & Proxy Error Handling & Logs", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const settings = SystemSettingsSchema.parse({
     aiBaseUrl: "http://127.0.0.1:8000/v1",
-    aiApiKey: "test-key",
     aiModel: "test-model",
   });
 

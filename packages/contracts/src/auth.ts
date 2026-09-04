@@ -1,14 +1,15 @@
 import { z } from "zod";
+import { UserRoleSchema } from "./enums.js";
 
-export const UserRoleSchema = z.enum(["OWNER", "OPERATOR"]);
-export type UserRole = z.infer<typeof UserRoleSchema>;
+export { UserRoleSchema };
+export type { UserRole } from "./enums.js";
 
 export const UserSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
+  name: z.string().nullable().optional(),
   role: UserRoleSchema,
-  totpEnabled: z.boolean().default(false),
-  lastLoginAt: z.coerce.date().nullable().optional(),
+  lastSeenAt: z.coerce.date().nullable().optional(),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });
@@ -18,20 +19,21 @@ export const SessionUserSchema = z.object({
   id: z.string().uuid(),
   email: z.string().email(),
   role: UserRoleSchema,
-  sessionId: z.string().uuid(),
+  name: z.string().nullable().optional(),
+  sessionId: z.string().optional(),
 });
 export type SessionUser = z.infer<typeof SessionUserSchema>;
 
-export const LoginRequestSchema = z.object({
+export const CloudflareIdentitySchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
-  totpCode: z.string().length(6).optional(),
+  name: z.string().optional(),
+  role: UserRoleSchema.default("OPERATOR"),
 });
-export type LoginRequest = z.infer<typeof LoginRequestSchema>;
+export type CloudflareIdentity = z.infer<typeof CloudflareIdentitySchema>;
 
 export const BootstrapAdminRequestSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
-  totpSecret: z.string().optional(),
+  name: z.string().optional(),
+  role: UserRoleSchema.default("OWNER"),
 });
 export type BootstrapAdminRequest = z.infer<typeof BootstrapAdminRequestSchema>;
