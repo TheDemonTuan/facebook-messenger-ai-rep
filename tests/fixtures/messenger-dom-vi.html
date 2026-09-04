@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger</title></head>
+<body>
+  <!-- Sidebar Conversation List (Trigger only) -->
+  <div role="navigation" aria-label="Đoạn chat">
+    <!-- Thread 1: Unread customer message -->
+    <a href="https://www.facebook.com/messages/t/1000888999" role="link" aria-label="Đoạn chat với Trần Thị Mai">
+      <span dir="auto">Trần Thị Mai</span>
+      <div aria-label="Đánh dấu là chưa đọc" class="unread"></div>
+      <div>Shop ơi cho em hỏi áo khoác có size L không ạ?</div>
+    </a>
+    <!-- Thread 2: Outgoing snippet -->
+    <a href="https://www.facebook.com/messages/t/1000777888" role="link" aria-label="Đoạn chat với Lê Văn Hùng">
+      <span dir="auto">Lê Văn Hùng</span>
+      <div>Bạn: Cảm ơn bạn nhiều nhé!</div>
+    </a>
+  </div>
+
+  <!-- Main Chat Window for Thread 1000888999 -->
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Historical Incoming Bubble 1 -->
+      <div role="row" id="mid.$gABvi1001" aria-label="Trần Thị Mai: Chào shop!">
+        <div dir="auto">Chào shop!</div>
+      </div>
+
+      <!-- Outgoing Bubble 1 -->
+      <div role="row" id="mid.$gABvi1002" aria-label="Bạn đã gửi: Dạ chào bạn, shop có thể hỗ trợ gì ạ?">
+        <div dir="auto">Dạ chào bạn, shop có thể hỗ trợ gì ạ?</div>
+      </div>
+
+      <!-- New Incoming Bubble 2 -->
+      <div role="row" id="mid.$gABvi1003" aria-label="Trần Thị Mai: Shop ơi cho em hỏi áo khoác có size L không ạ?">
+        <div dir="auto">Shop ơi cho em hỏi áo khoác có size L không ạ?</div>
+      </div>
+    </div>
+
+    <!-- Composer -->
+    <div role="textbox" contenteditable="true" aria-label="Tin nhắn"></div>
+  </div>
+</body>
+</html>

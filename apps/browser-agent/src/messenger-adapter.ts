@@ -1,5 +1,5 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
-import type { ChannelAdapter } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker } from "@messenger/channel";
 import { TypingEngine } from "@messenger/channel";
 import type {
   InboundMessagePayload,
@@ -20,24 +20,48 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private profileDir: string;
   private headless: boolean;
   private context: BrowserContext | null = null;
-  private page: Page | null = null;
+  private observerPage: Page | null = null;
+  private senderPage: Page | null = null;
   private isObserving = false;
   private observeTimer: NodeJS.Timeout | null = null;
+  private lastSeenMessageIds = new Set<string>();
   private lastSeenSnippets = new Map<string, string>();
   private isInitializedBaseline = false;
-  private pollCount = 0;
-  public isSendingOrTyping = false;
   private typingEngine = new TypingEngine();
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
+  private degradedCallback: ((reason: string) => Promise<void>) | null = null;
+  private isDomDegraded = false;
+  private degradedReason: string | null = null;
+
   constructor(options: PlaywrightAdapterOptions) {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
     this.profileDir = path.resolve(options.profileDir);
     this.headless = options.headless ?? true;
   }
+
+  onDegradedDom(callback: (reason: string) => Promise<void>): void {
+    this.degradedCallback = callback;
+  }
+
+  private async triggerDegradedDom(reason: string): Promise<void> {
+    this.isDomDegraded = true;
+    this.degradedReason = reason;
+    console.error(`[BrowserAdapter] DOM_DEGRADED: ${reason}`);
+    if (this.degradedCallback) {
+      await this.degradedCallback(reason);
+    }
+  }
+
   async init(): Promise<void> {
-    if (this.context && this.page) return;
+    if (this.context && this.observerPage && this.senderPage) return;
 
     console.log(`[BrowserAdapter] Launching Chromium persistent context from ${this.profileDir} (headless=${this.headless})...`);
+
+    // Prepare DISPLAY / NoVNC support
+    const envDisplay = process.env.DISPLAY;
+    if (envDisplay) {
+      console.log(`[BrowserAdapter] Attaching to display: ${envDisplay}`);
+    }
 
     this.context = await chromium.launchPersistentContext(this.profileDir, {
       headless: this.headless,
@@ -48,45 +72,39 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       timezoneId: "Asia/Ho_Chi_Minh",
       permissions: ["notifications"],
       args: [
+        "--disable-blink-features=AutomationControlled",
+        "--no-default-browser-check",
+        "--disable-features=IsolateOrigins,site-per-process",
+        "--disable-dev-shm-usage",
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-features=CalculateNativeWinOcclusion",
-        "--disable-ipc-flooding-protection",
-        "--disable-session-crashed-bubble",
-        "--disable-infobars",
-        "--no-first-run",
+        "--window-size=1280,800",
       ],
     });
 
-    await this.context.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
-      // Keep page active and prevent Facebook Web from sleeping or throttling real-time WebSockets
-      Object.defineProperty(document, "hidden", { get: () => false });
-      Object.defineProperty(document, "visibilityState", { get: () => "visible" });
-    });
-
     const pages = this.context.pages();
-    this.page = pages[0] || (await this.context.newPage());
+    this.observerPage = pages[0] || (await this.context.newPage());
+    this.senderPage = await this.context.newPage();
 
-    // Check if we have cookies already, otherwise navigate to facebook.com
-    const currentUrl = this.page.url();
-    if (!currentUrl.includes("/messages")) {
-      console.log("[BrowserAdapter] Navigating to Messenger inbox: https://www.facebook.com/messages/t/");
-      await this.page.goto("https://www.facebook.com/messages/t/", {
-        waitUntil: "domcontentloaded",
-        timeout: 45000,
-      });
+    // Initialize observer page navigation to Messenger inbox
+    const observerUrl = this.observerPage.url();
+    if (!observerUrl.includes("/messages")) {
+      console.log("[BrowserAdapter] Navigating observer page to Messenger inbox...");
+      try {
+        await this.observerPage.goto("https://www.facebook.com/messages/t/", {
+          waitUntil: "domcontentloaded",
+          timeout: 45000,
+        });
+      } catch (err) {
+        console.warn("[BrowserAdapter] Observer page initial navigation warning:", err);
+      }
     }
   }
-  private async dismissOverlays(): Promise<void> {
-    if (!this.page) return;
+
+  private async dismissOverlays(page: Page | null): Promise<void> {
+    if (!page) return;
     try {
-      await this.page.evaluate(() => {
+      await page.evaluate(() => {
         const dialogButtons = Array.from(
           document.querySelectorAll('div[role="dialog"] button, div[role="dialog"] div[role="button"]')
         );
@@ -112,168 +130,230 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
   async observeInbound(callback: (inbound: InboundMessagePayload) => Promise<void>): Promise<void> {
     this.inboundCallback = callback;
-    if (!this.page) await this.init();
+    if (!this.observerPage) await this.init();
     if (this.isObserving) return;
     this.isObserving = true;
 
-    console.log("[BrowserAdapter] Inbound polling observer started (interval: 2500ms).");
+    console.log("[BrowserAdapter] Inbound polling observer started on dedicated observer page.");
 
     const poll = async () => {
-      if (!this.isObserving || !this.page) return;
-      if (this.isSendingOrTyping) {
-        // Skip polling while actively typing/sending to avoid self-abort race conditions
-        this.observeTimer = setTimeout(poll, 2000);
+      if (!this.isObserving || !this.observerPage) return;
+      if (this.isDomDegraded) {
+        // Suspend polling when DOM is degraded
         return;
       }
 
       try {
-        const currentUrl = this.page.url();
-        if (!currentUrl.includes("/messages")) {
-          await this.page.goto("https://www.facebook.com/messages/t/", {
-            waitUntil: "domcontentloaded",
-            timeout: 30000,
-          });
-        }
+        await this.dismissOverlays(this.observerPage);
 
-        // Periodic keep-alive pulse to ensure Facebook real-time Comet/WebSocket stays awake
-        this.pollCount++;
-        if (this.pollCount % 10 === 0) {
-          await this.page.evaluate(() => {
-            window.dispatchEvent(new Event("focus"));
-            document.dispatchEvent(new Event("visibilitychange"));
-          });
-          await this.dismissOverlays();
-        }
-
-        // Scan conversation thread items in sidebar
-        const threads = await this.page.evaluate(() => {
-          const links = Array.from(
-            document.querySelectorAll('a[href*="/messages/t/"]')
-          );
-
-          return links.slice(0, 15).map((a) => {
-            const href = (a as HTMLAnchorElement).href;
+        // 1. Sidebar is ONLY a trigger: query sidebar thread rows
+        const threadElements = await this.observerPage.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a[href*="/messages/t/"]'));
+          return links.map((a) => {
+            const href = a.getAttribute("href") || "";
             const match = href.match(/\/messages\/t\/([^/?#]+)/);
-            const threadId = match && match[1] ? match[1] : "";
-            const textContent = (a as HTMLElement).innerText || "";
-            const lines = textContent.split("\n").map((l: string) => l.trim()).filter(Boolean);
+            const threadId = match ? match[1] : "";
+            const rawText = (a as HTMLElement).innerText || "";
+            const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
+            const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
 
-            // Filter out presence text like "Active now", "Đang hoạt động", timestamps
-            const cleanLines = lines.filter(
-              (l: string) =>
-                !/^(active now|đang hoạt động|\d+[mhdw])$/i.test(l) &&
-                !l.startsWith("Unread message:")
-            );
-
-            const customerName = cleanLines[0] || "Khách hàng";
-            const rawSnippet = cleanLines.slice(1).join(" ") || lines.slice(1).join(" ");
+            // Check if thread has unread indicator
+            const isUnread =
+              rawText.includes("chưa đọc") ||
+              rawText.includes("unread") ||
+              a.querySelector('div[aria-label*="chưa đọc"], div[aria-label*="unread"]') !== null ||
+              a.querySelector('span[class*="x1lliihq"][style*="font-weight: bold"], span[style*="font-weight: bold"], span[style*="font-weight: 700"]') !== null;
 
             return {
               href,
               threadId,
               customerName,
-              snippet: rawSnippet,
+              snippet: rawText.replace(/\s+/g, " ").trim(),
+              isUnread,
             };
           });
         });
 
-        // Initialize baseline state on first poll so startup doesn't fire stale historical inbounds
+        // First poll captures baseline so startup doesn't ingest historical messages
         if (!this.isInitializedBaseline) {
-          for (const t of threads) {
+          for (const t of threadElements) {
             if (t.threadId && t.snippet) {
               this.lastSeenSnippets.set(t.threadId, t.snippet);
             }
           }
+
+          // Also capture baseline message bubbles if thread is open
+          const baselineBubbles = await this.readBubblesFromPage(this.observerPage);
+          if (baselineBubbles.isDegraded) {
+            await this.triggerDegradedDom(baselineBubbles.degradedReason || "Missing stable identity during baseline");
+            return;
+          }
+          for (const b of baselineBubbles.bubbles) {
+            this.lastSeenMessageIds.add(b.id);
+          }
+
           this.isInitializedBaseline = true;
-          console.log(`[BrowserAdapter] Baseline snapshot captured for ${threads.length} threads. Listening for new inbounds...`);
-          await this.dismissOverlays();
+          console.log(`[BrowserAdapter] Baseline snapshot captured for ${threadElements.length} threads and ${this.lastSeenMessageIds.size} visible messages.`);
           this.observeTimer = setTimeout(poll, 2500);
           return;
         }
 
-        for (const t of threads) {
+        // 2. Check each thread where sidebar triggered a change
+        for (const t of threadElements) {
           if (!t.threadId || !t.snippet) continue;
 
-          // Skip group chats to prevent bot chatting into friend groups
+          // Skip group chats
           const isGroupChat =
             t.customerName.toLowerCase().includes("group") ||
             t.customerName.toLowerCase().includes("club") ||
             t.snippet.includes("left the group") ||
-            t.snippet.includes("đã rời khỏi") ||
-            t.snippet.includes("đã tham gia") ||
-            t.snippet.includes("đã thêm");
+            t.snippet.includes("đã rời khỏi");
 
           if (isGroupChat) {
             this.lastSeenSnippets.set(t.threadId, t.snippet);
             continue;
           }
 
-          // Check if snippet is outgoing from bot/owner or is an in-progress draft
-          const isOutgoingSnippet =
-            t.snippet.includes("Bạn:") ||
-            t.snippet.includes("You:") ||
-            t.snippet.includes("Bạn đã gửi") ||
-            t.snippet.includes("You sent") ||
-            t.snippet.includes("Draft:") ||
-            t.snippet.includes("Draft ") ||
-            t.snippet.includes("Bản nháp:") ||
-            t.snippet.includes("Bản nháp ");
+          const prevSnippet = this.lastSeenSnippets.get(t.threadId);
+          const hasTrigger = t.isUnread || (prevSnippet !== undefined && prevSnippet !== t.snippet);
 
-          if (isOutgoingSnippet) {
-            this.lastSeenSnippets.set(t.threadId, t.snippet);
-            continue;
+          if (!hasTrigger) continue;
+
+          // Sidebar triggered: inspect the real message bubbles in observer page
+          const currentObserverUrl = this.observerPage.url();
+          if (!currentObserverUrl.includes(t.threadId)) {
+            // Switch observer page to this thread
+            const targetUrl = t.href.startsWith("http")
+              ? t.href
+              : `https://www.facebook.com/messages/t/${t.threadId}`;
+            await this.observerPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+            await this.dismissOverlays(this.observerPage);
           }
 
-          const previousSnippet = this.lastSeenSnippets.get(t.threadId);
-          if (previousSnippet !== t.snippet) {
+          // Read real message bubbles from DOM
+          const bubbleResult = await this.readBubblesFromPage(this.observerPage);
+
+          if (bubbleResult.isDegraded) {
+            await this.triggerDegradedDom(
+              bubbleResult.degradedReason || "DOM bubble missing stable message id - suspending channel"
+            );
+            return;
+          }
+
+          // Process incoming bubbles
+          for (const bubble of bubbleResult.bubbles) {
+            if (bubble.isOutgoing) {
+              this.lastSeenMessageIds.add(bubble.id);
+              continue;
+            }
+
+            if (this.lastSeenMessageIds.has(bubble.id)) {
+              continue; // Dedupe
+            }
+
+            // Confirmed new inbound message with stable identity!
+            this.lastSeenMessageIds.add(bubble.id);
             this.lastSeenSnippets.set(t.threadId, t.snippet);
 
-            let messageText = t.snippet;
-            // Remove name prefix if present
-            if (messageText.startsWith(t.customerName)) {
-              messageText = messageText.slice(t.customerName.length).trim();
-            }
-            // Remove unread message prefix if present
-            if (messageText.startsWith("Unread message:")) {
-              messageText = messageText.slice(15).trim();
-            }
-            const splitDot = messageText.split("·");
-            if (splitDot.length > 1 && splitDot[0]) {
-              messageText = splitDot[0].trim();
-            }
-
-            if (messageText.length > 0 && this.inboundCallback) {
-              const msgId = createHash("sha256")
-                .update(`${t.threadId}:${messageText}:${Date.now()}`)
-                .digest("hex");
-
-              console.log(
-                `[BrowserAdapter] Inbound message detected in thread ${t.threadId} (${t.customerName}): "${messageText.slice(0, 30)}..."`
-              );
+            if (this.inboundCallback) {
+              const fullThreadRef = t.href.startsWith("http")
+                ? t.href
+                : `https://www.facebook.com/messages/t/${t.threadId}`;
 
               await this.inboundCallback({
                 channelAccountId: this.channelAccountId,
                 externalThreadId: t.threadId,
-                externalThreadRef: t.href,
-                externalCustomerId: `fb-${t.threadId}`,
+                externalThreadRef: fullThreadRef,
+                externalCustomerId: t.threadId,
                 customerName: t.customerName,
-                externalMessageId: msgId,
-                text: messageText,
+                externalMessageId: bubble.id,
+                text: bubble.text,
                 timestamp: new Date(),
               });
             }
           }
+
+          this.lastSeenSnippets.set(t.threadId, t.snippet);
         }
       } catch (err) {
-        // Transient evaluation or navigation error
+        console.warn("[BrowserAdapter] Error during observer poll:", err);
       } finally {
-        if (this.isObserving && !this.isSendingOrTyping) {
+        if (this.isObserving && !this.isDomDegraded) {
           this.observeTimer = setTimeout(poll, 2500);
         }
       }
     };
 
-    this.observeTimer = setTimeout(poll, 1500);
+    this.observeTimer = setTimeout(poll, 1000);
+  }
+
+  /**
+   * Reads message bubbles from a page, extracting stable identity.
+   * If any message bubble has text but no stable ID attribute, returns isDegraded = true.
+   */
+  private async readBubblesFromPage(page: Page): Promise<{
+    bubbles: Array<{ id: string; text: string; isOutgoing: boolean }>;
+    isDegraded: boolean;
+    degradedReason?: string;
+  }> {
+    try {
+      return await page.evaluate(() => {
+        const rows = Array.from(
+          document.querySelectorAll('div[role="row"], div[data-scope="messages_table"], div[data-testid="mw_message_row"]')
+        );
+
+        const bubbles: Array<{ id: string; text: string; isOutgoing: boolean }> = [];
+        let isDegraded = false;
+        let degradedReason: string | undefined;
+
+        for (const row of rows) {
+          // Extract message text
+          const textEl =
+            row.querySelector('div[dir="auto"], span[dir="auto"], div[data-scope="message_bubble"]') ||
+            row.querySelector('span');
+
+          const rawText = textEl?.textContent?.trim() || "";
+          if (!rawText) continue;
+
+          // Stable ID extraction (mid.$..., data-message-id, data-mid, id, data-id)
+          const idAttr =
+            row.getAttribute("id") ||
+            row.getAttribute("data-message-id") ||
+            row.getAttribute("data-mid") ||
+            row.getAttribute("data-id") ||
+            row.querySelector('[id^="mid."]')?.getAttribute("id") ||
+            row.querySelector('[data-message-id]')?.getAttribute("data-message-id");
+
+          if (!idAttr) {
+            isDegraded = true;
+            degradedReason = `Message row with text "${rawText.slice(0, 30)}" lacks stable mid identifier`;
+            continue;
+          }
+
+          // Direction extraction
+          const ariaLabel = (row.getAttribute("aria-label") || "").toLowerCase();
+          const isOutgoing =
+            ariaLabel.includes("bạn đã gửi") ||
+            ariaLabel.includes("bạn:") ||
+            ariaLabel.includes("you sent") ||
+            ariaLabel.includes("you:") ||
+            row.querySelector('[data-testid="outgoing_message"]') !== null;
+
+          bubbles.push({
+            id: idAttr,
+            text: rawText,
+            isOutgoing,
+          });
+        }
+
+        return { bubbles, isDegraded, degradedReason };
+      });
+    } catch (err) {
+      return {
+        bubbles: [],
+        isDegraded: false,
+      };
+    }
   }
 
   async stopObserving(): Promise<void> {
@@ -285,43 +365,35 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.inboundCallback = null;
   }
 
+  // --- Sender Page Operations ---
+
   async openConversation(threadRef: string): Promise<boolean> {
-    if (!this.page) await this.init();
-    if (!this.page) return false;
+    if (!this.senderPage) await this.init();
+    if (!this.senderPage) return false;
 
     const threadMatch = threadRef.match(/\/messages\/t\/([^/?#]+)/);
     const threadId = threadMatch && threadMatch[1] ? threadMatch[1] : threadRef;
 
-    console.log(`[BrowserAdapter] Opening conversation: ${threadRef} (threadId: ${threadId})`);
-    const currentUrl = this.page.url();
-
+    const currentUrl = this.senderPage.url();
     if (!currentUrl.includes(threadId)) {
-      // Try fast client-side navigation by clicking the sidebar link if already present in DOM
-      let clicked = false;
-      try {
-        const link = await this.page.$(`a[href*="/messages/t/${threadId}"]`);
-        if (link) {
-          await link.click();
-          clicked = true;
-          console.log(`[BrowserAdapter] Navigated via sidebar click: ${threadId}`);
-        }
-      } catch {
-        clicked = false;
-      }
+      const targetUrl = threadRef.startsWith("http")
+        ? threadRef
+        : `https://www.facebook.com/messages/t/${threadId}`;
 
-      if (!clicked) {
-        const targetUrl = threadRef.startsWith("http")
-          ? threadRef
-          : `https://www.facebook.com/messages/t/${threadId}`;
-        await this.page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      console.log(`[BrowserAdapter] Sender opening conversation: ${targetUrl}`);
+      try {
+        await this.senderPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+      } catch (err) {
+        console.warn(`[BrowserAdapter] Sender navigation failed for ${targetUrl}:`, err);
+        return false;
       }
     }
 
-    await this.dismissOverlays();
+    await this.dismissOverlays(this.senderPage);
 
     // Wait for composer textbox to be visible
     try {
-      await this.page.waitForSelector('div[role="textbox"][contenteditable="true"]', {
+      await this.senderPage.waitForSelector('div[role="textbox"][contenteditable="true"]', {
         state: "visible",
         timeout: 15000,
       });
@@ -333,8 +405,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   async getOpenConversationRef(): Promise<ActiveConversationRef | null> {
-    if (!this.page) return null;
-    const url = this.page.url();
+    if (!this.senderPage) return null;
+    const url = this.senderPage.url();
     const match = url.match(/\/messages\/t\/([^/?#]+)/);
     if (!match || !match[1]) return null;
 
@@ -342,8 +414,36 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     return {
       externalThreadId: threadId,
       externalThreadRef: url,
-      externalCustomerId: `fb-${threadId}`,
+      externalCustomerId: threadId,
       customerName: null,
+    };
+  }
+
+  /**
+   * Captures pre-send marker on sender page before typing/sending.
+   */
+  async capturePreSendMarker(threadRef?: string): Promise<PreSendMarker> {
+    const ref = threadRef || this.senderPage?.url() || "";
+    if (!this.senderPage) {
+      return {
+        threadRef: ref,
+        knownMessageIds: [],
+        lastMessageId: null,
+        messageCount: 0,
+        capturedAt: new Date(),
+      };
+    }
+
+    const { bubbles } = await this.readBubblesFromPage(this.senderPage);
+    const outgoingIds = bubbles.filter((b) => b.isOutgoing).map((b) => b.id);
+    const lastId = outgoingIds.length > 0 ? outgoingIds[outgoingIds.length - 1]! : null;
+
+    return {
+      threadRef: ref,
+      knownMessageIds: outgoingIds,
+      lastMessageId: lastId,
+      messageCount: outgoingIds.length,
+      capturedAt: new Date(),
     };
   }
 
@@ -355,20 +455,26 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       signal?: AbortSignal;
     }
   ): Promise<{ completed: boolean; aborted?: boolean }> {
-    this.isSendingOrTyping = true;
-    if (!this.page) await this.init();
-    if (!this.page) throw new Error("Browser page not ready");
+    if (!this.senderPage) return { completed: false, aborted: true };
 
-    const composer = this.page.locator('div[role="textbox"][contenteditable="true"]').first();
-    await composer.focus();
+    const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
+    try {
+      await composer.click({ timeout: 5000 });
+    } catch (err) {
+      console.warn("[BrowserAdapter] Failed to click composer textbox:", err);
+      return { completed: false };
+    }
 
-    // Clear any existing composer text first
-    await this.clearComposer();
-    const result = await this.typingEngine.typeWithPacing(
+    const typingEngine =
+      options?.targetWpmMin || options?.targetWpmMax
+        ? new TypingEngine({ targetWpmMin: options.targetWpmMin, targetWpmMax: options.targetWpmMax })
+        : this.typingEngine;
+
+    const result = await typingEngine.typeWithPacing(
       text,
       async (char) => {
-        if (this.page) {
-          await this.page.keyboard.type(char);
+        if (this.senderPage) {
+          await this.senderPage.keyboard.type(char);
         }
       },
       options?.signal
@@ -376,118 +482,97 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
     if (result.aborted) {
       await this.clearComposer();
-      this.isSendingOrTyping = false;
     }
 
     return result;
   }
 
   async clearComposer(): Promise<void> {
-    if (!this.page) return;
-    const composer = this.page.locator('div[role="textbox"][contenteditable="true"]').first();
+    if (!this.senderPage) return;
     try {
+      const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
       await composer.focus();
-      // Select all and delete
-      await this.page.keyboard.press("ControlOrMeta+A");
-      await this.page.keyboard.press("Backspace");
+      await this.senderPage.keyboard.press("ControlOrMeta+A");
+      await this.senderPage.keyboard.press("Backspace");
     } catch (err) {
       console.warn("[BrowserAdapter] Error clearing composer:", err);
     }
   }
 
   async sendDraft(_actionId: string): Promise<{ sent: boolean }> {
-    if (!this.page) return { sent: false };
+    if (!this.senderPage) return { sent: false };
     try {
-      await this.page.keyboard.press("Enter");
+      await this.senderPage.keyboard.press("Enter");
       return { sent: true };
     } catch (err) {
       console.error("[BrowserAdapter] Failed to press Enter to send draft:", err);
       return { sent: false };
-    } finally {
-      this.isSendingOrTyping = false;
     }
   }
 
   async verifySent(
     expectedText: string,
     _expectedHash: string,
+    marker?: PreSendMarker | string,
     timeoutMs = 10000
   ): Promise<{ verified: boolean; messageRef?: string }> {
-    this.isSendingOrTyping = false;
-    if (!this.page) return { verified: false };
+    if (!this.senderPage) return { verified: false };
 
     const startTime = Date.now();
     const normalizedExpected = expectedText.trim();
+    const knownIds =
+      marker && typeof marker === "object" && marker.knownMessageIds
+        ? new Set(marker.knownMessageIds)
+        : new Set<string>();
 
     while (Date.now() - startTime < timeoutMs) {
-      const bubbles = await this.page.locator('div[role="row"], div[data-scope="messages_table"]').allInnerTexts();
+      const { bubbles } = await this.readBubblesFromPage(this.senderPage);
+
+      // Verify that an outgoing bubble appeared strictly AFTER marker matching expectedText
       for (const b of bubbles) {
-        if (b.includes(normalizedExpected)) {
-          const generatedRef = `msg-${createHash("sha256").update(normalizedExpected + Date.now()).digest("hex").slice(0, 16)}`;
-          return { verified: true, messageRef: generatedRef };
+        if (!b.isOutgoing) continue;
+        if (knownIds.has(b.id)) continue; // Pre-existing historical bubble
+
+        if (b.text.includes(normalizedExpected) || normalizedExpected.includes(b.text)) {
+          // Confirmed with real Facebook message ID!
+          return { verified: true, messageRef: b.id };
         }
       }
-      const { promise, resolve } = Promise.withResolvers<void>();
-      setTimeout(resolve, 500);
-      await promise;
+
+      await new Promise((r) => setTimeout(r, 500));
     }
 
     return { verified: false };
   }
 
   async health(): Promise<ChannelHealthReport> {
-    if (!this.page) {
-      return {
-        healthy: false,
-        status: "SUSPENDED",
-        domOk: false,
-        sessionActive: false,
-        checkpointDetected: false,
-        rateLimitDetected: false,
-        errorMessage: "Browser page not initialized",
-        timestamp: new Date(),
-      };
-    }
+    const isContextAlive = Boolean(this.context && this.observerPage && this.senderPage);
+    const healthy = isContextAlive && !this.isDomDegraded;
 
-    const currentUrl = this.page.url();
-    const isLoginWall = currentUrl.includes("/login") || currentUrl.includes("checkpoint");
-    const isCheckpoint = currentUrl.includes("checkpoint") || currentUrl.includes("two_factor");
-
-    let domOk = false;
-    try {
-      const composerCount = await this.page.locator('div[role="textbox"][contenteditable="true"]').count();
-      domOk = composerCount > 0 || currentUrl.includes("/messages");
-    } catch {
-      domOk = false;
-    }
-
-    const healthy = !isLoginWall && !isCheckpoint && domOk;
     return {
       healthy,
-      status: healthy ? "RUNNING" : "SUSPENDED",
-      domOk,
-      sessionActive: !isLoginWall,
-      checkpointDetected: isCheckpoint,
+      status: this.isDomDegraded ? "DEGRADED" : healthy ? "RUNNING" : "SUSPENDED",
+      domOk: !this.isDomDegraded,
+      sessionActive: isContextAlive,
+      checkpointDetected: false,
       rateLimitDetected: false,
-      errorMessage: healthy ? null : isCheckpoint ? "Account checkpoint detected" : isLoginWall ? "Session expired / login wall" : "DOM locator failure",
+      errorMessage: this.degradedReason,
       timestamp: new Date(),
     };
   }
 
-  isAlive(): boolean {
-    return Boolean(this.context && this.page && !this.page.isClosed() && this.isObserving);
-  }
-
   async close(): Promise<void> {
-    this.isObserving = false;
-    if (this.observeTimer) {
-      clearTimeout(this.observeTimer);
-      this.observeTimer = null;
-    }
-    if (this.context) {
-      await this.context.close();
+    await this.stopObserving();
+    try {
+      if (this.observerPage) await this.observerPage.close();
+      if (this.senderPage) await this.senderPage.close();
+      if (this.context) await this.context.close();
+    } catch {
+      // Ignore errors on closing
+    } finally {
+      this.observerPage = null;
+      this.senderPage = null;
       this.context = null;
-      this.page = null;
     }
   }
 }

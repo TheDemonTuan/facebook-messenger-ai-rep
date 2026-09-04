@@ -4,20 +4,14 @@ import {
   getSql,
   closeDb,
   ConversationRepository,
-  QueueRepository,
   OutboundRepository,
   EventRepository,
   SettingsRepository,
   IncidentRepository,
+  JobRepository,
+  channelAccounts,
 } from "@messenger/db";
-import {
-  getRedis,
-  closeRedis,
-  AppQueues,
-  LeaseManager,
-  DebounceManager,
-  InboundCoordinator,
-} from "@messenger/queue";
+import { eq } from "drizzle-orm";
 import { getEnv } from "@messenger/config";
 import { PlaywrightMessengerAdapter } from "./messenger-adapter.js";
 import { SenderWorkerService } from "./sender-worker.js";
@@ -25,25 +19,14 @@ import { SenderWorkerService } from "./sender-worker.js";
 async function main() {
   const env = getEnv();
   const db = getDb();
-  const redis = getRedis();
-
-  const queues = new AppQueues(redis);
-  const leaseManager = new LeaseManager(redis);
-  const debounceManager = new DebounceManager(redis, queues);
+  const sql = getSql();
 
   const convRepo = new ConversationRepository(db);
-  const queueRepo = new QueueRepository(db);
   const outboundRepo = new OutboundRepository(db);
   const eventRepo = new EventRepository(db);
   const settingsRepo = new SettingsRepository(db);
   const incidentRepo = new IncidentRepository(db);
-
-  const inboundCoordinator = new InboundCoordinator(
-    convRepo,
-    eventRepo,
-    debounceManager,
-    settingsRepo
-  );
+  const jobRepo = new JobRepository(db);
 
   const adapter = new PlaywrightMessengerAdapter({
     profileDir: env.BROWSER_PROFILE_DIR,
@@ -51,39 +34,90 @@ async function main() {
     channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
   });
 
-  console.log("Initializing Browser Agent & Messenger Web adapter...");
+  console.log("Initializing PostgreSQL-foundation Browser Agent...");
   await adapter.init();
-
-  // Wire inbound observation
-  await adapter.observeInbound(async (inbound) => {
-    console.log(`[Browser Agent] Inbound received from ${inbound.externalCustomerId}: "${inbound.text.slice(0, 30)}..."`);
-    await inboundCoordinator.handleInbound(inbound);
-  });
 
   const senderWorker = new SenderWorkerService(
     db,
-    redis,
+    null,
     adapter,
-    leaseManager,
+    null,
     convRepo,
-    queueRepo,
+    null,
     outboundRepo,
     eventRepo,
     settingsRepo,
-    incidentRepo
+    incidentRepo,
+    jobRepo,
+    sql
   );
 
   senderWorker.start();
 
+  // Listen for DOM degradation: fail-closed suspend, no Date.now
+  if (typeof adapter.onDegradedDom === "function") {
+    adapter.onDegradedDom(async (reason: string) => {
+      console.error(`[Browser Agent] Handling DOM_DEGRADED: ${reason}`);
+      await db
+        .update(channelAccounts)
+        .set({
+          status: "DEGRADED",
+          isSuspended: true,
+          statusReason: `DOM_DEGRADED: ${reason}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
+
+      await incidentRepo.createIncident({
+        channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+        type: "DOM_CHANGED",
+        title: "Facebook Messenger DOM degraded: missing stable message identity",
+        description: reason,
+        metadata: { reason },
+        autoSuspendChannel: true,
+      });
+    });
+  }
+
+  // Wire inbound observer (runs continuously, independent of sender typing)
+  await adapter.observeInbound(async (inbound) => {
+    console.log(`[Browser Agent] Inbound received from ${inbound.externalCustomerId}: "${inbound.text.slice(0, 30)}..."`);
+
+    // Ingest into PostgreSQL
+    const result = await convRepo.ingestInboundMessage(inbound);
+    if (result.isDuplicate) {
+      console.log(`[Browser Agent] Deduplicated message ${inbound.externalMessageId}`);
+      return;
+    }
+
+    // Abort stale outbound actions for this conversation
+    await outboundRepo.abortStaleActions(result.conversationId, result.inboundVersion);
+
+    // Cancel typing locally in this process
+    senderWorker.cancelActiveTyping(result.conversationId, result.inboundVersion);
+
+    // Send PostgreSQL notification to cancel typing across all sender workers
+    try {
+      await sql.notify(
+        "browser_cancel_typing",
+        JSON.stringify({
+          channelAccountId: inbound.channelAccountId,
+          conversationId: result.conversationId,
+          inboundVersion: result.inboundVersion,
+        })
+      );
+    } catch (err) {
+      console.warn("[Browser Agent] Failed to emit browser_cancel_typing notification:", err);
+    }
+  });
+
   const HEARTBEAT_FILE = "/tmp/healthy";
   const heartbeatInterval = setInterval(async () => {
     try {
-      if (!adapter.isAlive()) return;
-      const ping = await redis.ping();
-      await getSql().unsafe("SELECT 1");
-      if (ping === "PONG") {
-        fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
-      }
+      const health = await adapter.health();
+      if (!health.healthy) return;
+      await sql.unsafe("SELECT 1");
+      fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
     } catch (err) {
       console.warn("[Browser Agent] Health check failed:", err);
     }
@@ -99,8 +133,6 @@ async function main() {
     try { fs.unlinkSync(HEARTBEAT_FILE); } catch {}
     await senderWorker.stop();
     await adapter.close();
-    await queues.close();
-    await closeRedis();
     await closeDb();
     console.log("Browser Agent stopped cleanly.");
     process.exit(0);

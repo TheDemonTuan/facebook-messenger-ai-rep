@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Messenger</title></head>
+<body>
+  <!-- Sidebar Conversation List (Trigger only) -->
+  <div role="navigation" aria-label="Chats">
+    <!-- Thread 1: Unread customer message -->
+    <a href="https://www.facebook.com/messages/t/2000111222" role="link" aria-label="Chat with John Doe">
+      <span dir="auto">John Doe</span>
+      <div aria-label="Mark as unread" class="unread"></div>
+      <div>Hello, is this item still available in black?</div>
+    </a>
+    <!-- Thread 2: Outgoing snippet -->
+    <a href="https://www.facebook.com/messages/t/2000333444" role="link" aria-label="Chat with Sarah Connor">
+      <span dir="auto">Sarah Connor</span>
+      <div>You: Glad we could help!</div>
+    </a>
+  </div>
+
+  <!-- Main Chat Window for Thread 2000111222 -->
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Historical Incoming Bubble 1 -->
+      <div role="row" id="mid.$gABen2001" aria-label="John Doe: Hi there!">
+        <div dir="auto">Hi there!</div>
+      </div>
+
+      <!-- Outgoing Bubble 1 -->
+      <div role="row" id="mid.$gABen2002" aria-label="You sent: Hello! How can I assist you today?">
+        <div dir="auto">Hello! How can I assist you today?</div>
+      </div>
+
+      <!-- New Incoming Bubble 2 -->
+      <div role="row" id="mid.$gABen2003" aria-label="John Doe: Hello, is this item still available in black?">
+        <div dir="auto">Hello, is this item still available in black?</div>
+      </div>
+    </div>
+
+    <!-- Composer -->
+    <div role="textbox" contenteditable="true" aria-label="Message"></div>
+  </div>
+</body>
+</html>
