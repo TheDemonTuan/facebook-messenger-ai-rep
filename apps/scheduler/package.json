@@ -15,9 +15,9 @@
     "@messenger/config": "workspace:*",
     "@messenger/db": "workspace:*",
     "@messenger/queue": "workspace:*",
-    "bullmq": "^5.41.6",
-    "drizzle-orm": "^0.39.3",
-    "ioredis": "^5.5.0"
+    "bullmq": "^6.3.4",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

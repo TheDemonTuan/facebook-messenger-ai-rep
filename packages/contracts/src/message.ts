@@ -16,7 +16,7 @@ export const MessageSchema = z.object({
   inboundVersion: z.number().int().nonnegative(),
   responseIndex: z.number().int().nonnegative().default(0),
   timestamp: z.coerce.date(),
-  metadata: z.record(z.unknown()).optional().default({}),
+  metadata: z.record(z.string(), z.unknown()).optional().default({}),
   createdAt: z.coerce.date(),
 });
 export type Message = z.infer<typeof MessageSchema>;

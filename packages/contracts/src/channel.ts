@@ -11,7 +11,7 @@ export const ChannelAccountSchema = z.object({
   lastSeenActiveAt: z.coerce.date().nullable().optional(),
   isSuspended: z.boolean().default(false),
   isPaused: z.boolean().default(false),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.coerce.date(),
   updatedAt: z.coerce.date(),
 });

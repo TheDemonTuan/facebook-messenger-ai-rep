@@ -19,8 +19,8 @@
     "@messenger/contracts": "workspace:*",
     "@messenger/config": "workspace:*",
     "@messenger/db": "workspace:*",
-    "bullmq": "^5.41.6",
-    "ioredis": "^5.5.0"
+    "bullmq": "^6.3.4",
+    "ioredis": "^6.0.0"
   },
   "devDependencies": {
     "@types/ioredis": "^5.0.0",

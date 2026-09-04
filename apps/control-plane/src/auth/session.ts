@@ -1,5 +1,5 @@
 import argon2 from "argon2";
-import { authenticator } from "otplib";
+import { generateSecret, verifySync } from "otplib";
 import type { FastifyRequest, FastifyReply } from "fastify";
 import type { UserRepository } from "@messenger/db";
 import type { SessionUser } from "@messenger/contracts";
@@ -22,11 +22,15 @@ export async function verifyPassword(hash: string, plain: string): Promise<boole
 }
 
 export function generateTotpSecret(): string {
-  return authenticator.generateSecret();
+  return generateSecret();
 }
 
 export function verifyTotpToken(secret: string, token: string): boolean {
-  return authenticator.check(token, secret);
+  try {
+    return verifySync({ secret, token }).valid;
+  } catch {
+    return false;
+  }
 }
 
 export function createAuthMiddleware(userRepo: UserRepository) {

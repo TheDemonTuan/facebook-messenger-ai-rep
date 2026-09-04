@@ -10,7 +10,7 @@ export const IncidentSchema = z.object({
   status: IncidentStatusSchema,
   title: z.string(),
   description: z.string(),
-  metadata: z.record(z.unknown()).default({}),
+  metadata: z.record(z.string(), z.unknown()).default({}),
   resolvedAt: z.coerce.date().nullable().optional(),
   resolvedBy: z.string().nullable().optional(),
   resolutionNote: z.string().nullable().optional(),

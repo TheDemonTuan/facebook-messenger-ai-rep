@@ -8,7 +8,7 @@ export const ConversationEventSchema = z.object({
   type: EventTypeSchema,
   inboundVersion: z.number().int().nonnegative().nullable().optional(),
   actor: z.string().default("SYSTEM"),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.coerce.date(),
 });
 export type ConversationEvent = z.infer<typeof ConversationEventSchema>;
@@ -16,7 +16,7 @@ export type ConversationEvent = z.infer<typeof ConversationEventSchema>;
 export const SseEventEnvelopeSchema = z.object({
   id: z.string(),
   event: z.string(),
-  data: z.record(z.unknown()),
+  data: z.record(z.string(), z.unknown()),
   timestamp: z.number(),
 });
 export type SseEventEnvelope = z.infer<typeof SseEventEnvelopeSchema>;
