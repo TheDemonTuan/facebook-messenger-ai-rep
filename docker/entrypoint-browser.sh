@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+# Clear stale locks from previous container restarts/kills
+rm -f /app/browser_profile/Singleton* /tmp/.X*-lock /tmp/.X11-unix/X* 2>/dev/null || true
+
 echo "Starting Xvfb virtual framebuffer on :99..."
 Xvfb :99 -screen 0 1280x800x24 -nolisten tcp &
 export DISPLAY=:99
