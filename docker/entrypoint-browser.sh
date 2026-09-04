@@ -16,5 +16,5 @@ x11vnc -display :99 -forever -nopw -shared -rfbport 5900 -quiet &
 echo "Starting noVNC websockify on port 6080..."
 websockify --web /usr/share/novnc 6080 localhost:5900 &
 
-echo "Starting Browser Agent..."
-exec node apps/browser-agent/dist/index.js
+echo "Starting Browser Agent with Bun..."
+exec bun apps/browser-agent/dist/index.js

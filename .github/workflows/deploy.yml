@@ -11,66 +11,144 @@ on:
         required: false
         type: boolean
         default: false
+      force_all:
+        description: Force build and deploy all services
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: facebook-messenger-ai-production
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 env:
-  NODE_VERSION: "22"
-  PNPM_VERSION: "11.25.0"
+  BUN_VERSION: "1.4.1"
 
 jobs:
   verify:
     name: Verify source
     runs-on: ubuntu-latest
+    outputs:
+      has_images: ${{ steps.set-matrix.outputs.has_images }}
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      db_migration: ${{ steps.filter.outputs.db_migration }}
+      deploy_scripts: ${{ steps.filter.outputs.deploy_scripts }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+
+      - name: Detect changed paths
+        id: filter
+        uses: dorny/paths-filter@v3
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Enable Corepack & install pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@${{ env.PNPM_VERSION }} --activate
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm build
-      - run: pnpm test
+          filters: |
+            control_plane:
+              - 'apps/control-plane/**'
+              - 'apps/dashboard/**'
+              - 'packages/contracts/**'
+              - 'packages/config/**'
+              - 'packages/db/**'
+              - 'packages/queue/**'
+              - 'docker/Dockerfile.control-plane'
+              - 'package.json'
+              - 'bun.lock'
+            scheduler:
+              - 'apps/scheduler/**'
+              - 'packages/contracts/**'
+              - 'packages/config/**'
+              - 'packages/db/**'
+              - 'packages/queue/**'
+              - 'docker/Dockerfile.scheduler'
+              - 'package.json'
+              - 'bun.lock'
+            ai_worker:
+              - 'apps/ai-worker/**'
+              - 'packages/ai/**'
+              - 'packages/contracts/**'
+              - 'packages/config/**'
+              - 'packages/db/**'
+              - 'packages/queue/**'
+              - 'docker/Dockerfile.ai-worker'
+              - 'package.json'
+              - 'bun.lock'
+            browser_agent:
+              - 'apps/browser-agent/**'
+              - 'packages/channel/**'
+              - 'packages/contracts/**'
+              - 'packages/config/**'
+              - 'packages/db/**'
+              - 'packages/queue/**'
+              - 'docker/Dockerfile.browser-agent'
+              - 'docker/entrypoint-browser.sh'
+              - 'package.json'
+              - 'bun.lock'
+            db_migration:
+              - 'packages/db/src/migrations/**'
+              - 'packages/db/drizzle/**'
+              - 'packages/db/src/schema/**'
+            deploy_scripts:
+              - 'scripts/deploy.sh'
+              - 'scripts/image-retention.sh'
+              - 'compose.prod.yml'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run build
+      - run: bun run test
       - name: Test deploy and retention scripts
         run: |
           bash tests/deploy-script.test.sh
           bash tests/image-retention.test.sh
 
+      - name: Determine image build matrix
+        id: set-matrix
+        env:
+          CP: ${{ steps.filter.outputs.control_plane }}
+          SCHED: ${{ steps.filter.outputs.scheduler }}
+          AI: ${{ steps.filter.outputs.ai_worker }}
+          BA: ${{ steps.filter.outputs.browser_agent }}
+          FORCE: ${{ inputs.force_all }}
+        run: |
+          bun -e '
+            const list = [];
+            const force = process.env.FORCE === "true";
+            if (force || process.env.CP === "true") {
+              list.push({ name: "control-plane", dockerfile: "docker/Dockerfile.control-plane" });
+            }
+            if (force || process.env.SCHED === "true") {
+              list.push({ name: "scheduler", dockerfile: "docker/Dockerfile.scheduler" });
+            }
+            if (force || process.env.AI === "true") {
+              list.push({ name: "ai-worker", dockerfile: "docker/Dockerfile.ai-worker" });
+            }
+            if (force || process.env.BA === "true") {
+              list.push({ name: "browser-agent", dockerfile: "docker/Dockerfile.browser-agent" });
+            }
+            const hasImages = list.length > 0;
+            const fs = require("fs");
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `has_images=${hasImages}\n`);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include: list })}\n`);
+          '
+
   images:
     name: Build image → GHCR (${{ matrix.name }})
     needs: verify
+    if: ${{ needs.verify.outputs.has_images == 'true' }}
     runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: true
-      matrix:
-        include:
-          - name: control-plane
-            dockerfile: docker/Dockerfile.control-plane
-          - name: scheduler
-            dockerfile: docker/Dockerfile.scheduler
-          - name: ai-worker
-            dockerfile: docker/Dockerfile.ai-worker
-          - name: browser-agent
-            dockerfile: docker/Dockerfile.browser-agent
-    outputs:
-      control-plane: ${{ steps.digest.outputs.control-plane }}
-      scheduler: ${{ steps.digest.outputs.scheduler }}
-      ai-worker: ${{ steps.digest.outputs.ai-worker }}
-      browser-agent: ${{ steps.digest.outputs.browser-agent }}
+      matrix: ${{ fromJson(needs.verify.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -103,18 +181,28 @@ jobs:
             ${{ steps.meta.outputs.image }}:${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
-      - name: Export immutable image reference
-        id: digest
+      - name: Save digest artifact
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
           SERVICE: ${{ matrix.name }}
-        run: echo "${SERVICE}=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+        run: |
+          mkdir -p digests
+          echo "${IMAGE}@${DIGEST}" > "digests/${SERVICE}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.name }}
+          path: digests/
 
   deploy:
     name: Deploy to VPS
-    needs: images
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.skip_deploy) }}
+    needs: [verify, images]
+    if: |
+      always() &&
+      needs.verify.result == 'success' &&
+      (needs.images.result == 'success' || needs.images.result == 'skipped') &&
+      !(github.event_name == 'workflow_dispatch' && inputs.skip_deploy) &&
+      (needs.verify.outputs.has_images == 'true' || needs.verify.outputs.db_migration == 'true' || needs.verify.outputs.deploy_scripts == 'true' || inputs.force_all == true)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -125,6 +213,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Download image digests
+        if: ${{ needs.verify.outputs.has_images == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: all-digests
+          merge-multiple: true
 
       - name: Configure SSH
         env:
@@ -153,6 +249,7 @@ jobs:
             "$VPS_USER@$VPS_HOST" 'chmod 755 /opt/facebook-messenger-ai-rep/deploy.sh /opt/facebook-messenger-ai-rep/image-retention.sh'
 
       - name: Log VPS in to GHCR
+        if: ${{ needs.verify.outputs.has_images == 'true' }}
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
@@ -164,19 +261,39 @@ jobs:
             -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
             "docker login ghcr.io -u '${{ github.actor }}' --password-stdin"
 
-      - name: Deploy immutable images
+      - name: Deploy selective images & migrations
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
           VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-          CONTROL_PLANE_IMAGE: ${{ needs.images.outputs.control-plane }}
-          SCHEDULER_IMAGE: ${{ needs.images.outputs.scheduler }}
-          AI_WORKER_IMAGE: ${{ needs.images.outputs.ai-worker }}
-          BROWSER_AGENT_IMAGE: ${{ needs.images.outputs.browser-agent }}
+          DB_MIGRATE: ${{ needs.verify.outputs.db_migration }}
         run: |
           set -euo pipefail
-          ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes \
-            "$VPS_USER@$VPS_HOST" "/opt/facebook-messenger-ai-rep/deploy.sh '$CONTROL_PLANE_IMAGE' '$SCHEDULER_IMAGE' '$AI_WORKER_IMAGE' '$BROWSER_AGENT_IMAGE'"
+          deploy_args=()
+          if [ "$DB_MIGRATE" = "true" ]; then
+            deploy_args+=(--migrate)
+          fi
+          if [ -d all-digests ]; then
+            if [ -f all-digests/control-plane ]; then
+              deploy_args+=(--control-plane "$(cat all-digests/control-plane)")
+            fi
+            if [ -f all-digests/scheduler ]; then
+              deploy_args+=(--scheduler "$(cat all-digests/scheduler)")
+            fi
+            if [ -f all-digests/ai-worker ]; then
+              deploy_args+=(--ai-worker "$(cat all-digests/ai-worker)")
+            fi
+            if [ -f all-digests/browser-agent ]; then
+              deploy_args+=(--browser-agent "$(cat all-digests/browser-agent)")
+            fi
+          fi
+
+          if [ ${#deploy_args[@]} -gt 0 ]; then
+            ssh -i ~/.ssh/id_ed25519 -p "$VPS_PORT" -o BatchMode=yes \
+              "$VPS_USER@$VPS_HOST" "/opt/facebook-messenger-ai-rep/deploy.sh ${deploy_args[*]}"
+          else
+            echo "Deployment files synchronized. No image or migration updates required."
+          fi
 
       - name: Report deployment status
         if: always()
@@ -189,7 +306,7 @@ jobs:
             "$VPS_USER@$VPS_HOST" '/opt/facebook-messenger-ai-rep/deploy.sh --status' || true
 
       - name: Remove ephemeral GHCR credentials
-        if: always()
+        if: always() && needs.verify.outputs.has_images == 'true'
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}

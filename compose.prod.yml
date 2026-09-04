@@ -40,7 +40,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.control-plane
     container_name: messenger-migrate
-    command: ["sh", "-c", "node packages/db/dist/migrate.js && node packages/db/dist/seed.js"]
+    command: ["sh", "-c", "bun packages/db/dist/migrate.js && bun packages/db/dist/seed.js"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
@@ -57,6 +57,7 @@ services:
       dockerfile: docker/Dockerfile.control-plane
     container_name: messenger-control-plane
     restart: unless-stopped
+    stop_grace_period: 15s
     ports:
       - "127.0.0.1:3100:3000"
     environment:
@@ -71,17 +72,18 @@ services:
       CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - messenger_net
     healthcheck:
-      test: ["CMD-SHELL", "node -e 'fetch(\"http://127.0.0.1:3000/health\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
+      test: ["CMD-SHELL", "bun -e 'fetch(\"http://127.0.0.1:3000/health\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
   scheduler:
     image: ${SCHEDULER_IMAGE:-messenger-scheduler:local}
@@ -90,18 +92,25 @@ services:
       dockerfile: docker/Dockerfile.scheduler
     container_name: messenger-scheduler
     restart: unless-stopped
+    stop_grace_period: 15s
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - messenger_net
+    healthcheck:
+      test: ["CMD-SHELL", "bun -e 'process.kill(1, 0)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   ai-worker:
     image: ${AI_WORKER_IMAGE:-messenger-ai-worker:local}
@@ -110,21 +119,28 @@ services:
       dockerfile: docker/Dockerfile.ai-worker
     container_name: messenger-ai-worker
     restart: unless-stopped
+    stop_grace_period: 45s
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-https://omniroute-api.tuannguyenviet.site/v1}
-      OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY}
-      DEFAULT_AI_MODEL: ${DEFAULT_AI_MODEL:-gemini-3.7-flash-low}
+      SPACEXAI_API_KEY: ${SPACEXAI_API_KEY:-}
+      SPACEXAI_BASE_URL: ${SPACEXAI_BASE_URL:-https://api.spacexai.com/v1}
+      SPACEXAI_MODEL: ${SPACEXAI_MODEL:-spacex-chat-v1}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - messenger_net
+    healthcheck:
+      test: ["CMD-SHELL", "bun -e 'process.kill(1, 0)'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   browser-agent:
     image: ${BROWSER_AGENT_IMAGE:-messenger-browser-agent:local}
@@ -133,6 +149,7 @@ services:
       dockerfile: docker/Dockerfile.browser-agent
     container_name: messenger-browser-agent
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
       - "127.0.0.1:6081:6080"
     environment:
@@ -145,12 +162,18 @@ services:
     volumes:
       - messenger_browser_profile:/app/browser_profile
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
       - messenger_net
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --max-time 5 http://127.0.0.1:6080/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   # Dedicated Cloudflare Tunnel for Messenger (Start with: docker compose up -d tunnel)
   tunnel:

@@ -1,35 +1,35 @@
-FROM node:22-bookworm-slim AS base
+FROM oven/bun:1.4.1 AS base
 WORKDIR /app
-RUN npm install -g pnpm@11.25.0
 
 # 1. Install dependencies
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json ./
+COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/config/package.json ./packages/config/
 COPY packages/db/package.json ./packages/db/
 COPY packages/queue/package.json ./packages/queue/
-COPY packages/channel/package.json ./packages/channel/
-COPY packages/ai/package.json ./packages/ai/
 COPY apps/control-plane/package.json ./apps/control-plane/
 COPY apps/dashboard/package.json ./apps/dashboard/
 
-RUN pnpm install --frozen-lockfile
+RUN bun install --frozen-lockfile
 
 # 2. Build shared packages and apps
-COPY packages/ ./packages/
+COPY packages/contracts/ ./packages/contracts/
+COPY packages/config/ ./packages/config/
+COPY packages/db/ ./packages/db/
+COPY packages/queue/ ./packages/queue/
 COPY apps/dashboard/ ./apps/dashboard/
 COPY apps/control-plane/ ./apps/control-plane/
 
-RUN pnpm -r build && pnpm --filter=@messenger/dashboard build
+RUN bun run --filter='@messenger/*' build
 
 # 3. Production runner
-FROM node:22-bookworm-slim AS runner
+FROM oven/bun:1.4.1-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
 COPY --from=base /app /app
 
-USER node
+USER bun
 EXPOSE 3000
 
-CMD ["node", "apps/control-plane/dist/index.js"]
+CMD ["bun", "apps/control-plane/dist/index.js"]

@@ -1,0 +1,35 @@
+# Git & CI
+.git
+.gitignore
+.gitattributes
+.github
+
+# Dependencies and build outputs
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.pnpm-store
+.pnpm-task-run-state-v1
+.pnpm-workspace-state-v1.json
+
+# Local and temporary files
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Application persistence and test outputs
+backups/
+browser_profile/
+tests/
+coverage/
+.vite/
+.vite-temp/
+
+# OS specific
+.DS_Store
+Thumbs.db

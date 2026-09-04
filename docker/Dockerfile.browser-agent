@@ -8,11 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     websockify \
     net-tools \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm@11.25.0
+# Install Bun 1.4
+RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1"
+ENV PATH="/root/.bun/bin:${PATH}"
 
-COPY package.json pnpm-workspace.yaml pnpm-lock.yaml tsconfig.base.json tsconfig.json ./
+COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/config/package.json ./packages/config/
 COPY packages/db/package.json ./packages/db/
@@ -20,12 +23,16 @@ COPY packages/queue/package.json ./packages/queue/
 COPY packages/channel/package.json ./packages/channel/
 COPY apps/browser-agent/package.json ./apps/browser-agent/
 
-RUN pnpm install --no-frozen-lockfile
+RUN bun install --frozen-lockfile
 
-COPY packages/ ./packages/
+COPY packages/contracts/ ./packages/contracts/
+COPY packages/config/ ./packages/config/
+COPY packages/db/ ./packages/db/
+COPY packages/queue/ ./packages/queue/
+COPY packages/channel/ ./packages/channel/
 COPY apps/browser-agent/ ./apps/browser-agent/
 
-RUN pnpm -r build && cd apps/browser-agent && pnpm exec playwright install chromium
+RUN bun run --filter='@messenger/*' build && cd apps/browser-agent && bun x playwright install chromium
 
 COPY docker/entrypoint-browser.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
