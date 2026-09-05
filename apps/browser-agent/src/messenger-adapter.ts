@@ -389,6 +389,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           return;
         }
 
+        await observerPage.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
+
         // 1. Sidebar is ONLY a trigger: query sidebar thread rows
         const threadElements = await observerPage.evaluate(() => {
           const links = Array.from(
@@ -470,11 +472,17 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           // Sidebar triggered: inspect the real message bubbles in observer page
           const currentObserverUrl = observerPage.url();
           if (extractMessengerThreadId(currentObserverUrl) !== t.threadId) {
-            // Switch observer page to this thread
-            const targetUrl = t.href.startsWith("http")
-              ? t.href
-              : `https://www.facebook.com/messages/t/${t.threadId}`;
-            await observerPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
+            const clicked = await observerPage
+              .locator('a[href*="/messages/"]')
+              .evaluateAll((links, href) => {
+                const link = links.find((candidate) => candidate.getAttribute("href") === href) as HTMLElement | undefined;
+                link?.click();
+                return Boolean(link);
+              }, t.href);
+            if (!clicked) throw new Error("Messenger sidebar thread link disappeared before it could be opened");
+            await observerPage.waitForURL((url) => extractMessengerThreadId(url.toString()) === t.threadId, {
+              timeout: 15000,
+            });
             await this.dismissOverlays(observerPage);
           }
 
