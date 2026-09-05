@@ -6,6 +6,7 @@ import type {
   ConversationRepository,
   OutboundRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   EventRepository,
   OutboxRepository,
@@ -25,6 +26,7 @@ export interface CoreJobServiceDeps {
   convRepo: ConversationRepository;
   outboundRepo: OutboundRepository;
   settingsRepo: SettingsRepository;
+  aiConfigRepo: AiConfigRepository;
   incidentRepo: IncidentRepository;
   eventRepo: EventRepository;
   outboxRepo: OutboxRepository;
@@ -67,6 +69,7 @@ export class CoreJobService {
       turnRepo: deps.turnRepo,
       outboundRepo: deps.outboundRepo,
       settingsRepo: deps.settingsRepo,
+      aiConfigRepo: deps.aiConfigRepo,
       incidentRepo: deps.incidentRepo,
       eventRepo: deps.eventRepo,
       outboxRepo: deps.outboxRepo,

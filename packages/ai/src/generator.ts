@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
 import { validateAiOutput } from "./guards.js";
-import { getAiClient } from "./client.js";
+import { createAiCompletion, type AiConnectionConfig } from "./client.js";
 import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 import type { AiStructuredOutput } from "@messenger/contracts";
 
@@ -32,61 +32,35 @@ export interface GenerationResult {
 }
 
 export class AiReplyGenerator {
-  async generateReply(context: ConversationContext): Promise<GenerationResult> {
+  async generateReply(context: ConversationContext, connection?: AiConnectionConfig): Promise<GenerationResult> {
     const env = getEnv();
-    const { model: defaultModel } = getEffectiveAiConfig(env);
-    const model = context.settings.aiModel || defaultModel;
-    const client = getAiClient({
+    const defaults = getEffectiveAiConfig(env);
+    const model = connection?.model || context.settings.aiModel || defaults.model;
+    const provider: AiConnectionConfig = connection || {
+      apiFormat: defaults.apiFormat,
+      baseUrl: defaults.baseURL,
+      apiKey: defaults.apiKey || "dummy-dev-key",
+      model,
       timeoutMs: context.settings.aiTimeoutMs,
-    });
+    };
     const startTime = Date.now();
     const initialMessages = buildChatMessages(context);
     const promptHash = sha256(JSON.stringify(initialMessages));
 
-    console.log(`[AI Proxy] ---> POST chat/completions | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
+    console.log(`[AI Proxy] ---> ${provider.apiFormat} | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
 
     try {
       // 1. Initial attempt
-      const completion = await client.chat.completions.create({
-        model,
-        messages: initialMessages,
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-      });
+      const completion = await createAiCompletion(
+        { ...provider, model, timeoutMs: context.settings.aiTimeoutMs },
+        initialMessages
+      );
 
       const latencyMs = Date.now() - startTime;
-      const choice = completion?.choices?.[0];
-      const rawResponse = choice?.message?.content || "";
-
-      if (!choice || !completion?.choices) {
-        const compAny = completion as unknown as Record<string, unknown> | undefined;
-        const proxyError = (compAny?.error as { message?: string })?.message
-          || compAny?.error
-          || compAny?.message
-          || compAny?.detail
-          || compAny?.msg;
-        const rawDump = typeof completion === "object" ? JSON.stringify(completion) : String(completion);
-        const errMsg = proxyError
-          ? `AI Proxy returned error: ${typeof proxyError === "object" ? JSON.stringify(proxyError) : proxyError}`
-          : "AI Proxy returned unexpected format (missing choices array)";
-        console.error(`[AI Proxy] Bad response:`, errMsg);
-        return {
-          success: false,
-          errorMessage: sanitizeAiError(errMsg),
-          model,
-          latencyMs,
-          promptTokens: 0,
-          completionTokens: 0,
-          totalTokens: 0,
-          promptHash,
-          responseHash: rawDump ? sha256(rawDump) : undefined,
-        };
-      }
-
-      const usage = completion.usage;
-      const promptTokens = usage?.prompt_tokens || 0;
-      const completionTokens = usage?.completion_tokens || 0;
-      const totalTokens = usage?.total_tokens || 0;
+      const rawResponse = completion.content;
+      const promptTokens = completion.promptTokens;
+      const completionTokens = completion.completionTokens;
+      const totalTokens = completion.totalTokens;
       const responseHash = rawResponse ? sha256(rawResponse) : undefined;
 
       console.log(`[AI Proxy] <--- Response in ${latencyMs}ms | prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}`);
@@ -146,20 +120,17 @@ export class AiReplyGenerator {
         },
       ];
 
-      console.log(`[AI Proxy Retry] ---> POST chat/completions (retry with error feedback) | Model: ${model}`);
+      console.log(`[AI Proxy Retry] ---> ${provider.apiFormat} (retry with error feedback) | Model: ${model}`);
 
-      const retryCompletion = await client.chat.completions.create({
-        model,
-        messages: retryMessages,
-        temperature: 0.2,
-        response_format: { type: "json_object" },
-      });
+      const retryCompletion = await createAiCompletion(
+        { ...provider, model, timeoutMs: context.settings.aiTimeoutMs },
+        retryMessages
+      );
 
       const totalLatencyMs = Date.now() - startTime;
-      const retryChoice = retryCompletion?.choices?.[0];
-      const retryRaw = retryChoice?.message?.content || "";
+      const retryRaw = retryCompletion.content;
 
-      if (!retryChoice || !retryCompletion?.choices) {
+      if (!retryRaw) {
         const compAny = retryCompletion as unknown as Record<string, unknown> | undefined;
         const proxyError = (compAny?.error as { message?: string })?.message
           || compAny?.error
@@ -195,9 +166,9 @@ export class AiReplyGenerator {
           data: retryValidation.data,
           model,
           latencyMs: totalLatencyMs,
-          promptTokens,
-          completionTokens,
-          totalTokens,
+          promptTokens: promptTokens + retryCompletion.promptTokens,
+          completionTokens: completionTokens + retryCompletion.completionTokens,
+          totalTokens: totalTokens + retryCompletion.totalTokens,
           promptHash,
           responseHash: sha256(retryRaw),
         };
@@ -227,6 +198,7 @@ export class AiReplyGenerator {
         completionTokens: 0,
         totalTokens: 0,
         promptHash,
+        responseHash: sha256(error.message || "Failed to generate reply"),
       };
     }
   }

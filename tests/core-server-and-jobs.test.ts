@@ -454,6 +454,14 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         turnRepo: mockTurnRepo,
         outboundRepo: mockOutboundRepo,
         settingsRepo: mockSettingsRepo,
+        aiConfigRepo: {
+          getConfig: vi.fn().mockResolvedValue({
+            apiFormat: "OPENAI_COMPATIBLE",
+            baseUrl: "https://example.com/v1",
+            apiKey: "test-key",
+            model: "grok-2",
+          }),
+        },
         incidentRepo: mockIncidentRepo,
         eventRepo: mockEventRepo,
         outboxRepo: mockOutboxRepo,

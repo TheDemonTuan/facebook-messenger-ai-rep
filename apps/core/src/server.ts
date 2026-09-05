@@ -14,6 +14,7 @@ import {
   OutboundRepository,
   EventRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   JobRepository,
   TurnRepository,
@@ -54,6 +55,7 @@ export interface CoreServerContext {
     outboundRepo: OutboundRepository;
     eventRepo: EventRepository;
     settingsRepo: SettingsRepository;
+    aiConfigRepo: AiConfigRepository;
     incidentRepo: IncidentRepository;
     jobRepo: JobRepository;
     turnRepo: TurnRepository;
@@ -72,6 +74,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
   const outboundRepo = new OutboundRepository(db);
   const eventRepo = new EventRepository(db);
   const settingsRepo = new SettingsRepository(db);
+  const aiConfigRepo = new AiConfigRepository(db);
   const incidentRepo = new IncidentRepository(db);
   const jobRepo = new JobRepository(db);
   const turnRepo = new TurnRepository(db);
@@ -88,6 +91,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
     convRepo,
     outboundRepo,
     settingsRepo,
+    aiConfigRepo,
     incidentRepo,
     eventRepo,
     outboxRepo,
@@ -154,6 +158,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
       db,
       queueRepo,
       settingsRepo,
+      aiConfigRepo,
       incidentRepo,
       eventRepo,
       jobRepo,
@@ -225,6 +230,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
       outboundRepo,
       eventRepo,
       settingsRepo,
+      aiConfigRepo,
       incidentRepo,
       jobRepo,
       turnRepo,

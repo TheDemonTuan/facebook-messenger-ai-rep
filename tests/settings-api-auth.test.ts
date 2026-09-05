@@ -8,6 +8,7 @@ import type {
   Database,
   QueueRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   EventRepository,
   JobRepository,
@@ -111,6 +112,10 @@ describe("Settings API & Server-Side xAI Configuration", () => {
         db: {} as unknown as Database,
         queueRepo: {} as unknown as QueueRepository,
         settingsRepo: mockSettingsRepo as unknown as SettingsRepository,
+        aiConfigRepo: {
+          getPublicConfig: vi.fn(async () => ({ apiFormat: "OPENAI_COMPATIBLE", baseUrl: "https://example.com/v1", model: "test-model", apiKeyConfigured: true })),
+          getConfig: vi.fn(async () => ({ apiFormat: "OPENAI_COMPATIBLE", baseUrl: "https://example.com/v1", model: "test-model", apiKey: "test-key" })),
+        } as unknown as AiConfigRepository,
         incidentRepo: {} as unknown as IncidentRepository,
         eventRepo: mockEventRepo as unknown as EventRepository,
         jobRepo: {} as unknown as JobRepository,

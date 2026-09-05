@@ -1,8 +1,20 @@
 import { z } from "zod";
 
+export const AiApiFormatSchema = z.enum(["OPENAI_COMPATIBLE", "ANTHROPIC_COMPATIBLE"]);
+export type AiApiFormat = z.infer<typeof AiApiFormatSchema>;
+
 export function isValidAiModel(model: string): boolean {
   const value = model.trim();
   return value.length > 0 && value.length <= 128 && /^[a-z0-9][a-z0-9._:/-]*$/i.test(value);
+}
+
+export function isValidAiBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname));
+  } catch {
+    return false;
+  }
 }
 
 export const SystemSettingsSchema = z.object({

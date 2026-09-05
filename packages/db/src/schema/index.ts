@@ -419,7 +419,24 @@ export const settings = pgTable(
   }
 );
 
-// 17. Setting Revisions (no API keys)
+// 17. Encrypted AI provider configuration
+export const aiProviderConfigs = pgTable(
+  "ai_provider_configs",
+  {
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .primaryKey()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    apiFormat: varchar("api_format", { length: 32 }).notNull().default("OPENAI_COMPATIBLE"),
+    baseUrl: text("base_url").notNull(),
+    model: text("model").notNull(),
+    encryptedApiKey: text("encrypted_api_key").notNull(),
+    changedBy: text("changed_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  }
+);
+
+// 18. Setting Revisions (no API keys)
 export const settingRevisions = pgTable(
   "setting_revisions",
   {

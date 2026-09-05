@@ -222,6 +222,14 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         turnRepo: mockTurnRepo,
         outboundRepo: mockOutboundRepo,
         settingsRepo: mockSettingsRepo,
+        aiConfigRepo: {
+          getConfig: vi.fn().mockResolvedValue({
+            apiFormat: "OPENAI_COMPATIBLE",
+            baseUrl: "https://example.com/v1",
+            apiKey: "test-key",
+            model: "test-model",
+          }),
+        },
         incidentRepo: {},
         eventRepo: { recordEvent: vi.fn().mockResolvedValue({}) },
         outboxRepo: { enqueue: vi.fn().mockResolvedValue({}) },

@@ -5,6 +5,7 @@ export * from "./repository/queue-repo.js";
 export * from "./repository/outbound-repo.js";
 export * from "./repository/event-repo.js";
 export * from "./repository/settings-repo.js";
+export * from "./repository/ai-config-repo.js";
 export * from "./repository/incident-repo.js";
 export * from "./repository/user-repo.js";
 export * from "./repository/job-repo.js";

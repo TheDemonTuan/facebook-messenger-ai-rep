@@ -172,7 +172,13 @@ export interface AiRunItem {
   createdAt: string;
 }
 
-// Non-secret settings for UI: aiBaseUrl and aiApiKey are never displayed or entered in UI
+export interface AiProviderSettings {
+  apiFormat: "OPENAI_COMPATIBLE" | "ANTHROPIC_COMPATIBLE";
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+}
+
 export interface NonSecretSettings {
   debounceMs: number;
   stickyWindowMs: number;
@@ -193,6 +199,7 @@ export interface NonSecretSettings {
 
 export interface SettingItem {
   settings: NonSecretSettings & Record<string, unknown>;
+  aiProvider: AiProviderSettings;
   revision: number;
 }
 

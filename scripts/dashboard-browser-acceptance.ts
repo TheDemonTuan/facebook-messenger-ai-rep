@@ -72,19 +72,43 @@ async function mockApi(page: Page): Promise<void> {
     if (path === "/api/incidents") return json({ items: [], hasMore: false, nextCursor: null });
     if (path === "/api/ai-runs") return json({ items: [], hasMore: false, nextCursor: null });
     if (path === "/api/ai-runs/test") return json({ success: true, response: "ok" });
+    if (path === "/api/settings/test-ai") return json({ healthy: true, status: "healthy", model: "auto/best-chat", latencyMs: 120 });
+    if (path === "/api/settings/ai-provider") {
+      return json({
+        aiProvider: {
+          apiFormat: "ANTHROPIC_COMPATIBLE",
+          baseUrl: "https://api.anthropic.example/v1",
+          model: "claude-sonnet-test",
+          apiKeyConfigured: true,
+        },
+      });
+    }
     if (path === "/api/settings") {
       return json({
         settings: {
-          debounceSeconds: 3,
-          wpm: 45,
-          maxReplyChars: 1000,
-          contextMessageCount: 20,
-          businessName: "Shop thử nghiệm",
-          systemPrompt: "Trả lời ngắn gọn",
-          aiModel: "grok-4.5",
+          debounceMs: 3000,
+          stickyWindowMs: 45000,
+          stickyMaxTurns: 3,
+          stickyMaxDurationMs: 120000,
+          aiModel: "auto/best-chat",
+          aiTimeoutMs: 20000,
+          aiMaxResponseCount: 3,
+          aiTotalMaxChars: 480,
+          aiSystemPersona: "Nhân viên chăm sóc khách hàng",
+          businessProfile: "Shop trực tuyến",
+          typingTargetWpmMin: 55,
+          typingTargetWpmMax: 65,
+          busyMode: false,
+          autoReplyEnabled: true,
+          pauseIntakeProcessing: false,
         },
-        revision: 1,
-        aiHealth: { configured: true, healthy: true, model: "grok-4.5" },
+        aiProvider: {
+          apiFormat: "OPENAI_COMPATIBLE",
+          baseUrl: "https://gateway.example/v1",
+          model: "auto/best-chat",
+          apiKeyConfigured: true,
+        },
+        revision: 2,
       });
     }
     if (path === "/api/audit") return json({ items: [], hasMore: false, nextCursor: null });
@@ -108,7 +132,16 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
 
   const bodyText = (await page.locator("body").innerText()).toLowerCase();
   assert(!bodyText.includes("novnc"), `${name}: public noVNC control is visible`);
-  assert(!(await page.locator('input[name*="apiKey" i], input[placeholder*="API Key" i]').count()), `${name}: xAI secret input is visible`);
+
+  await page.goto(`${baseURL}/settings`);
+  await page.locator("select").filter({ has: page.locator('option[value="OPENAI_COMPATIBLE"]') }).selectOption("ANTHROPIC_COMPATIBLE");
+  await page.locator('input[type="url"]').fill("https://api.anthropic.example/v1");
+  await page.locator('input[placeholder*="claude-sonnet"]').fill("claude-sonnet-test");
+  await page.locator('input[type="password"]').fill("test-secret-key");
+  await page.getByRole("button", { name: "Kiểm tra kết nối AI" }).click();
+  await page.getByText("Sẵn sàng (Healthy)").waitFor();
+  await page.getByRole("button", { name: "Lưu cấu hình" }).click();
+  await page.getByText(/Đã lưu cấu hình mới thành công/).waitFor();
 
   await page.goto(`${baseURL}/inbox/${conversationId}`);
   await page.getByText("Khách thử nghiệm").first().waitFor();

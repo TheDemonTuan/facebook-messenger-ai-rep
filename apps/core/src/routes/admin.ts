@@ -3,6 +3,7 @@ import type {
   Database,
   QueueRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   EventRepository,
   JobRepository,
@@ -18,7 +19,13 @@ import {
 } from "@messenger/db";
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
-import { SystemSettingsSchema, isValidAiModel, type SessionUser } from "@messenger/contracts";
+import {
+  AiApiFormatSchema,
+  SystemSettingsSchema,
+  isValidAiBaseUrl,
+  isValidAiModel,
+  type SessionUser,
+} from "@messenger/contracts";
 import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
 import { requireRole } from "../auth/roles.js";
 
@@ -26,6 +33,7 @@ export interface AdminRoutesOptions {
   db: Database;
   queueRepo: QueueRepository;
   settingsRepo: SettingsRepository;
+  aiConfigRepo: AiConfigRepository;
   incidentRepo: IncidentRepository;
   eventRepo: EventRepository;
   jobRepo: JobRepository;
@@ -39,6 +47,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     db,
     queueRepo,
     settingsRepo,
+    aiConfigRepo,
     incidentRepo,
     eventRepo,
     broadcaster,
@@ -252,9 +261,43 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
     // 4. Settings
     fastify.get("/api/settings", async (_request, reply) => {
-      const data = await settingsRepo.getSettings(channelAccountId);
-      return reply.send(data);
+      const [data, aiProvider] = await Promise.all([
+        settingsRepo.getSettings(channelAccountId),
+        aiConfigRepo.getPublicConfig(channelAccountId),
+      ]);
+      return reply.send({ ...data, aiProvider });
     });
+
+    fastify.put<{ Body: { apiFormat?: string; baseUrl?: string; model?: string; apiKey?: string } }>(
+      "/api/settings/ai-provider",
+      { preHandler: [requireRole("OWNER")] },
+      async (request, reply) => {
+        const user = (request as unknown as { user: SessionUser }).user;
+        const apiFormat = AiApiFormatSchema.safeParse(request.body?.apiFormat);
+        const baseUrl = request.body?.baseUrl?.trim() || "";
+        const model = request.body?.model?.trim() || "";
+        if (!apiFormat.success || !isValidAiBaseUrl(baseUrl) || !isValidAiModel(model)) {
+          return reply.status(400).send({ error: "Invalid AI provider configuration" });
+        }
+        try {
+          const aiProvider = await aiConfigRepo.saveConfig(
+            channelAccountId,
+            { apiFormat: apiFormat.data, baseUrl, model, apiKey: request.body?.apiKey },
+            user.email
+          );
+          await eventRepo.recordEvent({
+            channelAccountId,
+            type: "SETTING_CHANGED",
+            actor: user.email,
+            payload: { section: "AI_PROVIDER", apiFormat: aiProvider.apiFormat, baseUrl: aiProvider.baseUrl, model: aiProvider.model },
+          });
+          await broadcaster.broadcast("settings:updated", { section: "AI_PROVIDER" });
+          return reply.send({ aiProvider });
+        } catch (err) {
+          return reply.status(400).send({ error: err instanceof Error ? err.message : "Unable to save AI provider" });
+        }
+      }
+    );
 
     const handleUpdateSettings = async (
       request: unknown,
@@ -302,21 +345,24 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       async (request, reply) => handleUpdateSettings(request, reply)
     );
 
-    fastify.post<{ Body: { model?: string } }>(
+    fastify.post<{ Body: { apiFormat?: string; baseUrl?: string; model?: string; apiKey?: string } }>(
       "/api/settings/test-ai",
       { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
-        const current = await settingsRepo.getSettings(channelAccountId);
-        const model = request.body?.model || current.settings.aiModel;
-        if (!isValidAiModel(model)) {
+        const current = await aiConfigRepo.getConfig(channelAccountId);
+        const apiFormat = AiApiFormatSchema.safeParse(request.body?.apiFormat || current.apiFormat);
+        const baseUrl = request.body?.baseUrl?.trim() || current.baseUrl;
+        const model = request.body?.model?.trim() || current.model;
+        const apiKey = request.body?.apiKey?.trim() || current.apiKey || "dummy-dev-key";
+        if (!apiFormat.success || !isValidAiBaseUrl(baseUrl) || !isValidAiModel(model)) {
           return reply.status(400).send({
             ok: false,
             healthy: false,
             status: "unhealthy",
-            message: `Model '${model}' has an invalid name`,
+            message: "Invalid AI provider configuration",
           });
         }
-        const health = await checkAiHealth({ model });
+        const health = await checkAiHealth({ apiFormat: apiFormat.data, baseUrl, apiKey, model });
         return reply.send({
           ...health,
           healthy: health.healthy ?? health.ok,
@@ -390,6 +436,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const testText = request.body?.message || "Xin chào, shop có bán áo thun không?";
 
         const generator = new AiReplyGenerator();
+        const aiConfig = await aiConfigRepo.getConfig(channelAccountId);
         const result = await generator.generateReply({
           customerName: "Khách test debug",
           customerSummary: "Khách hàng thử nghiệm kết nối proxy",
@@ -398,6 +445,12 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
             ...settings,
             aiModel: model,
           },
+        }, {
+          apiFormat: aiConfig.apiFormat,
+          baseUrl: aiConfig.baseUrl,
+          apiKey: aiConfig.apiKey,
+          model,
+          timeoutMs: settings.aiTimeoutMs,
         });
 
         return reply.send({

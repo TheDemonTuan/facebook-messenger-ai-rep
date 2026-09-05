@@ -9,6 +9,7 @@ import type {
   Database,
   QueueRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   EventRepository,
   JobRepository,
@@ -46,7 +47,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        const error = (completion as unknown as { error?: { message?: string } }).error?.message;
+        throw new Error(error ? `AI Proxy returned error: ${error}` : "AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -73,7 +87,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        const error = (completion as unknown as { error?: { message?: string } }).error?.message;
+        throw new Error(error ? `AI Proxy returned error: ${error}` : "AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -113,7 +140,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        const error = (completion as unknown as { error?: { message?: string } }).error?.message;
+        throw new Error(error ? `AI Proxy returned error: ${error}` : "AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -155,7 +195,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        const error = (completion as unknown as { error?: { message?: string } }).error?.message;
+        throw new Error(error ? `AI Proxy returned error: ${error}` : "AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -212,6 +265,9 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
         db: mockDb as unknown as Database,
         queueRepo: {} as unknown as QueueRepository,
         settingsRepo: { getSettings: vi.fn(async () => ({ settings })) } as unknown as SettingsRepository,
+        aiConfigRepo: {
+          getConfig: vi.fn(async () => ({ apiFormat: "OPENAI_COMPATIBLE", baseUrl: "https://api.x.ai/v1", apiKey: "test-key", model: settings.aiModel })),
+        } as unknown as AiConfigRepository,
         incidentRepo: {} as unknown as IncidentRepository,
         eventRepo: {} as unknown as EventRepository,
         jobRepo: {} as unknown as JobRepository,

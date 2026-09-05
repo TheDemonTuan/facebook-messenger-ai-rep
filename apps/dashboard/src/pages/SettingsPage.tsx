@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch } from "../api";
-import type { SettingItem, NonSecretSettings } from "../types";
+import type { AiProviderSettings, SettingItem, NonSecretSettings } from "../types";
 import { sanitizeSettingsForSave } from "../helpers/settings-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import {
@@ -19,6 +19,13 @@ import {
 export const SettingsPage: React.FC = () => {
   const [data, setData] = useState<SettingItem | null>(null);
   const [formData, setFormData] = useState<Partial<NonSecretSettings>>({});
+  const [aiProvider, setAiProvider] = useState<AiProviderSettings>({
+    apiFormat: "OPENAI_COMPATIBLE",
+    baseUrl: "https://api.openai.com/v1",
+    model: "",
+    apiKeyConfigured: false,
+  });
+  const [aiApiKey, setAiApiKey] = useState("");
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -39,8 +46,8 @@ export const SettingsPage: React.FC = () => {
     try {
       const res = await apiFetch<SettingItem>("/api/settings");
       setData(res);
-      // Ensure no secret fields leak into form state
       setFormData(sanitizeSettingsForSave(res.settings));
+      setAiProvider(res.aiProvider);
     } catch (err: unknown) {
       setError((err as Error).message || "Không thể tải cấu hình hệ thống");
     } finally {
@@ -62,7 +69,6 @@ export const SettingsPage: React.FC = () => {
     setTestingAi(true);
     setAiTestResult(null);
     try {
-      // Send only non-secret model parameter
       const res = await apiFetch<{
         healthy?: boolean;
         status?: string;
@@ -73,7 +79,10 @@ export const SettingsPage: React.FC = () => {
       }>("/api/settings/test-ai", {
         method: "POST",
         body: JSON.stringify({
-          model: formData.aiModel,
+          apiFormat: aiProvider.apiFormat,
+          baseUrl: aiProvider.baseUrl,
+          model: aiProvider.model,
+          apiKey: aiApiKey || undefined,
         }),
       });
       setAiTestResult(res);
@@ -97,14 +106,26 @@ export const SettingsPage: React.FC = () => {
     const sanitized = sanitizeSettingsForSave(formData);
 
     try {
+      await apiFetch<{ aiProvider: AiProviderSettings }>("/api/settings/ai-provider", {
+        method: "PUT",
+        body: JSON.stringify({
+          apiFormat: aiProvider.apiFormat,
+          baseUrl: aiProvider.baseUrl,
+          model: aiProvider.model,
+          apiKey: aiApiKey || undefined,
+        }),
+      });
       const updated = await apiFetch<SettingItem>("/api/settings", {
         method: "POST",
         body: JSON.stringify({
           ...sanitized,
+          aiModel: aiProvider.model,
           reason: reason.trim() || "Cập nhật từ trang cài đặt",
         }),
       });
       setData(updated);
+      setAiProvider(updated.aiProvider);
+      setAiApiKey("");
       setFormData(sanitizeSettingsForSave(updated.settings));
       setReason("");
       setSaveSuccess(`Đã lưu cấu hình mới thành công (Revision #${updated.revision})`);
@@ -257,17 +278,58 @@ export const SettingsPage: React.FC = () => {
             </div>
           )}
 
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
+            <div>
+              <label style={labelStyle}>Định dạng API</label>
+              <select
+                value={aiProvider.apiFormat}
+                onChange={(e) => setAiProvider({ ...aiProvider, apiFormat: e.target.value as AiProviderSettings["apiFormat"] })}
+                style={inputStyle}
+              >
+                <option value="OPENAI_COMPATIBLE">OpenAI-compatible</option>
+                <option value="ANTHROPIC_COMPATIBLE">Anthropic-compatible (Claude API)</option>
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle}>Model</label>
+              <input
+                type="text"
+                value={aiProvider.model}
+                onChange={(e) => setAiProvider({ ...aiProvider, model: e.target.value })}
+                placeholder="auto/best-chat, gpt-4.1, claude-sonnet-4-6..."
+                style={inputStyle}
+              />
+            </div>
+          </div>
+
           <div>
-            <label style={labelStyle}>Mô hình AI (OmniRoute / Custom Gateway / OpenAI / Grok)</label>
+            <label style={labelStyle}>Base URL tùy chỉnh</label>
             <input
-              type="text"
-              value={formData.aiModel || ""}
-              onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
-              placeholder="auto/best-chat, gpt-4o, grok-4.5..."
+              type="url"
+              value={aiProvider.baseUrl}
+              onChange={(e) => setAiProvider({ ...aiProvider, baseUrl: e.target.value })}
+              placeholder={aiProvider.apiFormat === "OPENAI_COMPATIBLE" ? "https://gateway.example.com/v1" : "https://api.anthropic.com/v1"}
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              Tên model gửi tới endpoint <code>/chat/completions</code> của gateway đang cấu hình trên VPS. Ví dụ: <code>auto/best-chat</code>.
+              {aiProvider.apiFormat === "OPENAI_COMPATIBLE"
+                ? "Hệ thống gọi POST {Base URL}/chat/completions."
+                : "Hệ thống gọi POST {Base URL}/messages theo chuẩn Claude API."}
+            </span>
+          </div>
+
+          <div>
+            <label style={labelStyle}>API key</label>
+            <input
+              type="password"
+              value={aiApiKey}
+              onChange={(e) => setAiApiKey(e.target.value)}
+              placeholder={aiProvider.apiKeyConfigured ? "Đã cấu hình — để trống để giữ nguyên" : "Nhập API key"}
+              autoComplete="new-password"
+              style={inputStyle}
+            />
+            <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+              API key được mã hóa phía server và không bao giờ được trả lại trình duyệt.
             </span>
           </div>
         </div>

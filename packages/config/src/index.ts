@@ -15,6 +15,8 @@ export const EnvSchema = z
     AI_API_KEY: z.string().optional(),
     AI_BASE_URL: z.string().url().optional(),
     AI_MODEL: z.string().optional(),
+    AI_API_FORMAT: z.enum(["OPENAI_COMPATIBLE", "ANTHROPIC_COMPATIBLE"]).default("OPENAI_COMPATIBLE"),
+    AI_CONFIG_ENCRYPTION_KEY: z.string().min(32).optional(),
     OMNIROUTE_API_KEY: z.string().optional(),
     OMNIROUTE_BASE_URL: z.string().url().optional(),
     DEFAULT_AI_MODEL: z.string().optional(),
@@ -34,11 +36,16 @@ export const EnvSchema = z
 
 export type Env = z.infer<typeof EnvSchema>;
 
-export function getEffectiveAiConfig(env: Env): { apiKey: string; baseURL: string; model: string } {
+export function getEffectiveAiConfig(env: Env): {
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  apiFormat: "OPENAI_COMPATIBLE" | "ANTHROPIC_COMPATIBLE";
+} {
   const apiKey = env.AI_API_KEY?.trim() || env.OMNIROUTE_API_KEY?.trim() || env.XAI_API_KEY?.trim() || "";
   const baseURL = env.AI_BASE_URL || env.OMNIROUTE_BASE_URL || env.XAI_BASE_URL || "https://api.openai.com/v1";
   const model = env.AI_MODEL || env.DEFAULT_AI_MODEL || env.XAI_MODEL || "auto/best-chat";
-  return { apiKey, baseURL, model };
+  return { apiKey, baseURL, model, apiFormat: env.AI_API_FORMAT };
 }
 
 export function validateCoreProductionEnv(env: Env): void {

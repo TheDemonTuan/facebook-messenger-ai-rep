@@ -4,6 +4,7 @@ import type {
   TurnRepository,
   OutboundRepository,
   SettingsRepository,
+  AiConfigRepository,
   IncidentRepository,
   EventRepository,
   OutboxRepository,
@@ -27,6 +28,7 @@ export interface AiHandlerDeps {
   turnRepo: TurnRepository;
   outboundRepo: OutboundRepository;
   settingsRepo: SettingsRepository;
+  aiConfigRepo: AiConfigRepository;
   incidentRepo: IncidentRepository;
   eventRepo: EventRepository;
   outboxRepo: OutboxRepository;
@@ -42,6 +44,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
     turnRepo,
     outboundRepo,
     settingsRepo,
+    aiConfigRepo,
     incidentRepo,
     eventRepo,
     outboxRepo,
@@ -121,9 +124,10 @@ export function createAiHandler(deps: AiHandlerDeps) {
     });
 
     // 3. Gather context and generate reply
-    const [recentMessages, { settings }] = await Promise.all([
+    const [recentMessages, { settings }, aiConfig] = await Promise.all([
       convRepo.getRecentMessages(conversationId, 20),
       settingsRepo.getSettings(channelAccountId),
+      aiConfigRepo.getConfig(channelAccountId),
     ]);
 
     const result = await aiGenerator.generateReply({
@@ -131,6 +135,12 @@ export function createAiHandler(deps: AiHandlerDeps) {
       customerSummary: conversation.summary,
       recentMessages,
       settings,
+    }, {
+      apiFormat: aiConfig.apiFormat,
+      baseUrl: aiConfig.baseUrl,
+      apiKey: aiConfig.apiKey,
+      model: aiConfig.model,
+      timeoutMs: settings.aiTimeoutMs,
     });
 
     // 4. Save AI Run record
