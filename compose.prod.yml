@@ -169,7 +169,8 @@ services:
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
       CORE_API_URL: http://core:3000
       INTERNAL_HMAC_SECRET: ${INTERNAL_HMAC_SECRET}
-      ENABLE_NOVNC: "false"
+      ENABLE_NOVNC: ${ENABLE_NOVNC:-false}
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
     volumes:
       - messenger_browser_profile:/app/browser_profile:rw
     tmpfs:
