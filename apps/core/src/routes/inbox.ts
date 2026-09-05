@@ -254,7 +254,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               ? (part?.displayName || convData.customer?.name || (convData.conversation.threadKind === "GROUP" ? "Thành viên nhóm" : "Khách hàng Messenger"))
               : (msg.actor === "AI" ? "Trợ lý AI" : (msg.actor === "MANUAL_OWNER" ? "Nhân viên hỗ trợ" : "Hệ thống"));
             const senderAvatar = isInbound ? (part?.avatarUrl || convData.customer?.avatarUrl || null) : null;
-            const skipReason = decision
+            const skipReason = (decision && !decision.eligible)
               ? {
                   decision: decision.decision,
                   eligible: decision.eligible,

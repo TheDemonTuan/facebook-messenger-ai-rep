@@ -155,6 +155,7 @@ export type SenderKind = z.infer<typeof SenderKindSchema>;
 export const ClassificationReliabilitySchema = z.enum([
   "VERIFIED",
   "UNVERIFIED",
+  "LEGACY_UNVERIFIED",
 ]);
 export type ClassificationReliability = z.infer<typeof ClassificationReliabilitySchema>;
 

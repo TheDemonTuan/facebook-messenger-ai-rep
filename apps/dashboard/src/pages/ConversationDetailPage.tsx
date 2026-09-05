@@ -331,12 +331,15 @@ export const ConversationDetailPage: React.FC = () => {
             <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
               Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode)}</strong>
             </div>
-            <div style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-              <span style={{ backgroundColor: "#f1f5f9", padding: "2px 8px", borderRadius: "4px" }}>
-                {conv.threadKind === "GROUP" ? "Nhóm chat Messenger" : "Hội thoại trực tiếp"}
-              </span>
-              <span>Phiên bản tin nhắn: v{conv.inboundVersion}</span>
-            </div>
+            <details style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b" }}>
+              <summary style={{ cursor: "pointer", color: "#64748b" }}>Chi tiết kỹ thuật</summary>
+              <div style={{ marginTop: "4px", fontSize: "0.72rem", color: "#64748b", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                <span style={{ backgroundColor: "#f1f5f9", padding: "2px 8px", borderRadius: "4px" }}>
+                  {conv.threadKind === "GROUP" ? "Nhóm chat Messenger" : "Hội thoại trực tiếp"}
+                </span>
+                <span>Phiên bản tin nhắn: v{conv.inboundVersion}</span>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -633,7 +636,7 @@ export const ConversationDetailPage: React.FC = () => {
                     </div>
 
                     {/* Readable Skip Reason Badge */}
-                    {msg.skipReason && (
+                    {msg.skipReason && !msg.skipReason.eligible && (
                       <div
                         style={{
                           marginTop: "2px",

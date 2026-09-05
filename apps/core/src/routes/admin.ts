@@ -301,17 +301,24 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       const participantIds = policyMembers.map((m) => m.participantId);
       let participantRows: (typeof participants.$inferSelect)[] = [];
-      if (participantIds.length > 0 && typeof (db as unknown as { select?: unknown })?.select === "function") {
+      if (participantIds.length > 0) {
         try {
-          participantRows = await db
-            .select()
-            .from(participants)
-            .where(
-              and(
-                eq(participants.channelAccountId, channelAccountId),
-                inArray(participants.participantId, participantIds)
-              )
+          if (typeof (db as unknown as { select?: unknown })?.select === "function") {
+            participantRows = await db
+              .select()
+              .from(participants)
+              .where(
+                and(
+                  eq(participants.channelAccountId, channelAccountId),
+                  inArray(participants.participantId, participantIds)
+                )
+              );
+          } else if (participantRepo) {
+            const rows = await Promise.all(
+              participantIds.map((id) => participantRepo.getParticipant(channelAccountId, id))
             );
+            participantRows = rows.filter(Boolean) as (typeof participants.$inferSelect)[];
+          }
         } catch {
           participantRows = [];
         }
@@ -320,9 +327,11 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       const safeMembers = policyMembers.map((m) => {
         const p = partMap.get(m.participantId);
+        const name = p?.displayName || "Người dùng";
         return {
           id: toSafePersonId(channelAccountId, m.participantId),
-          name: p?.displayName || "Người dùng",
+          displayName: name,
+          name,
           avatarUrl: p?.avatarUrl || p?.profileUrl || null,
           type: p?.senderKind || "PERSON",
           policyMode: m.policyMode,
@@ -390,14 +399,28 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       // Map any safe person IDs in selection lists back to internal participant IDs
       if (Array.isArray(body.selectedParticipantIds)) {
-        body.selectedParticipantIds = body.selectedParticipantIds.map((id: unknown) =>
-          typeof id === "string" ? resolveParticipantId(id, channelAccountId) || id : id
-        );
+        const resolved: string[] = [];
+        for (const id of body.selectedParticipantIds) {
+          if (typeof id !== "string") continue;
+          const resolvedId = resolveParticipantId(id, channelAccountId);
+          if (!resolvedId) {
+            return reply.status(400).send({ error: `Invalid or unresolvable person ID in selectedParticipantIds: ${id}` });
+          }
+          resolved.push(resolvedId);
+        }
+        body.selectedParticipantIds = resolved;
       }
       if (Array.isArray(body.excludedParticipantIds)) {
-        body.excludedParticipantIds = body.excludedParticipantIds.map((id: unknown) =>
-          typeof id === "string" ? resolveParticipantId(id, channelAccountId) || id : id
-        );
+        const resolved: string[] = [];
+        for (const id of body.excludedParticipantIds) {
+          if (typeof id !== "string") continue;
+          const resolvedId = resolveParticipantId(id, channelAccountId);
+          if (!resolvedId) {
+            return reply.status(400).send({ error: `Invalid or unresolvable person ID in excludedParticipantIds: ${id}` });
+          }
+          resolved.push(resolvedId);
+        }
+        body.excludedParticipantIds = resolved;
       }
 
       // Optimistic concurrency check
@@ -597,7 +620,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     fastify.get("/api/settings/people", handleSearchPeople);
 
     // 4c. Membership CRUD with optimistic settings revision & audit
-    fastify.get("/api/settings/members", async (_request, reply) => {
+    const handleGetMembers = async (_request: FastifyRequest, reply: FastifyReply) => {
       const [members, settingsData] = await Promise.all([
         policyMemberRepo.listMembers(channelAccountId),
         settingsRepo.getSettings(channelAccountId),
@@ -607,15 +630,22 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       let participantRows: (typeof participants.$inferSelect)[] = [];
       if (pIds.length > 0) {
         try {
-          participantRows = await db
-            .select()
-            .from(participants)
-            .where(
-              and(
-                eq(participants.channelAccountId, channelAccountId),
-                inArray(participants.participantId, pIds)
-              )
+          if (typeof (db as unknown as { select?: unknown })?.select === "function") {
+            participantRows = await db
+              .select()
+              .from(participants)
+              .where(
+                and(
+                  eq(participants.channelAccountId, channelAccountId),
+                  inArray(participants.participantId, pIds)
+                )
+              );
+          } else if (participantRepo) {
+            const rows = await Promise.all(
+              pIds.map((id) => participantRepo.getParticipant(channelAccountId, id))
             );
+            participantRows = rows.filter(Boolean) as (typeof participants.$inferSelect)[];
+          }
         } catch {
           participantRows = [];
         }
@@ -624,9 +654,11 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       const safeMembers = members.map((m) => {
         const p = partMap.get(m.participantId);
+        const name = p?.displayName || "Người dùng đã xác minh";
         return {
           id: toSafePersonId(channelAccountId, m.participantId),
-          name: p?.displayName || "Người dùng đã xác minh",
+          name,
+          displayName: name,
           avatarUrl: p?.avatarUrl || p?.profileUrl || null,
           type: p?.senderKind || "PERSON",
           policyMode: m.policyMode,
@@ -637,180 +669,187 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       });
 
       return reply.send({ members: safeMembers, revision: settingsData.revision });
-    });
-    fastify.get("/api/settings/policy-members", async (request) => {
-      const url = new URL(request.url, "http://localhost");
-      return fastify.inject({ method: "GET", url: `/api/settings/members${url.search}`, headers: request.headers as Record<string, string> });
-    });
+    };
+
+    fastify.get("/api/settings/members", handleGetMembers);
+    fastify.get("/api/settings/policy-members", handleGetMembers);
+
+    const handlePostMember = async (
+      request: FastifyRequest<{
+        Body: { personId: string; policyMode?: string; notes?: string; expectedRevision?: number };
+      }>,
+      reply: FastifyReply
+    ) => {
+      const user = (request as unknown as { user: SessionUser }).user;
+      const { personId, policyMode = "EXCLUDE", notes, expectedRevision } = request.body || {};
+
+      if (!personId) {
+        return reply.status(400).send({ error: "Missing personId" });
+      }
+
+      const participantId = resolveParticipantId(personId, channelAccountId);
+      if (!participantId) {
+        return reply.status(400).send({ error: "Invalid person identifier" });
+      }
+
+      // Verify channel-scoped VERIFIED PERSON selection
+      const participant = await participantRepo.getParticipant(channelAccountId, participantId);
+      if (!participant || !participant.isVerified || participant.senderKind !== "PERSON") {
+        return reply.status(400).send({
+          error: "Only verified persons (PERSON) can be added to reply policy.",
+        });
+      }
+
+      // Optimistic concurrency check
+      const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
+      if (expectedRevision !== undefined && currentSettingsData.revision !== expectedRevision) {
+        return reply.status(409).send({
+          error: "Settings conflict: configuration modified by another user.",
+          currentRevision: currentSettingsData.revision,
+        });
+      }
+
+      const mode = policyMode === "INCLUDE" ? "INCLUDE" : "EXCLUDE";
+
+      // Save member
+      await policyMemberRepo.addMember({
+        channelAccountId,
+        participantId,
+        policyMode: mode,
+        notes: notes || null,
+        addedBy: user.email,
+      });
+
+      // Update settings arrays & revision
+      const curSettings = currentSettingsData.settings;
+      let newSelected = [...curSettings.selectedParticipantIds];
+      let newExcluded = [...curSettings.excludedParticipantIds];
+
+      if (mode === "EXCLUDE") {
+        if (!newExcluded.includes(participantId)) newExcluded.push(participantId);
+        newSelected = newSelected.filter((id) => id !== participantId);
+      } else {
+        if (!newSelected.includes(participantId)) newSelected.push(participantId);
+        newExcluded = newExcluded.filter((id) => id !== participantId);
+      }
+
+      const updated = await settingsRepo.updateSettings(
+        channelAccountId,
+        {
+          selectedParticipantIds: newSelected,
+          excludedParticipantIds: newExcluded,
+        },
+        user.email,
+        `Thêm người dùng vào danh sách ${mode === "EXCLUDE" ? "loại trừ" : "chỉ định"}`
+      );
+
+      await eventRepo.recordEvent({
+        channelAccountId,
+        type: "SETTING_CHANGED",
+        actor: user.email,
+        payload: {
+          action: "ADD_POLICY_MEMBER",
+          policyMode: mode,
+          revision: updated.revision,
+        },
+      });
+
+      await broadcaster.broadcast("settings:updated", {
+        revision: updated.revision,
+        section: "POLICY_MEMBERS",
+      });
+
+      const memberName = participant.displayName || "Người dùng đã xác minh";
+      return reply.send({
+        success: true,
+        revision: updated.revision,
+        member: {
+          id: toSafePersonId(channelAccountId, participantId),
+          name: memberName,
+          displayName: memberName,
+          avatarUrl: participant.avatarUrl || participant.profileUrl || null,
+          type: participant.senderKind,
+          policyMode: mode,
+          notes: notes || null,
+        },
+      });
+    };
 
     fastify.post<{
       Body: { personId: string; policyMode?: string; notes?: string; expectedRevision?: number };
-    }>(
-      "/api/settings/members",
-      { preHandler: [requireRole("OWNER")] },
-      async (request, reply) => {
-        const user = (request as unknown as { user: SessionUser }).user;
-        const { personId, policyMode = "EXCLUDE", notes, expectedRevision } = request.body || {};
+    }>("/api/settings/members", { preHandler: [requireRole("OWNER")] }, handlePostMember);
+    fastify.post<{
+      Body: { personId: string; policyMode?: string; notes?: string; expectedRevision?: number };
+    }>("/api/settings/policy-members", { preHandler: [requireRole("OWNER")] }, handlePostMember);
 
-        if (!personId) {
-          return reply.status(400).send({ error: "Missing personId" });
-        }
+    const handleDeleteMember = async (
+      request: FastifyRequest<{
+        Params: { personId: string };
+        Querystring: { expectedRevision?: string };
+      }>,
+      reply: FastifyReply
+    ) => {
+      const user = (request as unknown as { user: SessionUser }).user;
+      const { personId } = request.params;
+      const expectedRevision = request.query?.expectedRevision ? parseInt(request.query.expectedRevision, 10) : undefined;
 
-        const participantId = resolveParticipantId(personId, channelAccountId);
-        if (!participantId) {
-          return reply.status(400).send({ error: "Invalid person identifier" });
-        }
+      const participantId = resolveParticipantId(personId, channelAccountId);
+      if (!participantId) {
+        return reply.status(400).send({ error: "Invalid person identifier" });
+      }
 
-        // Verify channel-scoped VERIFIED PERSON selection
-        const participant = await participantRepo.getParticipant(channelAccountId, participantId);
-        if (!participant || !participant.isVerified || participant.senderKind !== "PERSON") {
-          return reply.status(400).send({
-            error: "Only verified persons (PERSON) can be added to reply policy.",
-          });
-        }
-
-        // Optimistic concurrency check
-        const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
-        if (expectedRevision !== undefined && currentSettingsData.revision !== expectedRevision) {
-          return reply.status(409).send({
-            error: "Settings conflict: configuration modified by another user.",
-            currentRevision: currentSettingsData.revision,
-          });
-        }
-
-        const mode = policyMode === "INCLUDE" ? "INCLUDE" : "EXCLUDE";
-
-        // Save member
-        await policyMemberRepo.addMember({
-          channelAccountId,
-          participantId,
-          policyMode: mode,
-          notes: notes || null,
-          addedBy: user.email,
-        });
-
-        // Update settings arrays & revision
-        const curSettings = currentSettingsData.settings;
-        let newSelected = [...curSettings.selectedParticipantIds];
-        let newExcluded = [...curSettings.excludedParticipantIds];
-
-        if (mode === "EXCLUDE") {
-          if (!newExcluded.includes(participantId)) newExcluded.push(participantId);
-          newSelected = newSelected.filter((id) => id !== participantId);
-        } else {
-          if (!newSelected.includes(participantId)) newSelected.push(participantId);
-          newExcluded = newExcluded.filter((id) => id !== participantId);
-        }
-
-        const updated = await settingsRepo.updateSettings(
-          channelAccountId,
-          {
-            selectedParticipantIds: newSelected,
-            excludedParticipantIds: newExcluded,
-          },
-          user.email,
-          `Thêm người dùng vào danh sách ${mode === "EXCLUDE" ? "loại trừ" : "chỉ định"}`
-        );
-
-        await eventRepo.recordEvent({
-          channelAccountId,
-          type: "SETTING_CHANGED",
-          actor: user.email,
-          payload: {
-            action: "ADD_POLICY_MEMBER",
-            policyMode: mode,
-            revision: updated.revision,
-          },
-        });
-
-        await broadcaster.broadcast("settings:updated", {
-          revision: updated.revision,
-          section: "POLICY_MEMBERS",
-        });
-
-        return reply.send({
-          success: true,
-          revision: updated.revision,
-          member: {
-            id: toSafePersonId(channelAccountId, participantId),
-            name: participant.displayName || "Người dùng đã xác minh",
-            avatarUrl: participant.avatarUrl || participant.profileUrl || null,
-            type: participant.senderKind,
-            policyMode: mode,
-            notes: notes || null,
-          },
+      // Optimistic concurrency check
+      const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
+      if (expectedRevision !== undefined && !isNaN(expectedRevision) && currentSettingsData.revision !== expectedRevision) {
+        return reply.status(409).send({
+          error: "Settings conflict: configuration modified by another user.",
+          currentRevision: currentSettingsData.revision,
         });
       }
-    );
-    fastify.post("/api/settings/policy-members", { preHandler: [requireRole("OWNER")] }, async (request) => {
-      const url = new URL(request.url, "http://localhost");
-      return fastify.inject({ method: "POST", url: `/api/settings/members${url.search}`, payload: request.body as object, headers: request.headers as Record<string, string> });
-    });
+
+      await policyMemberRepo.removeMember(channelAccountId, participantId);
+
+      // Update settings arrays & revision
+      const curSettings = currentSettingsData.settings;
+      const newSelected = curSettings.selectedParticipantIds.filter((id) => id !== participantId);
+      const newExcluded = curSettings.excludedParticipantIds.filter((id) => id !== participantId);
+
+      const updated = await settingsRepo.updateSettings(
+        channelAccountId,
+        {
+          selectedParticipantIds: newSelected,
+          excludedParticipantIds: newExcluded,
+        },
+        user.email,
+        "Xóa người dùng khỏi danh sách chính sách"
+      );
+
+      await eventRepo.recordEvent({
+        channelAccountId,
+        type: "SETTING_CHANGED",
+        actor: user.email,
+        payload: {
+          action: "REMOVE_POLICY_MEMBER",
+          revision: updated.revision,
+        },
+      });
+
+      await broadcaster.broadcast("settings:updated", {
+        revision: updated.revision,
+        section: "POLICY_MEMBERS",
+      });
+
+      return reply.send({ success: true, revision: updated.revision });
+    };
 
     fastify.delete<{
       Params: { personId: string };
       Querystring: { expectedRevision?: string };
-    }>(
-      "/api/settings/members/:personId",
-      { preHandler: [requireRole("OWNER")] },
-      async (request, reply) => {
-        const user = (request as unknown as { user: SessionUser }).user;
-        const { personId } = request.params;
-        const expectedRevision = request.query?.expectedRevision ? parseInt(request.query.expectedRevision, 10) : undefined;
-
-        const participantId = resolveParticipantId(personId, channelAccountId);
-        if (!participantId) {
-          return reply.status(400).send({ error: "Invalid person identifier" });
-        }
-
-        // Optimistic concurrency check
-        const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
-        if (expectedRevision !== undefined && !isNaN(expectedRevision) && currentSettingsData.revision !== expectedRevision) {
-          return reply.status(409).send({
-            error: "Settings conflict: configuration modified by another user.",
-            currentRevision: currentSettingsData.revision,
-          });
-        }
-
-        await policyMemberRepo.removeMember(channelAccountId, participantId);
-
-        // Update settings arrays & revision
-        const curSettings = currentSettingsData.settings;
-        const newSelected = curSettings.selectedParticipantIds.filter((id) => id !== participantId);
-        const newExcluded = curSettings.excludedParticipantIds.filter((id) => id !== participantId);
-
-        const updated = await settingsRepo.updateSettings(
-          channelAccountId,
-          {
-            selectedParticipantIds: newSelected,
-            excludedParticipantIds: newExcluded,
-          },
-          user.email,
-          "Xóa người dùng khỏi danh sách chính sách"
-        );
-
-        await eventRepo.recordEvent({
-          channelAccountId,
-          type: "SETTING_CHANGED",
-          actor: user.email,
-          payload: {
-            action: "REMOVE_POLICY_MEMBER",
-            revision: updated.revision,
-          },
-        });
-
-        await broadcaster.broadcast("settings:updated", {
-          revision: updated.revision,
-          section: "POLICY_MEMBERS",
-        });
-
-        return reply.send({ success: true, revision: updated.revision });
-      }
-    );
-    fastify.delete<{ Params: { personId: string } }>("/api/settings/policy-members/:personId", { preHandler: [requireRole("OWNER")] }, async (request) => {
-      const url = new URL(request.url, "http://localhost");
-      return fastify.inject({ method: "DELETE", url: `/api/settings/members/${request.params.personId}${url.search}`, headers: request.headers as Record<string, string> });
-    });
+    }>("/api/settings/members/:personId", { preHandler: [requireRole("OWNER")] }, handleDeleteMember);
+    fastify.delete<{
+      Params: { personId: string };
+      Querystring: { expectedRevision?: string };
+    }>("/api/settings/policy-members/:personId", { preHandler: [requireRole("OWNER")] }, handleDeleteMember);
 
     fastify.post<{ Body: { apiFormat?: string; baseUrl?: string; model?: string; apiKey?: string } }>(
       "/api/settings/test-ai",

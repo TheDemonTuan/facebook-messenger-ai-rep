@@ -125,7 +125,7 @@ describe("PR 1: Messenger Reply Eligibility Contracts & Pure Policy", () => {
       expect(ThreadKindSchema.options).toEqual(["DIRECT", "GROUP", "UNKNOWN"]);
       expect(SenderKindSchema.options).toEqual(["PERSON", "PAGE", "NON_PERSON", "UNKNOWN"]);
       expect(ChannelAccountTypeSchema.options).toEqual(["PERSONAL_MESSENGER", "FACEBOOK_PAGE"]);
-      expect(ClassificationReliabilitySchema.options).toEqual(["VERIFIED", "UNVERIFIED"]);
+      expect(ClassificationReliabilitySchema.options).toEqual(["VERIFIED", "UNVERIFIED", "LEGACY_UNVERIFIED"]);
       expect(TimestampProvenanceSchema.options).toEqual([
         "FACEBOOK_EVENT",
         "OBSERVED",

@@ -218,10 +218,12 @@ export interface AiProviderSettings {
 
 export interface PolicyMemberItem {
   id: string;
-  personId: string;
+  personId?: string;
   displayName: string;
+  name?: string;
   avatarUrl: string | null;
-  senderKind: string;
+  senderKind?: string;
+  type?: string;
   policyMode: "EXCLUDE" | "INCLUDE";
   notes?: string | null;
   conversationContext?: string;

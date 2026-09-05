@@ -46,7 +46,7 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
       expect(tampered).toBeNull();
     });
 
-    it("resolveParticipantId correctly resolves safe tokens", () => {
+    it("resolveParticipantId correctly resolves safe tokens and rejects raw IDs in production", () => {
       const participantId = "user-abc-999";
       const token = toSafePersonId(channelAccountId, participantId);
       const resolved = resolveParticipantId(token, channelAccountId);
@@ -54,6 +54,16 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
 
       // Resolves raw ID fallback in test env
       expect(resolveParticipantId("raw-id-123", channelAccountId)).toBe("raw-id-123");
+
+      // In production environment, raw IDs are rejected while safe tokens still resolve
+      const origEnv = process.env.NODE_ENV;
+      try {
+        (process.env as Record<string, string | undefined>).NODE_ENV = "production";
+        expect(resolveParticipantId("raw-id-123", channelAccountId)).toBeNull();
+        expect(resolveParticipantId(token, channelAccountId)).toBe(participantId);
+      } finally {
+        (process.env as Record<string, string | undefined>).NODE_ENV = origEnv;
+      }
     });
   });
 
@@ -236,6 +246,26 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
         },
       });
       expect(staleRes.statusCode).toBe(409);
+
+      // Rejects unresolvable person ID in selectedParticipantIds
+      const invalidSelectedRes = await fastify.inject({
+        method: "POST",
+        url: "/api/settings",
+        payload: {
+          selectedParticipantIds: ["ppl_invalid_unresolvable_token"],
+        },
+      });
+      expect(invalidSelectedRes.statusCode).toBe(400);
+
+      // Rejects unresolvable person ID in excludedParticipantIds
+      const invalidExcludedRes = await fastify.inject({
+        method: "POST",
+        url: "/api/settings",
+        payload: {
+          excludedParticipantIds: ["ppl_invalid_unresolvable_token"],
+        },
+      });
+      expect(invalidExcludedRes.statusCode).toBe(400);
 
       // Successful update with matching expectedRevision
       const updateRes = await fastify.inject({
@@ -444,8 +474,9 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
               }
             : null
         ),
-        addMember: vi.fn(async (_ch, id) => {
-          if (!excludedList.includes(id)) excludedList.push(id);
+        addMember: vi.fn(async (params: { participantId: string } | string) => {
+          const id = typeof params === "object" ? params.participantId : params;
+          if (id && !excludedList.includes(id)) excludedList.push(id);
           return { id: `member-${id}`, participantId: id };
         }),
         removeMember: vi.fn(async (_ch, id) => {
@@ -543,6 +574,40 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
       const deleteData = JSON.parse(deleteRes.body);
       expect(deleteData.success).toBe(true);
       expect(deleteData.revision).toBe(3);
+
+      // 4. Test /api/settings/policy-members direct alias endpoints (POST, GET, DELETE)
+      const aliasAddRes = await fastify.inject({
+        method: "POST",
+        url: "/api/settings/policy-members",
+        payload: {
+          personId: safePersonToken,
+          policyMode: "EXCLUDE",
+          expectedRevision: 3,
+        },
+      });
+      expect(aliasAddRes.statusCode).toBe(200);
+      const aliasAddData = JSON.parse(aliasAddRes.body);
+      expect(aliasAddData.member.displayName).toBe("Khách Hàng Thân Thiết");
+      expect(aliasAddData.member.name).toBe("Khách Hàng Thân Thiết");
+      expect(aliasAddData.revision).toBe(4);
+
+      const aliasGetRes = await fastify.inject({
+        method: "GET",
+        url: "/api/settings/policy-members",
+      });
+      expect(aliasGetRes.statusCode).toBe(200);
+      const aliasGetData = JSON.parse(aliasGetRes.body);
+      expect(aliasGetData.members[0].displayName).toBe("Khách Hàng Thân Thiết");
+      expect(aliasGetData.members[0].name).toBe("Khách Hàng Thân Thiết");
+
+      const aliasDeleteRes = await fastify.inject({
+        method: "DELETE",
+        url: `/api/settings/policy-members/${safePersonToken}?expectedRevision=4`,
+      });
+      expect(aliasDeleteRes.statusCode).toBe(200);
+      const aliasDeleteData = JSON.parse(aliasDeleteRes.body);
+      expect(aliasDeleteData.success).toBe(true);
+      expect(aliasDeleteData.revision).toBe(5);
     });
   });
 

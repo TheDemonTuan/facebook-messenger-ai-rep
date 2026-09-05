@@ -69,7 +69,7 @@ export function resolveParticipantId(
   if (!personId || typeof personId !== "string") return null;
   const parsed = parseSafePersonId(personId, channelAccountId);
   if (parsed) return parsed.participantId;
-  if ((process.env.NODE_ENV === "test" || !personId.startsWith("ppl_")) && personId.trim().length > 0) {
+  if (process.env.NODE_ENV === "test" && !personId.startsWith("ppl_") && personId.trim().length > 0) {
     return personId.trim();
   }
   return null;

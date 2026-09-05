@@ -268,7 +268,7 @@ export const SettingsPage: React.FC = () => {
       if (typeof updated.settings?.businessTimeZone === "string") {
         setTimeZone(updated.settings.businessTimeZone);
       }
-      setSaveSuccess("Đã lưu thành công cấu hình hệ thống và chính sách phản hồi!");
+      setSaveSuccess("Đã lưu cấu hình mới thành công!");
       setReason("");
       setTimeout(() => setSaveSuccess(null), 4000);
     } catch (err: unknown) {
@@ -290,15 +290,6 @@ export const SettingsPage: React.FC = () => {
     const targetMode = currentReplyMode === "EVERYONE_EXCEPT" ? "EXCLUDE" : "INCLUDE";
     return policyMembers.filter((m) => m.policyMode === targetMode);
   }, [policyMembers, currentReplyMode]);
-
-  if (loading) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "360px", gap: "12px", color: "#64748b" }}>
-        <Loader2 size={26} className="animate-spin" />
-        <span style={{ fontSize: "0.95rem" }}>Đang tải cấu hình hệ thống & chính sách phản hồi...</span>
-      </div>
-    );
-  }
 
   if (error && !data) {
     return (
@@ -357,6 +348,7 @@ export const SettingsPage: React.FC = () => {
         </div>
         <div style={{ fontSize: "0.85rem", color: "#475569", display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#f1f5f9", padding: "6px 14px", borderRadius: "20px", fontWeight: "500" }}>
           <History size={15} /> Phiên bản cấu hình: v{data?.revision ?? 1}
+          {loading && <Loader2 size={13} className="animate-spin" />}
         </div>
       </div>
 
@@ -716,7 +708,7 @@ export const SettingsPage: React.FC = () => {
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", backgroundColor: "#ffffff", borderRadius: "6px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
                 {filteredMembers.map((member) => {
                   const isActionLoading = memberActionLoading === member.id || memberActionLoading === member.personId;
-                  const personSafeId = member.id || member.personId;
+                  const personSafeId = member.id || member.personId || "";
 
                   return (
                     <div
@@ -824,7 +816,7 @@ export const SettingsPage: React.FC = () => {
               }}
             >
               {testingAi ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
-              {testingAi ? "Đang kiểm tra..." : "Kiểm tra kết nối"}
+              {testingAi ? "Đang kiểm tra..." : "Kiểm tra kết nối AI"}
             </button>
           </div>
 
@@ -841,7 +833,7 @@ export const SettingsPage: React.FC = () => {
               }}
             >
               <div style={{ fontWeight: "bold", marginBottom: "4px" }}>
-                {aiTestResult.healthy ? "✓ Kết nối dịch vụ AI hoạt động tốt" : "✕ Kiểm tra kết nối thất bại"}
+                {aiTestResult.healthy ? "✓ Trạng thái: Sẵn sàng (Healthy)" : "✕ Kiểm tra kết nối thất bại"}
               </div>
               {aiTestResult.model && <div>Mô hình: {aiTestResult.model} • Độ trễ: {aiTestResult.latencyMs}ms</div>}
               {aiTestResult.error && <div style={{ marginTop: "4px" }}>Chi tiết lỗi: {aiTestResult.error}</div>}
@@ -850,42 +842,42 @@ export const SettingsPage: React.FC = () => {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
             <div>
-              <label style={labelStyle}>Chuẩn API</label>
+              <label style={labelStyle}>Loại dịch vụ AI</label>
               <select
                 value={aiProvider.apiFormat}
                 onChange={(e) => setAiProvider({ ...aiProvider, apiFormat: e.target.value as "OPENAI_COMPATIBLE" | "ANTHROPIC_COMPATIBLE" })}
                 style={inputStyle}
               >
-                <option value="OPENAI_COMPATIBLE">Tương thích OpenAI (OpenAI Compatible)</option>
-                <option value="ANTHROPIC_COMPATIBLE">Tương thích Anthropic (Anthropic Compatible)</option>
+                <option value="OPENAI_COMPATIBLE">Dịch vụ theo chuẩn OpenAI</option>
+                <option value="ANTHROPIC_COMPATIBLE">Dịch vụ theo chuẩn Claude (Anthropic)</option>
               </select>
             </div>
 
             <div>
-              <label style={labelStyle}>Địa chỉ máy chủ API (Base URL)</label>
+              <label style={labelStyle}>Địa chỉ dịch vụ</label>
               <input
-                type="text"
+                type="url"
                 value={aiProvider.baseUrl}
                 onChange={(e) => setAiProvider({ ...aiProvider, baseUrl: e.target.value })}
-                placeholder="https://api.openai.com/v1"
+                placeholder="https://gateway.example.com/v1"
                 style={inputStyle}
               />
             </div>
 
             <div>
-              <label style={labelStyle}>Tên mô hình AI (Model)</label>
+              <label style={labelStyle}>Tên mô hình</label>
               <input
                 type="text"
                 value={aiProvider.model}
                 onChange={(e) => setAiProvider({ ...aiProvider, model: e.target.value })}
-                placeholder="gpt-4o-mini hoặc claude-3-5-sonnet"
+                placeholder="auto/best-chat hoặc claude-sonnet-4-6"
                 style={inputStyle}
               />
             </div>
 
             <div>
               <label style={labelStyle}>
-                Khóa bảo mật API (API Key)
+                Mật khẩu kết nối
                 {aiProvider.apiKeyConfigured && (
                   <span style={{ marginLeft: "6px", color: "#16a34a", fontWeight: "normal" }}>✓ Đã được lưu trên server</span>
                 )}
@@ -894,7 +886,7 @@ export const SettingsPage: React.FC = () => {
                 type="password"
                 value={aiApiKey}
                 onChange={(e) => setAiApiKey(e.target.value)}
-                placeholder={aiProvider.apiKeyConfigured ? "•••••••••••••••• (Để trống nếu không đổi)" : "Nhập khóa API mới"}
+                placeholder={aiProvider.apiKeyConfigured ? "•••••••••••••••• (Để trống nếu không đổi)" : "Nhập mật khẩu kết nối"}
                 style={inputStyle}
               />
             </div>
@@ -1120,7 +1112,7 @@ export const SettingsPage: React.FC = () => {
               }}
             >
               {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {saving ? "Đang lưu cấu hình..." : "Lưu thay đổi"}
+              {saving ? "Đang lưu cấu hình..." : "Lưu cấu hình"}
             </button>
           </div>
         </div>
