@@ -41,6 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     websockify \
     curl \
     unzip \
+    gosu \
     && curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1" \
     && mv /root/.bun/bin/bun /usr/local/bin/bun \
     && rm -rf /var/lib/apt/lists/* /root/.bun
@@ -73,7 +74,5 @@ COPY docker/entrypoint-browser.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh \
     && mkdir -p /app/browser_profile /home/pwuser/.vnc \
     && chown -R pwuser:pwuser /app /home/pwuser
-
-USER pwuser
 
 ENTRYPOINT ["/entrypoint.sh"]

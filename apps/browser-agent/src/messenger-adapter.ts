@@ -77,6 +77,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         "--disable-dev-shm-usage",
         "--no-sandbox",
         "--disable-setuid-sandbox",
+        "--disable-gpu",
+        "--disable-breakpad",
+        "--disable-crash-reporter",
         "--window-size=1280,800",
       ],
     });

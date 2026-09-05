@@ -143,13 +143,9 @@ services:
     container_name: messenger-browser-agent
     restart: unless-stopped
     stop_grace_period: 30s
-    read_only: true
     security_opt:
       - no-new-privileges:true
     init: true
-    cap_drop:
-      - ALL
-    user: "1000:1000"
     deploy:
       resources:
         limits:
