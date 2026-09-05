@@ -182,7 +182,7 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   assert(settingsText.includes("Loại dịch vụ AI"), `${name}: missing customer-friendly AI provider format label`);
   assert(settingsText.includes("Địa chỉ dịch vụ"), `${name}: missing customer-friendly address label`);
   assert(settingsText.includes("Tên mô hình"), `${name}: missing customer-friendly model label`);
-  assert(settingsText.includes("Mật khẩu kết nối"), `${name}: missing customer-friendly write-only credential label`);
+  assert(settingsText.includes("API key"), `${name}: missing API key label`);
   assert(!settingsText.includes("Base URL"), `${name}: raw 'Base URL' exposed in Settings view`);
 
   await page.locator("select").filter({ has: page.locator('option[value="OPENAI_COMPATIBLE"]') }).selectOption("ANTHROPIC_COMPATIBLE");

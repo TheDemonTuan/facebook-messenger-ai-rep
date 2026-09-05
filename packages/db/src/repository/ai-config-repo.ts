@@ -112,8 +112,13 @@ export class AiConfigRepository {
       .where(eq(aiProviderConfigs.channelAccountId, channelAccountId))
       .limit(1);
     const apiKey = input.apiKey?.trim();
-    const encryptedApiKey = apiKey ? encrypt(apiKey) : current?.encryptedApiKey;
-    if (!encryptedApiKey) throw new Error("API key is required");
+    const fallbackApiKey = current?.encryptedApiKey ? undefined : this.envConfig().apiKey.trim();
+    if (!apiKey && !current?.encryptedApiKey && !fallbackApiKey) {
+      throw new Error("API key is required");
+    }
+    const encryptedApiKey = apiKey
+      ? encrypt(apiKey)
+      : current?.encryptedApiKey || encrypt(fallbackApiKey!);
 
     await this.db
       .insert(aiProviderConfigs)

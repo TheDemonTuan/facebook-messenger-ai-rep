@@ -877,7 +877,7 @@ export const SettingsPage: React.FC = () => {
 
             <div>
               <label style={labelStyle}>
-                Mật khẩu kết nối
+                API key
                 {aiProvider.apiKeyConfigured && (
                   <span style={{ marginLeft: "6px", color: "#16a34a", fontWeight: "normal" }}>✓ Đã được lưu trên server</span>
                 )}
@@ -886,7 +886,7 @@ export const SettingsPage: React.FC = () => {
                 type="password"
                 value={aiApiKey}
                 onChange={(e) => setAiApiKey(e.target.value)}
-                placeholder={aiProvider.apiKeyConfigured ? "•••••••••••••••• (Để trống nếu không đổi)" : "Nhập mật khẩu kết nối"}
+                placeholder={aiProvider.apiKeyConfigured ? "•••••••••••••••• (Để trống nếu không đổi)" : "Nhập API key"}
                 style={inputStyle}
               />
             </div>
