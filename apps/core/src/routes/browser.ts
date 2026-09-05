@@ -30,7 +30,7 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
   const {
     convRepo,
     outboundRepo,
-    jobRepo,
+    jobRepo: _jobRepo,
     eventRepo,
     settingsRepo,
     outboxRepo,
@@ -61,37 +61,26 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
         // Get debounce window from settings
         const { settings } = await settingsRepo.getSettings(payload.channelAccountId);
         const debounceMs = settings.debounceMs || 3000;
-        const availableAt = new Date(Date.now() + debounceMs);
 
-        // Ingest into database (deduplication, bumps version, records message, atomically sets up debounce job)
+        // Ingest into database (deduplication, bumps version, records message, atomically sets up debounce job if eligible LIVE)
         const result = await convRepo.ingestInboundMessage(payload, { debounceMs });
         if (result.isDuplicate) {
           return reply.send(result);
         }
 
-        // Schedule debounce job in PostgreSQL jobs table
-        await jobRepo.enqueue({
-          channelAccountId: payload.channelAccountId,
-          queue: "debounce",
-          jobType: "debounce",
-          availableAt,
-          payload: {
+        const isEligibleLive = Boolean(result.eligibility?.eligible && result.decision?.evaluationMode === "LIVE");
+
+        if (isEligibleLive) {
+          // Record audit event
+          await eventRepo.recordEvent({
             channelAccountId: payload.channelAccountId,
             conversationId: result.conversationId,
+            type: "DEBOUNCE_STARTED",
             inboundVersion: result.inboundVersion,
-          },
-          idempotencyKey: `debounce:${payload.channelAccountId}:${result.conversationId}:${result.inboundVersion}`,
-        });
-
-        // Record audit event
-        await eventRepo.recordEvent({
-          channelAccountId: payload.channelAccountId,
-          conversationId: result.conversationId,
-          type: "DEBOUNCE_STARTED",
-          inboundVersion: result.inboundVersion,
-          actor: "BROWSER_AGENT",
-          payload: { debounceMs },
-        });
+            actor: "BROWSER_AGENT",
+            payload: { debounceMs },
+          });
+        }
 
         await outboxRepo.enqueue({
           channelAccountId: payload.channelAccountId,
@@ -101,12 +90,18 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
             conversationId: result.conversationId,
             inboundVersion: result.inboundVersion,
             text: payload.text,
+            eligible: result.eligibility?.eligible,
+            decision: result.eligibility?.decision,
+            reasonCode: result.eligibility?.reasonCode,
           },
         });
 
         await broadcaster.broadcast("inbound:received", {
           conversationId: result.conversationId,
           inboundVersion: result.inboundVersion,
+          eligible: result.eligibility?.eligible,
+          decision: result.eligibility?.decision,
+          reasonCode: result.eligibility?.reasonCode,
         });
 
         return reply.send(result);

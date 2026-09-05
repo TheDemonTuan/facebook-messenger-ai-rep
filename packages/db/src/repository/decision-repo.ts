@@ -1,5 +1,5 @@
 import { eq, and, desc } from "drizzle-orm";
-import type { Database } from "../client.js";
+import type { Database, DatabaseOrTx } from "../client.js";
 import { replyEligibilityDecisions } from "../schema/index.js";
 import { sanitizeReadableSnapshot } from "@messenger/contracts";
 
@@ -24,7 +24,7 @@ export class ReplyEligibilityDecisionRepository {
   /**
    * Records reply eligibility decision with readable reason snapshot free of raw internal IDs.
    */
-  async recordDecision(params: RecordDecisionParams) {
+  async recordDecision(params: RecordDecisionParams, tx?: DatabaseOrTx) {
     const { readableReason, sanitizedDetails } = sanitizeReadableSnapshot(params.reason, params.details);
     const sanitizedSnapshot = params.snapshot
       ? sanitizeReadableSnapshot("", params.snapshot).sanitizedDetails
@@ -32,8 +32,9 @@ export class ReplyEligibilityDecisionRepository {
 
     const evaluationMode = params.evaluationMode ?? "LIVE";
     const evaluatedAt = params.evaluatedAt ?? new Date();
+    const executor = tx ?? this.db;
 
-    const [row] = await this.db
+    const [row] = await executor
       .insert(replyEligibilityDecisions)
       .values({
         channelAccountId: params.channelAccountId,
@@ -68,8 +69,13 @@ export class ReplyEligibilityDecisionRepository {
     return row!;
   }
 
-  async getDecisionForInbound(inboundMessageId: string, evaluationMode: "LIVE" | "SHADOW" = "LIVE") {
-    const rows = await this.db
+  async getDecisionForInbound(
+    inboundMessageId: string,
+    evaluationMode: "LIVE" | "SHADOW" = "LIVE",
+    tx?: DatabaseOrTx
+  ) {
+    const executor = tx ?? this.db;
+    const rows = await executor
       .select()
       .from(replyEligibilityDecisions)
       .where(

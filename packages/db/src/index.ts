@@ -15,6 +15,7 @@ export * from "./repository/outbox-repo.js";
 export * from "./repository/participant-repo.js";
 export * from "./repository/policy-member-repo.js";
 export * from "./repository/decision-repo.js";
+export * from "./service/reply-policy-service.js";
 export * from "./runner/job-runner.js";
 export * from "./seed.js";
 export * from "./migrate.js";

@@ -346,6 +346,23 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
     };
   }
 
+  if (
+    input.thread.externalThreadId &&
+    ((input.sender.id && input.sender.id.trim() === input.thread.externalThreadId.trim()) ||
+      (input.sender.participantIdentity?.participantId &&
+        input.sender.participantIdentity.participantId.trim() === input.thread.externalThreadId.trim()))
+  ) {
+    return {
+      decision: "INELIGIBLE",
+      eligible: false,
+      reasonCode: "UNVERIFIED_PARTICIPANT_IDENTITY",
+      reason: "Thread ID cannot be used as participant identity.",
+      precedenceStep: "VERIFIED_CLASSIFICATION",
+      evaluatedAt: now,
+      details: { externalThreadId: input.thread.externalThreadId },
+    };
+  }
+
   if (input.sender.participantIdentity) {
     if (input.sender.participantIdentity.channelAccountId !== input.channel.id) {
       return {

@@ -118,6 +118,12 @@ async function main() {
       return;
     }
 
+    if (result.eligibility?.eligible) {
+      console.log(`[Browser Agent] Inbound message is ELIGIBLE for reply: debounce scheduled (v${result.inboundVersion})`);
+    } else {
+      console.log(`[Browser Agent] Inbound message is INELIGIBLE for reply (${result.eligibility?.reasonCode}): ${result.eligibility?.reason}`);
+    }
+
     // Abort stale outbound actions for this conversation
     await outboundRepo.abortStaleActions(result.conversationId, result.inboundVersion);
 

@@ -327,6 +327,16 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
           externalMessageId: "mid.12345",
           text: "Gia san pham la bao nhieu?",
           timestamp: new Date(),
+          threadKind: "DIRECT",
+          threadReliability: "VERIFIED",
+          senderKind: "PERSON",
+          senderReliability: "VERIFIED",
+          participantIdentity: {
+            channelAccountId: "acc-1",
+            participantId: "cust-1",
+            senderKind: "PERSON",
+            isVerified: true,
+          },
         },
         { debounceMs: 4000 }
       );

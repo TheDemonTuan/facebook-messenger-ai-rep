@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, isNull } from "drizzle-orm";
+import { eq, and, desc, sql, gte, isNull, inArray, notInArray } from "drizzle-orm";
 import type { Database } from "../client.js";
 import {
   customers,
@@ -10,9 +10,17 @@ import {
   conversationEvents,
   jobs,
   outboxEvents,
+  turns,
+  outboundActions,
 } from "../schema/index.js";
-import type { InboundMessagePayload, ConversationStatus } from "@messenger/contracts";
+import type {
+  InboundMessagePayload,
+  ConversationStatus,
+  ReplyEligibilityResult,
+  ReplyEligibilityDecisionRecord,
+} from "@messenger/contracts";
 import { createHash } from "node:crypto";
+import { ReplyPolicyService } from "../service/reply-policy-service.js";
 
 export interface InboundIngestResult {
   isDuplicate: boolean;
@@ -20,15 +28,22 @@ export interface InboundIngestResult {
   inboundVersion: number;
   messageId: string;
   inboundMessageId?: string;
+  eligibility?: ReplyEligibilityResult;
+  decision?: ReplyEligibilityDecisionRecord | null;
 }
 
 export interface InboundIngestOptions {
   debounceMs?: number;
   dedupeWindowMs?: number;
+  evaluationMode?: "LIVE" | "SHADOW";
 }
 
 export class ConversationRepository {
-  constructor(private db: Database) {}
+  private replyPolicyService: ReplyPolicyService;
+
+  constructor(private db: Database, replyPolicyService?: ReplyPolicyService) {
+    this.replyPolicyService = replyPolicyService ?? new ReplyPolicyService(db);
+  }
 
   /**
    * Upserts customer (without inferring person from thread ID), creates or updates conversation,
@@ -65,7 +80,19 @@ export class ConversationRepository {
       }
 
       // 2. Scoped duplicate query by conversation + nullable sender + text hash/time
-      const senderParticipantId = payload.participantIdentity?.participantId?.trim() ?? payload.senderExternalId?.trim() ?? null;
+      const externalThreadIdTrimmed = payload.externalThreadId.trim();
+      let senderParticipantId: string | null = null;
+      if (payload.participantIdentity?.participantId) {
+        const cleanPId = payload.participantIdentity.participantId.trim();
+        if (cleanPId && cleanPId !== externalThreadIdTrimmed) {
+          senderParticipantId = cleanPId;
+        }
+      } else if (payload.senderExternalId) {
+        const cleanSenderId = payload.senderExternalId.trim();
+        if (cleanSenderId && cleanSenderId !== externalThreadIdTrimmed) {
+          senderParticipantId = cleanSenderId;
+        }
+      }
       const dedupeWindowMs = options?.dedupeWindowMs ?? 5000;
       const windowStart = new Date(Date.now() - dedupeWindowMs);
 
@@ -122,7 +149,7 @@ export class ConversationRepository {
       // If thread is a group, or externalCustomerId equals externalThreadId, customerId remains null.
       let customerId: string | null = null;
       const externalCustId = payload.externalCustomerId?.trim();
-      const canInferPerson = !isGroup && Boolean(externalCustId) && externalCustId !== payload.externalThreadId.trim();
+      const canInferPerson = !isGroup && Boolean(externalCustId) && externalCustId !== externalThreadIdTrimmed;
 
       if (canInferPerson && externalCustId) {
         const existingCustomer = await tx
@@ -159,33 +186,40 @@ export class ConversationRepository {
         }
       }
 
-      // Upsert participant identity if verified or provided
-      if (payload.participantIdentity?.participantId) {
+      // Reconcile ONLY VERIFIED participant evidence (never use externalThreadId as participant)
+      const isVerifiedEvidence =
+        Boolean(payload.participantIdentity?.isVerified) &&
+        Boolean(payload.participantIdentity?.participantId) &&
+        payload.participantIdentity!.participantId.trim() !== externalThreadIdTrimmed;
+
+      if (isVerifiedEvidence && payload.participantIdentity) {
         const pId = payload.participantIdentity.participantId.trim();
-        const pVerified = payload.participantIdentity.isVerified ?? false;
+        const pKind = payload.participantIdentity.senderKind ?? "UNKNOWN";
+        const now = new Date();
         await tx
           .insert(participants)
           .values({
             channelAccountId: payload.channelAccountId,
             participantId: pId,
-            senderKind: payload.participantIdentity.senderKind ?? "UNKNOWN",
-            reliability: pVerified ? "VERIFIED" : "UNVERIFIED",
-            isVerified: pVerified,
+            senderKind: pKind,
+            reliability: "VERIFIED",
+            isVerified: true,
             profileUrl: payload.participantIdentity.profileUrl ?? null,
             displayName: payload.participantIdentity.displayName ?? null,
-            verifiedAt: pVerified ? (payload.participantIdentity.verifiedAt ?? new Date()) : null,
+            verifiedAt: payload.participantIdentity.verifiedAt ?? now,
             metadata: payload.participantIdentity.metadata ?? {},
-            updatedAt: new Date(),
+            updatedAt: now,
           })
           .onConflictDoUpdate({
             target: [participants.channelAccountId, participants.participantId],
             set: {
-              senderKind: payload.participantIdentity.senderKind ?? "UNKNOWN",
-              reliability: pVerified ? "VERIFIED" : "UNVERIFIED",
-              isVerified: pVerified,
+              senderKind: pKind,
+              reliability: "VERIFIED",
+              isVerified: true,
               ...(payload.participantIdentity.profileUrl ? { profileUrl: payload.participantIdentity.profileUrl } : {}),
               ...(payload.participantIdentity.displayName ? { displayName: payload.participantIdentity.displayName } : {}),
-              updatedAt: new Date(),
+              verifiedAt: payload.participantIdentity.verifiedAt ?? now,
+              updatedAt: now,
             },
           });
       }
@@ -197,6 +231,7 @@ export class ConversationRepository {
           inboundVersion: conversations.inboundVersion,
           manualMode: conversations.manualMode,
           status: conversations.status,
+          isBlocked: conversations.isBlocked,
         })
         .from(conversations)
         .where(
@@ -317,10 +352,107 @@ export class ConversationRepository {
         .returning({ id: messages.id });
       if (!newMsg) throw new Error("Failed to insert message");
 
-      // 6. Upsert conversation queue row & atomically enqueue/update debounce job (if not in manual mode)
-      if (!isManual) {
+      // 6. Abort/cancel stale queued/typing/sending work
+      // Cancel older debounce jobs for this conversation
+      await tx
+        .update(jobs)
+        .set({ status: "CANCELLED", updatedAt: new Date() })
+        .where(
+          and(
+            eq(jobs.channelAccountId, payload.channelAccountId),
+            eq(jobs.queue, "debounce"),
+            inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
+            sql`payload->>'conversationId' = ${conversationId}`
+          )
+        );
+
+      // Cancel older AI jobs for this conversation
+      await tx
+        .update(jobs)
+        .set({ status: "CANCELLED", updatedAt: new Date() })
+        .where(
+          and(
+            eq(jobs.channelAccountId, payload.channelAccountId),
+            eq(jobs.queue, "ai"),
+            inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
+            sql`payload->>'conversationId' = ${conversationId}`
+          )
+        );
+
+      // Cancel older browser send jobs for this conversation
+      await tx
+        .update(jobs)
+        .set({ status: "CANCELLED", updatedAt: new Date() })
+        .where(
+          and(
+            eq(jobs.channelAccountId, payload.channelAccountId),
+            eq(jobs.queue, "browser"),
+            inArray(jobs.status, ["READY", "RETRY_WAIT"]),
+            sql`payload->>'conversationId' = ${conversationId}`
+          )
+        );
+
+      // Cancel active turns in turns table
+      await tx
+        .update(turns)
+        .set({
+          status: "CANCELLED",
+          errorMessage: `Superseded by newer inbound version (${newInboundVersion})`,
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(turns.channelAccountId, payload.channelAccountId),
+            eq(turns.conversationId, conversationId),
+            inArray(turns.status, ["PENDING", "THINKING", "DRAFT_READY"])
+          )
+        );
+
+      // Abort stale outbound actions for this conversation
+      await tx
+        .update(outboundActions)
+        .set({
+          status: "CANCELLED",
+          errorMessage: `Cancelled due to new inbound version (${newInboundVersion})`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(outboundActions.conversationId, conversationId),
+            sql`${outboundActions.inboundVersion} < ${newInboundVersion}`,
+            notInArray(outboundActions.status, ["CONFIRMED", "CANCELLED", "FAILED", "SENT", "ABORTED"])
+          )
+        );
+
+      // Delete active conversation queue entry if present
+      if (typeof tx.delete === "function") {
+        await tx
+          .delete(conversationQueue)
+          .where(eq(conversationQueue.conversationId, conversationId));
+      }
+
+      // 7. Evaluate shared reply eligibility synchronously and persist decision
+      const evaluationMode = options?.evaluationMode ?? "LIVE";
+      const evalResult = await this.replyPolicyService.evaluateInbound({
+        channelAccountId: payload.channelAccountId,
+        conversationId,
+        inboundMessageId: newInbound?.id ?? "generated-id",
+        payload,
+        evaluationMode,
+        tx,
+      });
+
+      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual;
+
+      if (isEligibleLive) {
         const debounceMs = options?.debounceMs ?? 3000;
         const availableAt = new Date(Date.now() + debounceMs);
+
+        await tx
+          .update(conversations)
+          .set({ status: "DEBOUNCING", updatedAt: new Date() })
+          .where(eq(conversations.id, conversationId));
 
         await tx
           .insert(conversationQueue)
@@ -336,24 +468,12 @@ export class ConversationRepository {
             set: {
               inboundVersion: newInboundVersion,
               readyAt: availableAt, // Reset debounce timer on new message
+              claimToken: null,
+              leaseExpiresAt: null,
               updatedAt: new Date(),
             },
           });
 
-        // Cancel any older READY debounce jobs for this conversation
-        await tx
-          .update(jobs)
-          .set({ status: "CANCELLED", updatedAt: new Date() })
-          .where(
-            and(
-              eq(jobs.channelAccountId, payload.channelAccountId),
-              eq(jobs.queue, "debounce"),
-              eq(jobs.status, "READY"),
-              sql`payload->>'conversationId' = ${conversationId}`
-            )
-          );
-
-        // Atomically enqueue/update debounce job in PostgreSQL jobs table with explicit debounce queue
         await tx
           .insert(jobs)
           .values({
@@ -383,9 +503,17 @@ export class ConversationRepository {
               updatedAt: new Date(),
             },
           });
+      } else {
+        const nextStatus: ConversationStatus = isManual
+          ? "MANUAL"
+          : (existingConv[0]?.isBlocked ? "BLOCKED" : "WAITING_CUSTOMER");
+        await tx
+          .update(conversations)
+          .set({ status: nextStatus, updatedAt: new Date() })
+          .where(eq(conversations.id, conversationId));
       }
 
-      // 7. Append conversation event
+      // 8. Append conversation event
       await tx.insert(conversationEvents).values({
         channelAccountId: payload.channelAccountId,
         conversationId,
@@ -399,7 +527,7 @@ export class ConversationRepository {
         },
       });
 
-      // 8. Atomically enqueue transactional outbox event
+      // 9. Atomically enqueue transactional outbox event
       await tx.insert(outboxEvents).values({
         channelAccountId: payload.channelAccountId,
         conversationId,
@@ -409,6 +537,9 @@ export class ConversationRepository {
           inboundVersion: newInboundVersion,
           text: payload.text,
           externalMessageId: payload.externalMessageId,
+          eligible: evalResult.result.eligible,
+          decision: evalResult.result.decision,
+          reasonCode: evalResult.result.reasonCode,
         },
       });
 
@@ -418,6 +549,8 @@ export class ConversationRepository {
         inboundVersion: newInboundVersion,
         messageId: newMsg.id,
         inboundMessageId: newInbound?.id,
+        eligibility: evalResult.result,
+        decision: evalResult.record,
       };
     });
   }
