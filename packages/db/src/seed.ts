@@ -1,5 +1,5 @@
 import { getDb, closeDb } from "./client.js";
-import { channelAccounts, settings, settingRevisions } from "./schema/index.js";
+import { channelAccounts, settings, settingRevisions, users } from "./schema/index.js";
 import { SystemSettingsSchema } from "@messenger/contracts";
 import { getEnv } from "@messenger/config";
 
@@ -23,11 +23,9 @@ export async function seedDatabase(channelAccountId?: string) {
     })
     .onConflictDoNothing();
 
-  // 2. Ensure initial settings exist
+  // 2. Ensure initial settings exist (server-side AI only)
   const defaultSettings = SystemSettingsSchema.parse({
-    aiBaseUrl: env.OMNIROUTE_BASE_URL,
-    aiApiKey: env.OMNIROUTE_API_KEY,
-    aiModel: env.DEFAULT_AI_MODEL,
+    aiModel: env.XAI_MODEL || "grok-4.5",
   });
   const existing = await db.query.settings.findFirst({
     where: (t, { eq }) => eq(t.channelAccountId, accountId),
@@ -47,6 +45,21 @@ export async function seedDatabase(channelAccountId?: string) {
       changedBy: "SYSTEM_SEED",
       reason: "Initial baseline settings",
     });
+  }
+
+  // 3. Bootstrap the explicitly configured Cloudflare identity only.
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (adminEmail) {
+    await db
+      .insert(users)
+      .values({
+        email: adminEmail,
+        name: "Default Admin",
+        role: "OWNER",
+      })
+      .onConflictDoNothing();
+  } else if (env.NODE_ENV === "production") {
+    throw new Error("ADMIN_EMAIL is required to bootstrap the production OWNER identity");
   }
 
   console.log("✅ Seed completed successfully.");

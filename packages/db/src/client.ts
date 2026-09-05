@@ -4,6 +4,8 @@ import * as schema from "./schema/index.js";
 import { getEnv } from "@messenger/config";
 
 export type Database = PostgresJsDatabase<typeof schema>;
+export type DatabaseOrTx = Database | Parameters<Parameters<Database["transaction"]>[0]>[0];
+export type Sql = postgres.Sql;
 
 let globalSql: postgres.Sql | null = null;
 let globalDb: Database | null = null;

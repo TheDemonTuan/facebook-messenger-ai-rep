@@ -11,12 +11,25 @@ import {
   XCircle,
   Clock,
   Send,
-  Code,
   Copy,
-  ChevronRight,
   Sparkles,
-  Info,
 } from "lucide-react";
+
+interface AiTestResult {
+  success: boolean;
+  latencyMs?: number;
+  model?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  promptHash?: string;
+  responseHash?: string;
+  data?: {
+    messages?: string[];
+    [key: string]: unknown;
+  } | null;
+  errorMessage?: string;
+}
 
 export const AiLogsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -32,7 +45,7 @@ export const AiLogsPage: React.FC = () => {
   const [showTester, setShowTester] = useState(false);
   const [testMessage, setTestMessage] = useState("Xin chào, shop có bán áo thun không?");
   const [testLoading, setTestLoading] = useState(false);
-  const [testResult, setTestResult] = useState<any>(null);
+  const [testResult, setTestResult] = useState<AiTestResult | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const loadRuns = async (conversationId?: string, status?: string) => {
@@ -82,7 +95,7 @@ export const AiLogsPage: React.FC = () => {
     setTestLoading(true);
     setTestResult(null);
     try {
-      const res = await apiFetch<any>("/api/ai-runs/test", {
+      const res = await apiFetch<AiTestResult>("/api/ai-runs/test", {
         method: "POST",
         body: JSON.stringify({ message: testMessage.trim() }),
       });
@@ -103,17 +116,6 @@ export const AiLogsPage: React.FC = () => {
     navigator.clipboard.writeText(text);
     setCopyNotice(label);
     setTimeout(() => setCopyNotice(null), 2000);
-  };
-
-  // Helper to extract request messages
-  const getRequestMessages = (run: AiRunItem) => {
-    if (run.promptMessages && run.promptMessages.length > 0) {
-      return run.promptMessages;
-    }
-    if (run.parsedOutput?._request?.messages && Array.isArray(run.parsedOutput._request.messages)) {
-      return run.parsedOutput._request.messages;
-    }
-    return [];
   };
 
   const getStatusBadge = (status: string) => {
@@ -216,7 +218,7 @@ export const AiLogsPage: React.FC = () => {
             Nhật ký AI & Proxy Gateway (AI Proxy Logs)
           </h1>
           <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
-            Xem chi tiết toàn bộ tin nhắn gửi lên AI Proxy và phản hồi raw/parsed trả về để kiểm tra & gỡ lỗi (debug).
+            Xem chi tiết toàn bộ lượt gọi AI, độ trễ, token, prompt/response hash và kết quả parsed output để kiểm tra & gỡ lỗi (debug).
           </div>
         </div>
 
@@ -337,41 +339,42 @@ export const AiLogsPage: React.FC = () => {
                 </div>
               </div>
 
-              {testResult.requestMessages && (
+              <div style={{ display: "flex", gap: "12px", marginBottom: "8px", fontSize: "0.8rem", color: "#475569" }}>
+                {testResult.promptHash && (
+                  <div>Prompt Hash: <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px" }}>{testResult.promptHash.slice(0, 16)}...</code></div>
+                )}
+                {testResult.responseHash && (
+                  <div>Response Hash: <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px" }}>{testResult.responseHash.slice(0, 16)}...</code></div>
+                )}
+              </div>
+
+              {testResult.data?.messages && testResult.data.messages.length > 0 && (
                 <div style={{ marginBottom: "8px" }}>
-                  <div style={{ fontWeight: "600", color: "#334155" }}>Payload gửi đi ({testResult.requestMessages.length} messages):</div>
-                  <pre
-                    style={{
-                      backgroundColor: "#0f172a",
-                      color: "#e2e8f0",
-                      padding: "8px",
-                      borderRadius: "4px",
-                      overflowX: "auto",
-                      maxHeight: "150px",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    {JSON.stringify(testResult.requestMessages, null, 2)}
-                  </pre>
+                  <div style={{ fontWeight: "600", color: "#334155", marginBottom: "4px" }}>Câu trả lời được sinh:</div>
+                  {testResult.data.messages.map((m: string, idx: number) => (
+                    <div
+                      key={idx}
+                      style={{
+                        backgroundColor: "#f0fdf4",
+                        border: "1px solid #bbf7d0",
+                        borderRadius: "4px",
+                        padding: "6px 10px",
+                        marginBottom: "4px",
+                        color: "#166534",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <b>Câu #{idx + 1}:</b> {m}
+                    </div>
+                  ))}
                 </div>
               )}
 
-              <div>
-                <div style={{ fontWeight: "600", color: "#334155" }}>Phản hồi thô (Raw Response):</div>
-                <pre
-                  style={{
-                    backgroundColor: "#0f172a",
-                    color: testResult.success ? "#86efac" : "#fca5a5",
-                    padding: "8px",
-                    borderRadius: "4px",
-                    overflowX: "auto",
-                    maxHeight: "180px",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  {testResult.rawResponse || testResult.errorMessage || "(trống)"}
-                </pre>
-              </div>
+              {testResult.errorMessage && (
+                <div style={{ marginTop: "8px", padding: "8px", backgroundColor: "#fef2f2", borderRadius: "4px", color: "#991b1b", fontSize: "0.8rem" }}>
+                  <b>Lỗi:</b> {testResult.errorMessage}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -523,7 +526,6 @@ export const AiLogsPage: React.FC = () => {
             ) : (
               runs.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
-                const reqMsgs = getRequestMessages(run);
                 return (
                   <div
                     key={run.id}
@@ -639,7 +641,7 @@ export const AiLogsPage: React.FC = () => {
 
               {/* Inspector Content: Two Halves (Request vs Response) */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                {/* Column 1: Request sent to Proxy */}
+                {/* Column 1: Run Metadata & Hashes */}
                 <div
                   style={{
                     border: "1px solid #e2e8f0",
@@ -660,89 +662,68 @@ export const AiLogsPage: React.FC = () => {
                     }}
                   >
                     <span style={{ fontWeight: "600", fontSize: "0.85rem", color: "#1e293b" }}>
-                      📤 Phần gửi chat lên proxy (Prompt Payload)
+                      🔒 Metadata & Hashes (Bảo mật - Không lưu raw prompt)
                     </span>
-                    <button
-                      onClick={() =>
-                        copyToClipboard(
-                          JSON.stringify(getRequestMessages(selectedRun), null, 2),
-                          "Request Messages JSON"
-                        )
-                      }
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "4px",
-                        backgroundColor: "transparent",
-                        border: "none",
-                        color: "#2563eb",
-                        fontSize: "0.75rem",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <Copy size={12} /> Sao chép JSON
-                    </button>
                   </div>
 
                   <div style={{ padding: "12px", overflowY: "auto", maxHeight: "500px", fontSize: "0.85rem" }}>
-                    {getRequestMessages(selectedRun).length === 0 ? (
-                      <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
-                        (Không có dữ liệu tin nhắn request được lưu cho lượt chạy này)
+                    <div style={{ marginBottom: "12px" }}>
+                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
+                        Prompt SHA-256 Hash:
                       </div>
-                    ) : (
-                      getRequestMessages(selectedRun).map((msg, idx) => (
-                        <div
-                          key={idx}
-                          style={{
-                            marginBottom: "12px",
-                            padding: "8px 10px",
-                            backgroundColor:
-                              msg.role === "system"
-                                ? "#fef3c7"
-                                : msg.role === "user"
-                                ? "#eff6ff"
-                                : "#f1f5f9",
-                            borderRadius: "6px",
-                            border: `1px solid ${
-                              msg.role === "system"
-                                ? "#fde68a"
-                                : msg.role === "user"
-                                ? "#bfdbfe"
-                                : "#cbd5e1"
-                            }`,
-                          }}
-                        >
-                          <div
-                            style={{
-                              display: "flex",
-                              justifyContent: "space-between",
-                              fontSize: "0.7rem",
-                              fontWeight: "bold",
-                              color:
-                                msg.role === "system"
-                                  ? "#92400e"
-                                  : msg.role === "user"
-                                  ? "#1e40af"
-                                  : "#475569",
-                              marginBottom: "4px",
-                            }}
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <code style={{ backgroundColor: "#f1f5f9", padding: "4px 8px", borderRadius: "4px", fontSize: "0.75rem", wordBreak: "break-all" }}>
+                          {selectedRun.promptHash || "(Chưa có hash)"}
+                        </code>
+                        {selectedRun.promptHash && (
+                          <button
+                            onClick={() => copyToClipboard(selectedRun.promptHash || "", "Prompt Hash")}
+                            style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
                           >
-                            <span>ROLE: {msg.role.toUpperCase()}</span>
-                            <span>#{idx + 1}</span>
-                          </div>
-                          <div
-                            style={{
-                              whiteSpace: "pre-wrap",
-                              fontFamily: msg.role === "system" ? "monospace" : "inherit",
-                              fontSize: msg.role === "system" ? "0.75rem" : "0.85rem",
-                              wordBreak: "break-word",
-                            }}
+                            <Copy size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: "12px" }}>
+                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
+                        Response SHA-256 Hash:
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <code style={{ backgroundColor: "#f1f5f9", padding: "4px 8px", borderRadius: "4px", fontSize: "0.75rem", wordBreak: "break-all" }}>
+                          {selectedRun.responseHash || "(Chưa có hash)"}
+                        </code>
+                        {selectedRun.responseHash && (
+                          <button
+                            onClick={() => copyToClipboard(selectedRun.responseHash || "", "Response Hash")}
+                            style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
                           >
-                            {msg.content}
-                          </div>
+                            <Copy size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div style={{ marginBottom: "12px" }}>
+                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
+                        Token Usage Breakdown:
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
+                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
+                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Prompt</div>
+                          <div style={{ fontWeight: "bold" }}>{selectedRun.promptTokens}</div>
                         </div>
-                      ))
-                    )}
+                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
+                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Completion</div>
+                          <div style={{ fontWeight: "bold" }}>{selectedRun.completionTokens}</div>
+                        </div>
+                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
+                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Total</div>
+                          <div style={{ fontWeight: "bold" }}>{selectedRun.totalTokens}</div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -767,25 +748,8 @@ export const AiLogsPage: React.FC = () => {
                     }}
                   >
                     <span style={{ fontWeight: "600", fontSize: "0.85rem", color: "#1e293b" }}>
-                      📥 Chat từ AI trả về (Raw & Parsed Output)
+                      📥 Chat từ AI trả về (Parsed Output)
                     </span>
-                    {selectedRun.rawResponse && (
-                      <button
-                        onClick={() => copyToClipboard(selectedRun.rawResponse || "", "Raw Response")}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: "4px",
-                          backgroundColor: "transparent",
-                          border: "none",
-                          color: "#2563eb",
-                          fontSize: "0.75rem",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <Copy size={12} /> Sao chép Raw
-                      </button>
-                    )}
                   </div>
 
                   <div style={{ padding: "12px", overflowY: "auto", maxHeight: "500px", fontSize: "0.85rem" }}>
@@ -813,35 +777,56 @@ export const AiLogsPage: React.FC = () => {
                       </div>
                     )}
 
-                    {/* Raw AI Response */}
-                    <div>
-                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
-                        Nội dung phản hồi thô nhận từ Gateway (Raw Text / JSON):
-                      </div>
-                      <pre
+                    {/* Needs clarification indicator */}
+                    {(selectedRun.parsedOutput?.needsClarification ||
+                      (selectedRun.parsedOutput?.data as { needsClarification?: boolean } | undefined)?.needsClarification) && (
+                      <div
                         style={{
-                          backgroundColor: "#0f172a",
-                          color: selectedRun.status === "ERROR" ? "#fca5a5" : "#e2e8f0",
-                          padding: "10px",
-                          borderRadius: "6px",
-                          overflowX: "auto",
-                          fontFamily: "Consolas, Monaco, monospace",
-                          fontSize: "0.75rem",
-                          lineHeight: "1.4",
-                          whiteSpace: "pre-wrap",
-                          wordBreak: "break-word",
+                          backgroundColor: "#fef3c7",
+                          border: "1px solid #fde68a",
+                          borderRadius: "4px",
+                          padding: "8px 10px",
+                          marginBottom: "12px",
+                          color: "#92400e",
+                          fontSize: "0.8rem",
                         }}
                       >
-                        {selectedRun.rawResponse || (selectedRun.status === "ERROR" ? selectedRun.errorMessage : "(Không có dữ liệu phản hồi)")}
-                      </pre>
-                    </div>
+                        ⚠️ AI yêu cầu làm rõ thêm thông tin từ khách hàng (needsClarification: true)
+                      </div>
+                    )}
+
+                    {/* Error display if status is ERROR */}
+                    {selectedRun.status === "ERROR" && selectedRun.errorMessage && (
+                      <div
+                        style={{
+                          backgroundColor: "#fef2f2",
+                          border: "1px solid #fecaca",
+                          borderRadius: "4px",
+                          padding: "10px",
+                          color: "#991b1b",
+                          fontSize: "0.8rem",
+                          lineHeight: "1.4",
+                        }}
+                      >
+                        <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Lỗi xử lý AI:</div>
+                        <div style={{ wordBreak: "break-word" }}>{selectedRun.errorMessage}</div>
+                      </div>
+                    )}
+
+                    {selectedRun.status !== "ERROR" &&
+                      !selectedRun.parsedOutput?.messages &&
+                      !(selectedRun.parsedOutput?.data as { messages?: unknown[] } | undefined)?.messages && (
+                        <div style={{ color: "#64748b", fontSize: "0.8rem", fontStyle: "italic" }}>
+                          (Không có nội dung tin nhắn được trích xuất)
+                        </div>
+                      )}
                   </div>
                 </div>
               </div>
             </div>
           ) : (
             <div style={{ padding: "40px", textAlign: "center", color: "#94a3b8" }}>
-              Chọn một lượt gọi AI ở danh sách bên trái để xem chi tiết request và response.
+              Chọn một lượt gọi AI ở danh sách bên trái để xem chi tiết kết quả.
             </div>
           )}
         </div>

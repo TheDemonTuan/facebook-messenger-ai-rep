@@ -11,9 +11,7 @@ export class SettingsRepository {
     try {
       const env = getEnv();
       return {
-        aiBaseUrl: env.OMNIROUTE_BASE_URL,
-        aiApiKey: env.OMNIROUTE_API_KEY,
-        aiModel: env.DEFAULT_AI_MODEL,
+        aiModel: env.XAI_MODEL || "grok-4.5",
       };
     } catch {
       return {};
@@ -63,46 +61,59 @@ export class SettingsRepository {
       let existingSettings = SystemSettingsSchema.parse(envDefaults);
 
       if (current.length > 0 && current[0]) {
-        currentRevision = current[0].currentRevision;
+        currentRevision = current[0].currentRevision + 1;
         existingSettings = SystemSettingsSchema.parse({
           ...envDefaults,
           ...current[0].settings,
         });
       }
 
-      const merged = SystemSettingsSchema.parse({
+      // Merge and validate
+      const mergedSettings = SystemSettingsSchema.parse({
         ...existingSettings,
         ...newSettings,
       });
-      const nextRevision = currentRevision + 1;
 
-      // Upsert current settings
+      // Upsert settings
       await tx
         .insert(settings)
         .values({
           channelAccountId,
-          currentRevision: nextRevision,
-          settings: merged,
+          currentRevision,
+          settings: mergedSettings,
+          updatedAt: new Date(),
         })
         .onConflictDoUpdate({
           target: settings.channelAccountId,
           set: {
-            currentRevision: nextRevision,
-            settings: merged,
+            currentRevision,
+            settings: mergedSettings,
             updatedAt: new Date(),
           },
         });
 
-      // Record revision
+      // Record setting revision
       await tx.insert(settingRevisions).values({
         channelAccountId,
-        revision: nextRevision,
-        settings: merged,
+        revision: currentRevision,
+        settings: mergedSettings,
         changedBy,
         reason: reason || null,
       });
 
-      return { settings: merged, revision: nextRevision };
+      return {
+        settings: mergedSettings,
+        revision: currentRevision,
+      };
     });
+  }
+
+  async getRevisions(channelAccountId: string, limit = 20) {
+    return await this.db
+      .select()
+      .from(settingRevisions)
+      .where(eq(settingRevisions.channelAccountId, channelAccountId))
+      .orderBy(settingRevisions.revision)
+      .limit(limit);
   }
 }

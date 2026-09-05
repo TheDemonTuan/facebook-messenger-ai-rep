@@ -1,39 +1,33 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch } from "../api";
-import { Lock, Mail, KeyRound } from "lucide-react";
+import { useAuth } from "../context/AuthContext";
+import { ShieldCheck, ArrowRight, Loader2, AlertCircle, Sparkles } from "lucide-react";
+import { getStoredDevEmail } from "../api";
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [totpCode, setTotpCode] = useState("");
-  const [requiresTotp, setRequiresTotp] = useState(false);
+  const { user, login } = useAuth();
+  const [devEmail, setDevEmail] = useState(getStoredDevEmail() || "admin@example.com");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // If already authenticated via Cloudflare identity header, navigate to overview
+  useEffect(() => {
+    if (user) {
+      navigate("/overview", { replace: true });
+    }
+  }, [user, navigate]);
+
+  const handleCloudflareLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
     try {
-      const res = await apiFetch<{ success?: boolean; requiresTotp?: boolean }>("/api/auth/login", {
-        method: "POST",
-        body: JSON.stringify({
-          email,
-          password,
-          totpCode: requiresTotp ? totpCode : undefined,
-        }),
-      });
-
-      if (res.requiresTotp) {
-        setRequiresTotp(true);
-      } else if (res.success) {
-        navigate("/overview");
-      }
+      await login(devEmail.trim() || undefined);
+      navigate("/overview", { replace: true });
     } catch (err: unknown) {
-      setError((err as Error).message);
+      setError((err as Error).message || "Không thể xác thực danh tính qua Cloudflare Access");
     } finally {
       setLoading(false);
     }
@@ -49,151 +43,150 @@ export const LoginPage: React.FC = () => {
         backgroundColor: "#0f172a",
         padding: "20px",
         boxSizing: "border-box",
-        fontFamily: "system-ui, sans-serif",
+        fontFamily: "system-ui, -apple-system, sans-serif",
       }}
     >
       <div
         style={{
           width: "100%",
-          maxWidth: "400px",
+          maxWidth: "420px",
           backgroundColor: "#ffffff",
-          borderRadius: "12px",
-          padding: "32px",
-          boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.3)",
+          borderRadius: "14px",
+          padding: "36px",
+          boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3)",
         }}
       >
-        <div style={{ textAlign: "center", marginBottom: "24px" }}>
+        <div style={{ textAlign: "center", marginBottom: "28px" }}>
           <div
             style={{
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              width: "48px",
-              height: "48px",
-              borderRadius: "50%",
-              backgroundColor: "#eff6ff",
-              color: "#2563eb",
-              marginBottom: "12px",
+              width: "56px",
+              height: "56px",
+              borderRadius: "14px",
+              backgroundColor: "#f97316",
+              color: "#ffffff",
+              marginBottom: "16px",
+              boxShadow: "0 4px 12px rgba(249, 115, 22, 0.35)",
             }}
           >
-            <Lock size={24} />
+            <ShieldCheck size={32} />
           </div>
-          <h1 style={{ margin: 0, fontSize: "1.4rem", fontWeight: "bold", color: "#1e293b" }}>
-            Đăng nhập hệ thống
+          <h1 style={{ margin: "0 0 6px 0", fontSize: "1.45rem", fontWeight: "700", color: "#0f172a" }}>
+            Cloudflare Access Identity
           </h1>
-          <p style={{ margin: "6px 0 0 0", fontSize: "0.85rem", color: "#64748b" }}>
-            AI Messenger Customer Support Control Plane
+          <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>
+            Hệ thống Facebook Messenger AI Rep • Xác thực danh tính Zero Trust
           </p>
         </div>
 
         {error && (
           <div
             style={{
-              backgroundColor: "#fee2e2",
-              border: "1px solid #f87171",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: "10px",
+              padding: "12px",
+              borderRadius: "8px",
+              backgroundColor: "#fef2f2",
+              border: "1px solid #fecaca",
               color: "#991b1b",
-              borderRadius: "6px",
-              padding: "10px",
               fontSize: "0.85rem",
-              marginBottom: "16px",
+              marginBottom: "20px",
             }}
           >
-            {error}
+            <AlertCircle size={18} style={{ flexShrink: 0, marginTop: "2px" }} />
+            <div>{error}</div>
           </div>
         )}
 
-        <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {!requiresTotp ? (
-            <>
-              <div>
-                <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "600", color: "#334155", marginBottom: "4px" }}>
-                  Email chủ hệ thống
-                </label>
-                <div style={{ position: "relative" }}>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="owner@example.com"
-                    style={{
-                      width: "100%",
-                      padding: "10px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid #cbd5e1",
-                      fontSize: "0.95rem",
-                      boxSizing: "border-box",
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "600", color: "#334155", marginBottom: "4px" }}>
-                  Mật khẩu
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  style={{
-                    width: "100%",
-                    padding: "10px 12px",
-                    borderRadius: "6px",
-                    border: "1px solid #cbd5e1",
-                    fontSize: "0.95rem",
-                    boxSizing: "border-box",
-                  }}
-                />
-              </div>
-            </>
-          ) : (
-            <div>
-              <label style={{ display: "block", fontSize: "0.85rem", fontWeight: "600", color: "#334155", marginBottom: "4px" }}>
-                Mã xác thực 2 lớp (TOTP 6 số)
-              </label>
-              <input
-                type="text"
-                required
-                maxLength={6}
-                value={totpCode}
-                onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, ""))}
-                placeholder="123456"
-                autoFocus
-                style={{
-                  width: "100%",
-                  padding: "10px 12px",
-                  borderRadius: "6px",
-                  border: "1px solid #cbd5e1",
-                  fontSize: "1.2rem",
-                  letterSpacing: "4px",
-                  textAlign: "center",
-                  boxSizing: "border-box",
-                }}
-              />
+        <form onSubmit={handleCloudflareLogin} style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+          <div
+            style={{
+              padding: "12px 14px",
+              backgroundColor: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: "8px",
+              fontSize: "0.8rem",
+              color: "#475569",
+              lineHeight: 1.5,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: "600", color: "#1e293b", marginBottom: "4px" }}>
+              <Sparkles size={14} color="#f97316" /> Xác thực không mật khẩu
             </div>
-          )}
+            Quyền truy cập được xác minh trực tiếp qua Cloudflare Zero Trust Gateway. Không yêu cầu mật khẩu hoặc mã OTP tĩnh.
+          </div>
+
+          <div>
+            <label
+              style={{
+                display: "block",
+                fontSize: "0.8rem",
+                fontWeight: "600",
+                color: "#475569",
+                marginBottom: "6px",
+              }}
+            >
+              Email danh tính (Cloudflare / Dev Identity)
+            </label>
+            <input
+              type="email"
+              value={devEmail}
+              onChange={(e) => setDevEmail(e.target.value)}
+              placeholder="admin@example.com"
+              required
+              style={{
+                width: "100%",
+                padding: "10px 12px",
+                borderRadius: "8px",
+                border: "1px solid #cbd5e1",
+                fontSize: "0.9rem",
+                boxSizing: "border-box",
+                outline: "none",
+              }}
+            />
+          </div>
 
           <button
             type="submit"
             disabled={loading}
             style={{
-              backgroundColor: "#2563eb",
-              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "8px",
+              width: "100%",
+              padding: "12px 16px",
+              borderRadius: "8px",
               border: "none",
-              borderRadius: "6px",
-              padding: "12px",
+              backgroundColor: "#f97316",
+              color: "#ffffff",
               fontSize: "0.95rem",
-              fontWeight: "bold",
+              fontWeight: "600",
               cursor: loading ? "not-allowed" : "pointer",
-              marginTop: "8px",
+              transition: "background-color 0.2s",
+              boxShadow: "0 2px 4px rgba(249, 115, 22, 0.2)",
             }}
           >
-            {loading ? "Đang xử lý..." : requiresTotp ? "Xác nhận mã TOTP" : "Đăng nhập"}
+            {loading ? (
+              <>
+                <Loader2 size={18} className="animate-spin" />
+                <span>Đang xác thực...</span>
+              </>
+            ) : (
+              <>
+                <span>Xác nhận danh tính Cloudflare</span>
+                <ArrowRight size={18} />
+              </>
+            )}
           </button>
         </form>
+
+        <div style={{ marginTop: "24px", textAlign: "center", fontSize: "0.75rem", color: "#94a3b8" }}>
+          Single-Agent Architecture • PostgreSQL Fencing Token
+        </div>
       </div>
     </div>
   );

@@ -250,7 +250,6 @@ export class QueueRepository {
     }
   ): Promise<void> {
     const now = new Date();
-    const stickyWindowMs = options.stickyWindowMs || 45000;
 
     await this.db.transaction(async (tx) => {
       // Clear claim on conversation

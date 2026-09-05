@@ -4,6 +4,14 @@ import type {
   ActiveConversationRef,
 } from "@messenger/contracts";
 
+export interface PreSendMarker {
+  threadRef: string;
+  knownMessageIds: string[];
+  lastMessageId: string | null;
+  messageCount: number;
+  capturedAt: Date;
+}
+
 export interface ChannelAdapter {
   readonly channelAccountId: string;
 
@@ -30,6 +38,11 @@ export interface ChannelAdapter {
   getOpenConversationRef(): Promise<ActiveConversationRef | null>;
 
   /**
+   * Captures snapshot of message bubbles before typing/sending to verify outgoing delivery.
+   */
+  capturePreSendMarker(threadRef?: string): Promise<PreSendMarker | string>;
+
+  /**
    * Type text draft into the active conversation composer.
    * If `signal` is aborted (e.g. newer inbound received), stop immediately.
    */
@@ -53,11 +66,12 @@ export interface ChannelAdapter {
   sendDraft(actionId: string): Promise<{ sent: boolean }>;
 
   /**
-   * Verify whether the outgoing message bubble with expected text/hash appears in DOM.
+   * Verify whether the outgoing message bubble with expected text/hash appears in DOM strictly after marker.
    */
   verifySent(
     expectedText: string,
     expectedHash: string,
+    marker?: PreSendMarker | string,
     timeoutMs?: number
   ): Promise<{ verified: boolean; messageRef?: string }>;
 
@@ -70,4 +84,9 @@ export interface ChannelAdapter {
    * Clean up resources (e.g. close browser context).
    */
   close(): Promise<void>;
+
+  /**
+   * Optional listener for degraded DOM conditions (e.g. missing stable message IDs).
+   */
+  onDegradedDom?: (callback: (reason: string) => Promise<void>) => void;
 }

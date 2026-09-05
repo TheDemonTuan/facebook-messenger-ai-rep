@@ -6,6 +6,8 @@ import {
   messages,
   conversationQueue,
   conversationEvents,
+  jobs,
+  outboxEvents,
 } from "../schema/index.js";
 import type { InboundMessagePayload, ConversationStatus } from "@messenger/contracts";
 import { createHash } from "node:crypto";
@@ -17,14 +19,22 @@ export interface InboundIngestResult {
   messageId: string;
 }
 
+export interface InboundIngestOptions {
+  debounceMs?: number;
+}
+
 export class ConversationRepository {
   constructor(private db: Database) {}
 
   /**
    * Upserts customer, creates or updates conversation, inserts message with dedupe,
-   * bumps inbound_version, and upserts conversation queue row.
+   * bumps inbound_version, upserts conversation queue row, atomically enqueues/updates debounce job,
+   * and enqueues transactional outbox event.
    */
-  async ingestInboundMessage(payload: InboundMessagePayload): Promise<InboundIngestResult> {
+  async ingestInboundMessage(
+    payload: InboundMessagePayload,
+    options?: InboundIngestOptions
+  ): Promise<InboundIngestResult> {
     const textHash = createHash("sha256").update(payload.text.trim()).digest("hex");
 
     return await this.db.transaction(async (tx) => {
@@ -107,8 +117,8 @@ export class ConversationRepository {
         customerId = newCustomer.id;
       }
 
-      // 3. Upsert conversation
-      const existingConv = await tx
+      // 3. Upsert conversation (row-locked to serialize concurrent inbounds for the same thread)
+      const convQuery = tx
         .select({
           id: conversations.id,
           inboundVersion: conversations.inboundVersion,
@@ -121,8 +131,14 @@ export class ConversationRepository {
             eq(conversations.channelAccountId, payload.channelAccountId),
             eq(conversations.externalThreadId, payload.externalThreadId)
           )
-        )
-        .limit(1);
+        );
+
+      const lockedConvQuery =
+        "for" in convQuery && typeof convQuery.for === "function"
+          ? convQuery.for("update")
+          : convQuery;
+
+      const existingConv = await lockedConvQuery.limit(1);
 
       let conversationId: string;
       let newInboundVersion: number;
@@ -183,8 +199,11 @@ export class ConversationRepository {
         .returning({ id: messages.id });
       if (!newMsg) throw new Error("Failed to insert message");
 
-      // 5. Upsert conversation queue row (if not in manual mode)
+      // 5. Upsert conversation queue row & atomically enqueue/update debounce job (if not in manual mode)
       if (!isManual) {
+        const debounceMs = options?.debounceMs ?? 3000;
+        const availableAt = new Date(Date.now() + debounceMs);
+
         await tx
           .insert(conversationQueue)
           .values({
@@ -192,13 +211,57 @@ export class ConversationRepository {
             conversationId,
             inboundVersion: newInboundVersion,
             queuedAt: new Date(),
-            readyAt: new Date(Date.now() + 3000), // Default 3s debounce
+            readyAt: availableAt,
           })
           .onConflictDoUpdate({
             target: conversationQueue.conversationId,
             set: {
               inboundVersion: newInboundVersion,
-              readyAt: new Date(Date.now() + 3000), // Reset debounce timer on new message
+              readyAt: availableAt, // Reset debounce timer on new message
+              updatedAt: new Date(),
+            },
+          });
+
+        // Cancel any older READY debounce jobs for this conversation
+        await tx
+          .update(jobs)
+          .set({ status: "CANCELLED", updatedAt: new Date() })
+          .where(
+            and(
+              eq(jobs.channelAccountId, payload.channelAccountId),
+              eq(jobs.jobType, "debounce"),
+              eq(jobs.status, "READY"),
+              sql`payload->>'conversationId' = ${conversationId}`
+            )
+          );
+
+        // Atomically enqueue/update debounce job in PostgreSQL jobs table with explicit debounce queue
+        await tx
+          .insert(jobs)
+          .values({
+            channelAccountId: payload.channelAccountId,
+            queue: "debounce",
+            jobType: "debounce",
+            priority: 0,
+            status: "READY",
+            availableAt,
+            payload: {
+              channelAccountId: payload.channelAccountId,
+              conversationId,
+              inboundVersion: newInboundVersion,
+            },
+            idempotencyKey: `debounce:${payload.channelAccountId}:${conversationId}:${newInboundVersion}`,
+          })
+          .onConflictDoUpdate({
+            target: jobs.idempotencyKey,
+            set: {
+              availableAt,
+              payload: {
+                channelAccountId: payload.channelAccountId,
+                conversationId,
+                inboundVersion: newInboundVersion,
+              },
+              status: "READY",
               updatedAt: new Date(),
             },
           });
@@ -215,6 +278,19 @@ export class ConversationRepository {
           externalMessageId: payload.externalMessageId,
           textLength: payload.text.length,
           timestamp: payload.timestamp,
+        },
+      });
+
+      // 7. Atomically enqueue transactional outbox event
+      await tx.insert(outboxEvents).values({
+        channelAccountId: payload.channelAccountId,
+        conversationId,
+        eventType: "inbound:received",
+        payload: {
+          conversationId,
+          inboundVersion: newInboundVersion,
+          text: payload.text,
+          externalMessageId: payload.externalMessageId,
         },
       });
 
@@ -251,9 +327,16 @@ export class ConversationRepository {
   }
 
   async updateStatus(conversationId: string, status: ConversationStatus): Promise<void> {
+    const updateData: Record<string, unknown> = { status, updatedAt: new Date() };
+    if (status === "THINKING" || status === "CLAIMED") {
+      updateData.claimedAt = new Date();
+    } else if (status === "WAITING_CUSTOMER" || status === "QUEUED") {
+      updateData.claimedAt = null;
+      updateData.claimToken = null;
+    }
     await this.db
       .update(conversations)
-      .set({ status, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(conversations.id, conversationId));
   }
 

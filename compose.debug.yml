@@ -1,0 +1,22 @@
+# ==============================================================================
+# Debug & Initial Login Override for Docker Compose
+# Usage: docker compose -f compose.prod.yml -f compose.debug.yml up -d
+#
+# Access noVNC interface securely via SSH port forwarding:
+#   ssh -L 6080:127.0.0.1:6080 -L 3000:127.0.0.1:3000 user@your-vps-ip
+# Open http://localhost:6080/vnc.html in your local browser to log into Facebook.
+# ==============================================================================
+
+name: messenger-ai
+
+services:
+  core:
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  browser-agent:
+    environment:
+      ENABLE_NOVNC: "true"
+      VNC_PASSWORD: ${VNC_PASSWORD:-}
+    ports:
+      - "127.0.0.1:6080:6080"

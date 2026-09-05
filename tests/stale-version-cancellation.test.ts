@@ -1,19 +1,21 @@
 import { describe, it, expect, vi } from "vitest";
-import { AiWorkerService } from "../apps/ai-worker/src/worker.js";
+import { createAiHandler } from "../apps/core/src/jobs/handlers/ai.js";
 import { SenderWorkerService } from "../apps/browser-agent/src/sender-worker.js";
 import type {
   Database,
   ConversationRepository,
-  QueueRepository,
   OutboundRepository,
   EventRepository,
   SettingsRepository,
   IncidentRepository,
-} from "@messenger/db";
-import type { Redis } from "ioredis";
-import type { AppQueues } from "@messenger/queue";
+  TurnRepository,
+  OutboxRepository,
+  JobRepository,
+} from "../packages/db/src/index.js";
 import type { ChannelAdapter } from "@messenger/channel";
-import type { LeaseManager } from "@messenger/queue";
+import type { AiReplyGenerator } from "@messenger/ai";
+import type { OutboundJobPayload } from "@messenger/contracts";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("Stale Inbound Version Cancellation Race Protection", () => {
   it("cancels AI job when conversation inbound version is higher than job version", async () => {
@@ -36,40 +38,71 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       recordEvent: vi.fn().mockResolvedValue({}),
     } as unknown as EventRepository;
 
-    const mockQueueRepo = {
-      release: vi.fn(),
-    } as unknown as QueueRepository;
+    const mockTurnRepo = {
+      cancelTurn: vi.fn().mockResolvedValue({}),
+    } as unknown as TurnRepository;
 
-    const aiWorker = new AiWorkerService(
-      {} as Database,
-      {} as Redis,
-      {} as AppQueues,
-      mockConvRepo,
-      mockQueueRepo,
-      {} as unknown as OutboundRepository,
-      mockEventRepo,
-      {} as unknown as SettingsRepository,
-      {} as unknown as IncidentRepository
-    );
+    const mockAiGenerator = {
+      generateReply: vi.fn(),
+    };
 
-    // Job arrives with stale version 18
-    await aiWorker.processJob({
-      channelAccountId: "personal-messenger",
-      conversationId: "conv-race-1",
-      inboundVersion: 18,
-      claimToken: "token-18",
-      fencingToken: 5,
+    const aiHandler = createAiHandler({
+      db: {} as unknown as Database,
+      convRepo: mockConvRepo,
+      turnRepo: mockTurnRepo,
+      outboundRepo: {} as unknown as OutboundRepository,
+      settingsRepo: {} as unknown as SettingsRepository,
+      incidentRepo: {} as unknown as IncidentRepository,
+      eventRepo: mockEventRepo,
+      outboxRepo: {} as unknown as OutboxRepository,
+      broadcaster: { broadcast: vi.fn() } as unknown as OutboxBroadcaster,
+      aiGenerator: mockAiGenerator as unknown as AiReplyGenerator,
     });
 
-    // Verify AI job was cancelled stale
+    // Job arrives with stale version 18
+    await aiHandler({
+      job: {
+        id: "job-ai-stale",
+        channelAccountId: "personal-messenger",
+        queue: "ai",
+        jobType: "ai",
+        payload: {
+          channelAccountId: "personal-messenger",
+          conversationId: "conv-race-1",
+          inboundVersion: 18,
+          turnId: "turn-18",
+        },
+        status: "RUNNING",
+        priority: 10,
+        attempts: 1,
+        maxAttempts: 3,
+        availableAt: new Date(),
+        lockedUntil: null,
+        ownerToken: null,
+        fencingEpoch: 1,
+        idempotencyKey: null,
+        lastError: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      ownerToken: "test-owner",
+      fencingEpoch: 1,
+      signal: new AbortController().signal,
+    });
+
+    // Stale version must cancel turn and record event, but NOT generate AI reply
+    expect(mockTurnRepo.cancelTurn).toHaveBeenCalledWith(
+      "turn-18",
+      "Inbound version changed during scheduling"
+    );
     expect(mockEventRepo.recordEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "AI_CANCELLED_STALE",
+        conversationId: "conv-race-1",
         inboundVersion: 18,
       })
     );
-    // Should NOT have transitioned to THINKING
-    expect(mockConvRepo.updateStatus).not.toHaveBeenCalledWith("conv-race-1", "THINKING");
+    expect(mockAiGenerator.generateReply).not.toHaveBeenCalled();
   });
 
   it("aborts sender action and clears composer when conversation version changes right before sending", async () => {
@@ -118,58 +151,55 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       recordEvent: vi.fn().mockResolvedValue({}),
     } as unknown as EventRepository;
 
-    const mockSettingsRepo = {
-      getSettings: vi.fn().mockResolvedValue({
-        settings: { typingTargetWpmMin: 100, typingTargetWpmMax: 100 },
-      }),
-    } as unknown as SettingsRepository;
-
-    const mockLeaseManager = {
-      acquire: vi.fn().mockResolvedValue({ token: "lease-sender-1" }),
-      release: vi.fn().mockResolvedValue(true),
-    } as unknown as LeaseManager;
-
     const senderWorker = new SenderWorkerService(
       mockDb,
-      {} as Redis,
+      null,
       mockAdapter,
-      mockLeaseManager,
+      null,
       mockConvRepo,
-      {} as unknown as QueueRepository,
+      null,
       mockOutboundRepo,
       mockEventRepo,
-      mockSettingsRepo,
-      {} as unknown as IncidentRepository
+      { getSettings: vi.fn().mockResolvedValue({ settings: { maxConsecutiveAiReplies: 5 } }) } as unknown as SettingsRepository,
+      {} as unknown as IncidentRepository,
+      { updateStatus: vi.fn() } as unknown as JobRepository
     );
 
+    // Action has inboundVersion = 18
     await senderWorker.processAction({
-      actionId: "action-stale-test",
+      actionId: "action-race-1",
       channelAccountId: "personal-messenger",
       conversationId: "conv-race-2",
-      externalThreadRef: "https://www.facebook.com/messages/t/thread-2",
+      turnId: "turn-race-1",
       inboundVersion: 18,
-      responseIndex: 0,
-      text: "Tin nhắn trả lời version 18",
-      textHash: "hash18",
       actor: "AI",
-      claimToken: "claim-18",
-      fencingToken: 10,
-    });
+      text: "Chào bạn, đây là tin nhắn",
+      status: "QUEUED",
+      retryCount: 0,
+      createdAt: new Date(),
+    } as unknown as OutboundJobPayload);
 
-    // Should abort action
-    expect(mockOutboundRepo.updateStatus).toHaveBeenCalledWith(
-      "action-stale-test",
-      "ABORTED",
-      expect.objectContaining({
-        errorMessage: expect.stringContaining("New inbound received right before send"),
-      })
-    );
-
-    // Composer must be cleared
+    // Should open conversation and clear composer due to race
+    expect(mockAdapter.openConversation).toHaveBeenCalled();
     expect(mockAdapter.clearComposer).toHaveBeenCalled();
 
-    // sendDraft must NOT have been called!
+    // Should NOT have sent draft or confirmed
     expect(mockAdapter.sendDraft).not.toHaveBeenCalled();
     expect(mockOutboundRepo.confirmSent).not.toHaveBeenCalled();
+
+    // Status of outbound action must be set to ABORTED
+    expect(mockOutboundRepo.updateStatus).toHaveBeenCalledWith(
+      "action-race-1",
+      "ABORTED",
+      expect.anything()
+    );
+
+    // Event TYPING_ABORTED should be emitted
+    expect(mockEventRepo.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "TYPING_ABORTED",
+        conversationId: "conv-race-2",
+      })
+    );
   });
 });

@@ -12,149 +12,118 @@ services:
     volumes:
       - messenger_postgres_data:/var/lib/postgresql/data
     networks:
-      - messenger_net
+      - data
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1024M
+          pids: 100
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-messenger_user} -d ${POSTGRES_DB:-messenger_ai}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: messenger-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
-    volumes:
-      - messenger_redis_data:/data
-    networks:
-      - messenger_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   migrate:
-    image: ${CONTROL_PLANE_IMAGE:-messenger-control-plane:local}
+    image: ${CORE_IMAGE:-messenger-core:local}
     build:
       context: .
-      dockerfile: docker/Dockerfile.control-plane
+      dockerfile: docker/Dockerfile.core
     container_name: messenger-migrate
-    command: ["bun", "packages/db/dist/migrate.js"]
+    command: ["sh", "-c", "bun packages/db/dist/migrate.js && bun packages/db/dist/seed.js"]
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
     depends_on:
       postgres:
         condition: service_healthy
     networks:
-      - messenger_net
+      - data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  seed:
-    image: ${CONTROL_PLANE_IMAGE:-messenger-control-plane:local}
+  core:
+    image: ${CORE_IMAGE:-messenger-core:local}
     build:
       context: .
-      dockerfile: docker/Dockerfile.control-plane
-    container_name: messenger-seed
-    command: ["bun", "packages/db/dist/seed.js"]
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
-      DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - messenger_net
-    profiles:
-      - tools
-
-  control-plane:
-    image: ${CONTROL_PLANE_IMAGE:-messenger-control-plane:local}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.control-plane
-    container_name: messenger-control-plane
+      dockerfile: docker/Dockerfile.core
+    container_name: messenger-core
     restart: unless-stopped
-    stop_grace_period: 15s
-    ports:
-      - "127.0.0.1:3100:3000"
+    stop_grace_period: 30s
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 1024M
+          pids: 100
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       NODE_ENV: production
       PORT: 3000
       HOST: 0.0.0.0
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       SESSION_SECRET: ${SESSION_SECRET}
       INTERNAL_HMAC_SECRET: ${INTERNAL_HMAC_SECRET}
+      XAI_API_KEY: ${XAI_API_KEY}
+      XAI_BASE_URL: ${XAI_BASE_URL:-https://api.x.ai/v1}
+      XAI_MODEL: ${XAI_MODEL:-grok-4.5}
       CLOUDFLARE_ACCESS_TEAM_NAME: ${CLOUDFLARE_ACCESS_TEAM_NAME:-}
       CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
     networks:
-      - messenger_net
+      - edge
+      - app
+      - data
     healthcheck:
-      test: ["CMD-SHELL", "bun -e 'fetch(\"http://127.0.0.1:3000/health\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  scheduler:
-    image: ${SCHEDULER_IMAGE:-messenger-scheduler:local}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.scheduler
-    container_name: messenger-scheduler
-    restart: unless-stopped
-    stop_grace_period: 15s
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - messenger_net
-    healthcheck:
-      test: ["CMD-SHELL", "bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-
-  ai-worker:
-    image: ${AI_WORKER_IMAGE:-messenger-ai-worker:local}
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.ai-worker
-    container_name: messenger-ai-worker
-    restart: unless-stopped
-    stop_grace_period: 45s
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      SPACEXAI_API_KEY: ${SPACEXAI_API_KEY:-}
-      SPACEXAI_BASE_URL: ${SPACEXAI_BASE_URL:-https://api.spacexai.com/v1}
-      SPACEXAI_MODEL: ${SPACEXAI_MODEL:-spacex-chat-v1}
-      DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - messenger_net
-    healthcheck:
-      test: ["CMD-SHELL", "bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
+      test: ["CMD-SHELL", "bun -e 'fetch(\"http://127.0.0.1:3000/readyz\").then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))'"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -168,55 +137,97 @@ services:
     container_name: messenger-browser-agent
     restart: unless-stopped
     stop_grace_period: 30s
-    ports:
-      - "127.0.0.1:6081:6080"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    user: "1000:1000"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2048M
+          pids: 200
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       BROWSER_PROFILE_DIR: /app/browser_profile
       BROWSER_HEADLESS: "false"
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
+      CORE_API_URL: http://core:3000
+      INTERNAL_HMAC_SECRET: ${INTERNAL_HMAC_SECRET}
+      ENABLE_NOVNC: "false"
     volumes:
-      - messenger_browser_profile:/app/browser_profile
+      - messenger_browser_profile:/app/browser_profile:rw
+    tmpfs:
+      - /tmp:rw,nosuid,size=256m
+      - /dev/shm:rw,nosuid,size=1024m
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      core:
         condition: service_healthy
     networks:
-      - messenger_net
+      - app
+      - data
     healthcheck:
-      test: ["CMD-SHELL", "curl --fail --silent --max-time 5 http://127.0.0.1:6080/ >/dev/null && bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
+      test: ["CMD-SHELL", "bun -e 'const fs=require(\"fs\"); const t=Number(fs.readFileSync(\"/tmp/healthy\",\"utf8\")); if(isNaN(t)||Date.now()-t>30000) process.exit(1)'"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 15s
 
-  # Dedicated Cloudflare Tunnel for Messenger (Start with: docker compose up -d tunnel)
-  tunnel:
-    image: cloudflare/cloudflared:latest
-    container_name: messenger-tunnel
+  cloudflared:
+    image: cloudflare/cloudflared:2025.2.0
+    container_name: messenger-cloudflared
     restart: unless-stopped
-    profiles:
-      - tunnel
-    command:
-      - tunnel
-      - --no-autoupdate
-      - run
+    command: tunnel --no-autoupdate run
     environment:
       TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
     depends_on:
-      - control-plane
-      - browser-agent
+      core:
+        condition: service_healthy
     networks:
-      - messenger_net
+      - edge
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    init: true
+    cap_drop:
+      - ALL
+    user: "65532:65532"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+          pids: 50
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   messenger_postgres_data:
-  messenger_redis_data:
   messenger_browser_profile:
 
 networks:
-  messenger_net:
+  edge:
+    name: messenger_edge
+    driver: bridge
+  app:
+    name: messenger_app
+    internal: true
+    driver: bridge
+  data:
+    name: messenger_data
+    internal: true
     driver: bridge

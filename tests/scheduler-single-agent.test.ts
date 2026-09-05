@@ -1,45 +1,73 @@
 import { describe, it, expect, vi } from "vitest";
-import { LeaseManager } from "../packages/queue/src/lease.js";
-import type { Redis } from "ioredis";
+import { JobRepository, type Database } from "../packages/db/src/index.js";
 
 describe("Single Agent Leases and Fencing Tokens", () => {
   it("acquires lease with monotonic fencing token and blocks concurrent holder", async () => {
-    let currentLease: string | null = null;
-    let fencingCounter = 0;
+    let currentHolder: string | null = null;
+    let currentFencingEpoch = 0;
 
-    // Simulate Redis Lua script execution
-    const mockRedis = {
-      eval: vi.fn().mockImplementation(async (_script, _numKeys, key, fencingKey, token, ttlMs) => {
-        if (currentLease !== null) {
-          return null; // Already held
+    const mockDb = {
+      execute: vi.fn().mockImplementation(async () => {
+        // First call: worker-1 claims lease
+        if (currentHolder === null) {
+          currentFencingEpoch += 1;
+          currentHolder = "worker-1";
+          return {
+            rows: [
+              {
+                id: "job-single-agent-1",
+                channelAccountId: "personal-messenger",
+                queue: "default",
+                jobType: "ai",
+                payload: {},
+                status: "RUNNING",
+                priority: 0,
+                attempts: 1,
+                maxAttempts: 3,
+                availableAt: new Date(),
+                lockedUntil: new Date(Date.now() + 60000),
+                ownerToken: "worker-1",
+                fencingEpoch: currentFencingEpoch,
+                idempotencyKey: null,
+                lastError: null,
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              },
+            ],
+          };
         }
-        fencingCounter++;
-        currentLease = token;
-        return [token, fencingCounter];
+
+        // Subsequent call when already held: concurrent worker-2 gets empty result
+        return { rows: [] };
       }),
-      get: vi.fn().mockImplementation(async () => {
-        if (!currentLease) return null;
-        return JSON.stringify({ token: currentLease, fencingToken: fencingCounter });
-      }),
-    } as unknown as Redis;
+    } as unknown as Database;
 
-    const leaseManager = new LeaseManager(mockRedis);
+    const jobRepo = new JobRepository(mockDb);
 
-    // First worker acquires lease
-    const lease1 = await leaseManager.acquire("sender:personal-messenger", 30000);
-    expect(lease1).not.toBeNull();
-    expect(lease1?.token).toBeDefined();
-    expect(lease1?.fencingToken).toBe(1);
+    // 1. Worker 1 claims lease -> receives monotonic fencing token 1
+    const claimedJob1 = await jobRepo.claimNext({
+      ownerToken: "worker-1",
+      leaseDurationSeconds: 60,
+    });
+    expect(claimedJob1).not.toBeNull();
+    expect(claimedJob1?.ownerToken).toBe("worker-1");
+    expect(claimedJob1?.fencingEpoch).toBe(1);
 
-    // Second worker attempts to acquire the same lease concurrently -> must fail (null)
-    const lease2 = await leaseManager.acquire("sender:personal-messenger", 30000);
-    expect(lease2).toBeNull();
+    // 2. Worker 2 attempts concurrent claim -> returns null (blocked)
+    const claimedJob2 = await jobRepo.claimNext({
+      ownerToken: "worker-2",
+      leaseDurationSeconds: 60,
+    });
+    expect(claimedJob2).toBeNull();
 
-    // Verify fencing token validation
-    const isValidToken1 = await leaseManager.verifyFencing("sender:personal-messenger", 1);
-    expect(isValidToken1).toBe(true);
+    // 3. Heartbeat with matching ownerToken and valid fencingEpoch succeeds
+    mockDb.execute.mockResolvedValueOnce({ rows: [{ id: "job-single-agent-1" }] });
+    const heartbeatSuccess = await jobRepo.heartbeat("job-single-agent-1", "worker-1", 1, 60);
+    expect(heartbeatSuccess).toBe(true);
 
-    const isStaleToken = await leaseManager.verifyFencing("sender:personal-messenger", 0);
-    expect(isStaleToken).toBe(false);
+    // 4. Heartbeat with stale fencingEpoch or mismatched ownerToken is rejected
+    mockDb.execute.mockResolvedValueOnce({ rows: [] });
+    const heartbeatStale = await jobRepo.heartbeat("job-single-agent-1", "worker-1", 0, 60);
+    expect(heartbeatStale).toBe(false);
   });
 });

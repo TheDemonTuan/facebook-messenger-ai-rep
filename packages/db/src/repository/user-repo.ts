@@ -1,36 +1,70 @@
-import { eq, and, gt } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Database } from "../client.js";
-import { users, sessions } from "../schema/index.js";
-import { createHash } from "node:crypto";
+import { users } from "../schema/index.js";
+import type { UserRole } from "@messenger/contracts";
 
 export interface CreateUserParams {
   email: string;
-  passwordHash: string;
-  role?: "OWNER" | "OPERATOR";
-  totpSecret?: string | null;
-  totpEnabled?: boolean;
-  recoveryCodes?: string[];
+  name?: string | null;
+  role?: UserRole;
 }
 
 export class UserRepository {
   constructor(private db: Database) {}
 
-  async createUser(params: CreateUserParams) {
+  /**
+   * Idempotently resolves or creates a user authenticated via Cloudflare Access identity.
+   */
+  async findOrCreateFromCloudflare(identity: {
+    email: string;
+    name?: string | null;
+    role?: UserRole;
+  }): Promise<typeof users.$inferSelect> {
+    const cleanEmail = identity.email.toLowerCase().trim();
+    const now = new Date();
+
+    const [user] = await this.db
+      .insert(users)
+      .values({
+        email: cleanEmail,
+        name: identity.name || null,
+        role: identity.role || "OPERATOR",
+        lastSeenAt: now,
+      })
+      .onConflictDoUpdate({
+        target: users.email,
+        set: {
+          lastSeenAt: now,
+          ...(identity.name ? { name: identity.name } : {}),
+          updatedAt: now,
+        },
+      })
+      .returning();
+
+    if (!user) {
+      throw new Error(`Failed to resolve Cloudflare user for ${cleanEmail}`);
+    }
+    return user;
+  }
+
+  async createUser(params: CreateUserParams): Promise<typeof users.$inferSelect> {
     const [user] = await this.db
       .insert(users)
       .values({
         email: params.email.toLowerCase().trim(),
-        passwordHash: params.passwordHash,
-        role: params.role || "OWNER",
-        totpSecret: params.totpSecret || null,
-        totpEnabled: params.totpEnabled ?? false,
-        recoveryCodes: params.recoveryCodes || [],
+        name: params.name || null,
+        role: params.role || "OPERATOR",
+        lastSeenAt: new Date(),
       })
       .returning();
+
+    if (!user) {
+      throw new Error(`Failed to create user record for ${params.email}`);
+    }
     return user;
   }
 
-  async findByEmail(email: string) {
+  async findByEmail(email: string): Promise<typeof users.$inferSelect | null> {
     const rows = await this.db
       .select()
       .from(users)
@@ -39,7 +73,7 @@ export class UserRepository {
     return rows[0] || null;
   }
 
-  async findById(id: string) {
+  async findById(id: string): Promise<typeof users.$inferSelect | null> {
     const rows = await this.db
       .select()
       .from(users)
@@ -48,54 +82,23 @@ export class UserRepository {
     return rows[0] || null;
   }
 
-  async updateLastLogin(id: string) {
+  async updateRole(id: string, role: UserRole): Promise<typeof users.$inferSelect | null> {
+    const [updated] = await this.db
+      .update(users)
+      .set({ role, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return updated || null;
+  }
+
+  async updateLastSeen(id: string): Promise<void> {
     await this.db
       .update(users)
-      .set({ lastLoginAt: new Date(), updatedAt: new Date() })
+      .set({ lastSeenAt: new Date(), updatedAt: new Date() })
       .where(eq(users.id, id));
   }
 
-  async createSession(userId: string, token: string, expiresAt: Date, ipAddress?: string, userAgent?: string) {
-    const tokenHash = createHash("sha256").update(token).digest("hex");
-    const [session] = await this.db
-      .insert(sessions)
-      .values({
-        userId,
-        tokenHash,
-        expiresAt,
-        ipAddress: ipAddress || null,
-        userAgent: userAgent || null,
-      })
-      .returning();
-    return session;
-  }
-
-  async validateSession(token: string) {
-    const tokenHash = createHash("sha256").update(token).digest("hex");
-    const now = new Date();
-    const rows = await this.db
-      .select({
-        session: sessions,
-        user: users,
-      })
-      .from(sessions)
-      .innerJoin(users, eq(sessions.userId, users.id))
-      .where(
-        and(
-          eq(sessions.tokenHash, tokenHash),
-          gt(sessions.expiresAt, now)
-        )
-      )
-      .limit(1);
-
-    return rows[0] || null;
-  }
-
-  async revokeSession(sessionId: string) {
-    await this.db.delete(sessions).where(eq(sessions.id, sessionId));
-  }
-
-  async revokeAllUserSessions(userId: string) {
-    await this.db.delete(sessions).where(eq(sessions.userId, userId));
+  async listUsers(): Promise<Array<typeof users.$inferSelect>> {
+    return await this.db.select().from(users);
   }
 }

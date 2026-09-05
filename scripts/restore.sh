@@ -14,6 +14,7 @@ if [ ! -f "${BACKUP_FILE}" ]; then
 fi
 
 echo "WARNING: Restoring will overwrite database ${POSTGRES_DB:-messenger_ai}!"
+echo "NOTE: Facebook browser login profile (messenger_browser_profile) will NOT be touched."
 read -p "Are you sure you want to proceed? (yes/no): " CONFIRM
 if [ "${CONFIRM}" != "yes" ]; then
   echo "Restore aborted."
@@ -21,6 +22,6 @@ if [ "${CONFIRM}" != "yes" ]; then
 fi
 
 echo "Restoring from ${BACKUP_FILE}..."
-gunzip -c "${BACKUP_FILE}" | docker compose -f compose.prod.yml exec -T postgres psql -U "${POSTGRES_USER:-postgres}" -d "${POSTGRES_DB:-messenger_ai}"
+gunzip -c "${BACKUP_FILE}" | docker compose -f compose.prod.yml exec -T postgres psql -U "${POSTGRES_USER:-messenger_user}" -d "${POSTGRES_DB:-messenger_ai}"
 
 echo "Database restore completed successfully."

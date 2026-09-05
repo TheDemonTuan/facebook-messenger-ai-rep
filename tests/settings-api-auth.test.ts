@@ -1,60 +1,76 @@
 import { describe, it, expect, vi } from "vitest";
-import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
-import { getAiClient } from "../packages/ai/src/client.js";
-import Fastify from "../apps/control-plane/node_modules/fastify";
-import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
+import { SystemSettingsSchema, type SystemSettings } from "../packages/contracts/src/settings.js";
+import { getAiClient, resetAiClientCache } from "../packages/ai/src/client.js";
+import { EnvSchema, validateCoreProductionEnv } from "../packages/config/src/index.js";
+import Fastify from "fastify";
+import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
+import type {
+  Database,
+  QueueRepository,
+  SettingsRepository,
+  IncidentRepository,
+  EventRepository,
+  JobRepository,
+} from "../packages/db/src/index.js";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
-describe("Settings API Auth & Dynamic AI Client Configuration", () => {
-  it("SystemSettingsSchema validates and defaults aiBaseUrl and aiApiKey", () => {
+describe("Settings API & Server-Side xAI Configuration", () => {
+  it("SystemSettingsSchema does not store aiApiKey or aiBaseUrl and sets safe defaults", () => {
     const defaultSettings = SystemSettingsSchema.parse({});
-    expect(defaultSettings.aiBaseUrl).toBe("http://127.0.0.1:8000/v1");
-    expect(defaultSettings.aiApiKey).toBe("omniroute-default-key");
-    expect(defaultSettings.aiModel).toBe("gemini-3.7-flash-low");
+    expect((defaultSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((defaultSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
+    expect(defaultSettings.aiModel).toBe("grok-4.5");
 
     const customSettings = SystemSettingsSchema.parse({
-      aiBaseUrl: "https://api.openai.com/v1",
-      aiApiKey: "sk-custom-secret-key-12345",
-      aiModel: "gpt-4o-mini",
+      aiModel: "grok-beta",
     });
 
-    expect(customSettings.aiBaseUrl).toBe("https://api.openai.com/v1");
-    expect(customSettings.aiApiKey).toBe("sk-custom-secret-key-12345");
-    expect(customSettings.aiModel).toBe("gpt-4o-mini");
+    expect((customSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((customSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
+    expect(customSettings.aiModel).toBe("grok-beta");
   });
 
-  it("getAiClient dynamically switches baseURL and apiKey based on settings config", () => {
-    const clientA = getAiClient({
-      baseURL: "http://127.0.0.1:8000/v1",
-      apiKey: "key-a",
+  it("fails fast when the production core configuration is incomplete", () => {
+    const prodWithoutKey = EnvSchema.parse({
+      NODE_ENV: "production",
+      XAI_API_KEY: "",
     });
-    expect(clientA.baseURL).toBe("http://127.0.0.1:8000/v1");
-    expect(clientA.apiKey).toBe("key-a");
+    expect(() => validateCoreProductionEnv(prodWithoutKey)).toThrow("XAI_API_KEY");
 
-    const clientB = getAiClient({
-      baseURL: "https://my-custom-ai.com/v1",
-      apiKey: "key-b",
+    const prodWithKey = EnvSchema.parse({
+      NODE_ENV: "production",
+      XAI_API_KEY: "xai-test-secret-key-12345",
+      CLOUDFLARE_ACCESS_TEAM_NAME: "test-team",
+      CLOUDFLARE_ACCESS_AUD: "test-aud-12345",
+      ADMIN_EMAIL: "owner@example.com",
+      SESSION_SECRET: "super-secret-session-key-must-be-at-least-32-chars-long!",
+      INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
     });
-    expect(clientB.baseURL).toBe("https://my-custom-ai.com/v1");
-    expect(clientB.apiKey).toBe("key-b");
-
-    // Client caching works when identical
-    const clientB2 = getAiClient({
-      baseURL: "https://my-custom-ai.com/v1",
-      apiKey: "key-b",
-    });
-    expect(clientB2).toBe(clientB);
+    expect(() => validateCoreProductionEnv(prodWithKey)).not.toThrow();
   });
 
-  it("admin routes correctly update settings and handle test-ai endpoint", async () => {
+  it("getAiClient uses server-side xAI env and caches client", () => {
+    resetAiClientCache();
+    const clientA = getAiClient();
+    expect(clientA.baseURL).toBe("https://api.x.ai/v1");
+
+    const clientB = getAiClient();
+    expect(clientB).toBe(clientA);
+
+    resetAiClientCache();
+    const clientC = getAiClient();
+    expect(clientC).not.toBe(clientA);
+  });
+
+  it("admin routes correctly update settings without storing API keys or URLs", async () => {
     let storedSettings = SystemSettingsSchema.parse({
-      aiBaseUrl: "http://127.0.0.1:8000/v1",
-      aiApiKey: "initial-key",
+      aiModel: "grok-4.5",
     });
     let revision = 1;
 
     const mockSettingsRepo = {
       getSettings: vi.fn(async () => ({ settings: storedSettings, revision })),
-      updateSettings: vi.fn(async (_id: string, partial: any) => {
+      updateSettings: vi.fn(async (_id: string, partial: Partial<SystemSettings>) => {
         storedSettings = SystemSettingsSchema.parse({ ...storedSettings, ...partial });
         revision += 1;
         return { settings: storedSettings, revision };
@@ -72,17 +88,17 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
     const fastify = Fastify();
     await fastify.register(
       createAdminRoutes({
-        db: {} as any,
-        queueRepo: {} as any,
-        settingsRepo: mockSettingsRepo as any,
-        incidentRepo: {} as any,
-        eventRepo: mockEventRepo as any,
-        broadcaster: mockBroadcaster as any,
+        db: {} as unknown as Database,
+        queueRepo: {} as unknown as QueueRepository,
+        settingsRepo: mockSettingsRepo as unknown as SettingsRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        jobRepo: {} as unknown as JobRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
         requireAuth: async () => ({
           id: "u-1",
           email: "owner@example.com",
           role: "OWNER",
-          sessionId: "s-1",
         }),
         channelAccountId: "personal-messenger",
       })
@@ -95,25 +111,24 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
     });
     expect(getRes.statusCode).toBe(200);
     const getData = JSON.parse(getRes.body);
-    expect(getData.settings.aiBaseUrl).toBe("http://127.0.0.1:8000/v1");
-    expect(getData.settings.aiApiKey).toBe("initial-key");
+    expect((getData.settings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((getData.settings as Record<string, unknown>).aiApiKey).toBeUndefined();
+    expect(getData.settings.aiModel).toBe("grok-4.5");
 
-    // 2. PUT /api/settings updating API auth & model
+    // 2. PUT /api/settings
     const putRes = await fastify.inject({
       method: "PUT",
       url: "/api/settings",
       payload: {
-        aiBaseUrl: "https://gateway.example.com/v1",
-        aiApiKey: "sk-new-super-secret-key",
-        aiModel: "gemini-1.5-pro",
-        reason: "Updated AI API auth credentials from web UI",
+        aiModel: "grok-beta",
+        reason: "Updated AI model from web UI",
       },
     });
     expect(putRes.statusCode).toBe(200);
     const putData = JSON.parse(putRes.body);
-    expect(putData.settings.aiBaseUrl).toBe("https://gateway.example.com/v1");
-    expect(putData.settings.aiApiKey).toBe("sk-new-super-secret-key");
-    expect(putData.settings.aiModel).toBe("gemini-1.5-pro");
+    expect((putData.settings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((putData.settings as Record<string, unknown>).aiApiKey).toBeUndefined();
+    expect(putData.settings.aiModel).toBe("grok-beta");
     expect(putData.revision).toBe(2);
     expect(mockBroadcaster.broadcast).toHaveBeenCalledWith("settings:updated", { revision: 2 });
 
@@ -122,9 +137,7 @@ describe("Settings API Auth & Dynamic AI Client Configuration", () => {
       method: "POST",
       url: "/api/settings/test-ai",
       payload: {
-        aiBaseUrl: "http://127.0.0.1:9999/v1",
-        aiApiKey: "test-key",
-        aiModel: "test-model",
+        model: "test-model",
       },
     });
     expect(testRes.statusCode).toBe(200);

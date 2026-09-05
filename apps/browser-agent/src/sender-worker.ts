@@ -1,65 +1,145 @@
-import { Worker, type Job } from "bullmq";
 import type {
   Database,
   ConversationRepository,
-  QueueRepository,
   OutboundRepository,
   EventRepository,
   SettingsRepository,
   IncidentRepository,
+  JobExecutionContext,
+  Sql,
 } from "@messenger/db";
-import { channelAccounts } from "@messenger/db";
+import { channelAccounts, JobRepository, JobRunner } from "@messenger/db";
 import { eq } from "drizzle-orm";
-import type { ChannelAdapter } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker } from "@messenger/channel";
 import type { OutboundJobPayload } from "@messenger/contracts";
-import type { LeaseManager } from "@messenger/queue";
-import { QUEUE_NAMES } from "@messenger/queue";
-import type { Redis } from "ioredis";
+
+export interface ActiveTypingEntry {
+  abortController: AbortController;
+  inboundVersion: number;
+  actionId: string;
+  cancelAck?: () => void;
+}
 
 export class SenderWorkerService {
-  private worker: Worker<OutboundJobPayload> | null = null;
+  private jobRunner: JobRunner | null = null;
+  private jobRepo: JobRepository;
+  private sql: Sql | null = null;
+  private activeTypings = new Map<string, ActiveTypingEntry>();
+  private cancelAckCallbacks = new Map<string, Array<() => void>>();
 
   constructor(
     private db: Database,
-    private redis: Redis,
+    _redisOrUnused: unknown,
     private adapter: ChannelAdapter,
-    private leaseManager: LeaseManager,
+    _leaseOrUnused: unknown,
     private convRepo: ConversationRepository,
-    private queueRepo: QueueRepository,
+    _queueRepoOrUnused: unknown,
     private outboundRepo: OutboundRepository,
     private eventRepo: EventRepository,
     private settingsRepo: SettingsRepository,
-    private incidentRepo: IncidentRepository
-  ) {}
+    private incidentRepo: IncidentRepository,
+    customJobRepo?: JobRepository,
+    customSql?: Sql
+  ) {
+    this.jobRepo = customJobRepo || new JobRepository(db);
+    this.sql = customSql || null;
+  }
+
+  setSql(sql: Sql): void {
+    this.sql = sql;
+  }
+
+  /**
+   * Register a cancellation listener/acknowledgement callback for an actionId.
+   */
+  exposeCancelAck(actionId: string, callback: () => void): void {
+    const list = this.cancelAckCallbacks.get(actionId) || [];
+    list.push(callback);
+    this.cancelAckCallbacks.set(actionId, list);
+  }
+
+  private triggerCancelAck(actionId: string): void {
+    const list = this.cancelAckCallbacks.get(actionId);
+    if (list) {
+      for (const cb of list) {
+        try {
+          cb();
+        } catch {
+          // Cancellation acknowledgments are best-effort callbacks.
+        }
+      }
+      this.cancelAckCallbacks.delete(actionId);
+    }
+  }
+
+  /**
+   * Cancels active typing for a conversation if the incoming inboundVersion is strictly newer.
+   */
+  cancelActiveTyping(conversationId: string, newerInboundVersion: number): boolean {
+    const active = this.activeTypings.get(conversationId);
+    if (active && newerInboundVersion > active.inboundVersion) {
+      console.log(`[Sender Worker] Aborting active typing for conv ${conversationId} (current ver: ${active.inboundVersion}, new: ${newerInboundVersion})`);
+      active.abortController.abort();
+      active.cancelAck?.();
+      this.triggerCancelAck(active.actionId);
+      this.activeTypings.delete(conversationId);
+      return true;
+    }
+    return false;
+  }
 
   start(): void {
-    console.log("[Sender Worker] Starting sender worker with concurrency 1...");
+    console.log("[Sender Worker] Starting PostgreSQL foundation sender worker with concurrency 1...");
 
-    this.worker = new Worker<OutboundJobPayload>(
-      QUEUE_NAMES.BROWSER_ACTIONS,
-      async (job: Job<OutboundJobPayload>) => {
-        await this.processAction(job.data);
-      },
-      {
-        connection: this.redis,
-        concurrency: 1, // Strictly single sender execution per account
-      }
-    );
-
-    this.worker.on("error", (err) => {
-      console.error("[Sender Worker] Worker error:", err);
+    this.jobRunner = new JobRunner({
+      jobRepo: this.jobRepo,
+      queues: ["browser", "browser-actions"],
+      concurrency: 1, // Single sender execution per channel
+      pollIntervalMs: 250,
+      leaseDurationSeconds: 60,
+      heartbeatIntervalMs: 15000,
     });
+
+    const handler = async (ctx: JobExecutionContext) => {
+      const payload = ctx.job.payload as unknown as OutboundJobPayload;
+      await this.processAction(payload, ctx);
+    };
+
+    this.jobRunner.registerHandler("BROWSER_SEND", handler);
+    this.jobRunner.registerHandler("send-action", handler);
+
+    this.jobRunner.start();
+
+    // Listen on PostgreSQL NOTIFY for cancel typing across processes
+    if (this.sql && typeof this.sql.listen === "function") {
+      this.sql.listen("browser_cancel_typing", (payloadStr: string) => {
+        try {
+          const data = JSON.parse(payloadStr);
+          if (data?.conversationId && typeof data?.inboundVersion === "number") {
+            this.cancelActiveTyping(data.conversationId, data.inboundVersion);
+          }
+        } catch (err) {
+          console.warn("[Sender Worker] Failed to parse browser_cancel_typing notification:", err);
+        }
+      }).catch((err: unknown) => {
+        console.warn("[Sender Worker] Error subscribing to browser_cancel_typing:", err);
+      });
+    }
   }
 
   async stop(): Promise<void> {
-    if (this.worker) {
-      await this.worker.close();
-      this.worker = null;
+    if (this.jobRunner) {
+      await this.jobRunner.stop();
+      this.jobRunner = null;
     }
+    for (const [, entry] of this.activeTypings) {
+      entry.abortController.abort();
+    }
+    this.activeTypings.clear();
     console.log("[Sender Worker] Worker stopped.");
   }
 
-  async processAction(data: OutboundJobPayload): Promise<void> {
+  async processAction(data: OutboundJobPayload, ctx?: JobExecutionContext): Promise<void> {
     const {
       actionId,
       channelAccountId,
@@ -69,182 +149,317 @@ export class SenderWorkerService {
       responseIndex,
       text,
       textHash,
-      claimToken,
+      actor,
     } = data;
 
-    // 1. Acquire sender lease with fencing token
-    const senderLockKey = `sender:${channelAccountId}`;
-    const lease = await this.leaseManager.acquire(senderLockKey, 45000);
-    if (!lease) {
-      console.warn(`[Sender Worker] Could not acquire sender lock for channel: ${channelAccountId}`);
-      throw new Error("Sender lock unavailable");
-    }
+    const ownerToken = ctx?.ownerToken || data.ownerToken || data.claimToken || "browser-sender";
+    const fencingEpoch = ctx?.fencingEpoch ?? data.fencingEpoch ?? data.fencingToken ?? 0;
 
-    const abortController = new AbortController();
+    console.log(`[Sender Worker] Processing outbound action ${actionId} (conv=${conversationId}, v=${inboundVersion}, actor=${actor})`);
 
-    try {
-      // 2. Pre-check: Channel health and active state
-      const [channel] = await this.db
-        .select()
-        .from(channelAccounts)
-        .where(eq(channelAccounts.id, channelAccountId))
-        .limit(1);
+    // 1. Channel Account check: fail-closed if suspended or degraded
+    const channelRows = await this.db
+      .select({
+        id: channelAccounts.id,
+        status: channelAccounts.status,
+        isSuspended: channelAccounts.isSuspended,
+        isPaused: channelAccounts.isPaused,
+      })
+      .from(channelAccounts)
+      .where(eq(channelAccounts.id, channelAccountId))
+      .limit(1);
 
-      if (!channel || channel.isSuspended || channel.isPaused || channel.status !== "RUNNING") {
-        console.warn(`[Sender Worker] Channel is not RUNNING (${channel?.status}). Aborting action ${actionId}`);
-        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
-          errorMessage: `Channel status is ${channel?.status || "UNKNOWN"}`,
-        });
-        return;
-      }
-
-      // 3. Pre-check: Conversation inbound version
-      const convData = await this.convRepo.getConversationById(conversationId);
-      if (!convData || convData.conversation.inboundVersion !== inboundVersion) {
-        console.warn(
-          `[Sender Worker] Version mismatch for action ${actionId}: job=${inboundVersion}, conv=${convData?.conversation.inboundVersion}. Aborting.`
-        );
-        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
-          errorMessage: "New inbound received before typing",
-        });
-        await this.adapter.clearComposer();
-        return;
-      }
-
-      // 4. Update status to TYPING and start typing
-      await this.outboundRepo.updateStatus(actionId, "TYPING");
-      await this.eventRepo.recordEvent({
-        channelAccountId,
-        conversationId,
-        type: "TYPING_STARTED",
-        inboundVersion,
-        actor: "BROWSER_AGENT",
-        payload: { actionId, responseIndex },
-      });
-
-      const opened = await this.adapter.openConversation(externalThreadRef);
-      if (!opened) {
-        throw new Error(`Failed to navigate to conversation: ${externalThreadRef}`);
-      }
-
-      const { settings } = await this.settingsRepo.getSettings(channelAccountId);
-      // Wait for debounce to ensure no new inbound is arriving (debounceMs + safety buffer)
-      await new Promise((resolve) =>
-        setTimeout(resolve, settings.debounceMs + 1500)
-      );
-
-      const typingResult = await this.adapter.typeDraft(text, {
-        targetWpmMin: settings.typingTargetWpmMin,
-        targetWpmMax: settings.typingTargetWpmMax,
-        signal: abortController.signal,
-      });
-
-      if (typingResult.aborted) {
-        console.warn(`[Sender Worker] Typing was aborted for action ${actionId}`);
-        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
-          errorMessage: "Typing aborted via signal",
-        });
-        await this.eventRepo.recordEvent({
-          channelAccountId,
-          conversationId,
-          type: "TYPING_ABORTED",
-          inboundVersion,
-          actor: "BROWSER_AGENT",
-          payload: { actionId },
-        });
-        await this.adapter.clearComposer();
-        return;
-      }
-
-      // 5. Final check immediately before Send
-      const preSendConv = await this.convRepo.getConversationById(conversationId);
-      if (!preSendConv) {
-        throw new Error("Conversation disappeared before send");
-      }
-      if (preSendConv.conversation.inboundVersion !== inboundVersion) {
-        console.warn(`[Sender Worker] Aborting immediately before send: new inbound received!`);
-        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
-          errorMessage: "New inbound received right before send",
-        });
-        await this.adapter.clearComposer();
-        return;
-      }
-
-      // 6. Send
-      await this.outboundRepo.updateStatus(actionId, "SENDING");
-      await this.eventRepo.recordEvent({
-        channelAccountId,
-        conversationId,
-        type: "SEND_STARTED",
-        inboundVersion,
-        actor: "BROWSER_AGENT",
-        payload: { actionId },
-      });
-
-      const sendResult = await this.adapter.sendDraft(actionId);
-      if (!sendResult.sent) {
-        throw new Error(`Browser adapter sendDraft returned false for action ${actionId}`);
-      }
-
-      // 7. Post-send verification
-      const verifyResult = await this.adapter.verifySent(text, textHash, 12000);
-
-      if (verifyResult.verified) {
-        console.log(`[Sender Worker] Outbound action ${actionId} confirmed sent successfully.`);
-        await this.outboundRepo.confirmSent(actionId, verifyResult.messageRef);
-        await this.eventRepo.recordEvent({
-          channelAccountId,
-          conversationId,
-          type: "SEND_CONFIRMED",
-          inboundVersion,
-          actor: "BROWSER_AGENT",
-          payload: { actionId, messageRef: verifyResult.messageRef },
-        });
-
-        // Release conversation back to waiting customer or queue
-        await this.queueRepo.release(conversationId, claimToken, {
-          nextStatus: "WAITING_CUSTOMER",
-          stickyWindowMs: settings.stickyWindowMs,
-          keepInQueueForReply: true,
-        });
-
-        await this.eventRepo.recordEvent({
-          channelAccountId,
-          conversationId,
-          type: "CONVERSATION_RELEASED",
-          inboundVersion,
-          actor: "BROWSER_AGENT",
-          payload: { nextStatus: "WAITING_CUSTOMER" },
-        });
+    const channel = channelRows[0];
+    if (!channel || channel.isSuspended || channel.status === "SUSPENDED" || channel.status === "DEGRADED") {
+      console.warn(`[Sender Worker] Channel account ${channelAccountId} is suspended/degraded. Aborting action ${actionId}`);
+      if (this.outboundRepo.transitionStatus) {
+        await this.outboundRepo.transitionStatus(actionId, "PENDING", "CANCELLED", { ownerToken, fencingEpoch }).catch(() => {});
       } else {
-        // UNCONFIRMED SEND -> Trigger Circuit Breaker
-        console.error(`[Sender Worker] Outbound action ${actionId} UNCONFIRMED. Suspending channel.`);
-        await this.outboundRepo.updateStatus(actionId, "UNCONFIRMED", {
-          unconfirmedReason: "Outgoing bubble could not be verified in DOM within timeout",
-        });
-
-        await this.eventRepo.recordEvent({
-          channelAccountId,
-          conversationId,
-          type: "SEND_UNCONFIRMED",
-          inboundVersion,
-          actor: "BROWSER_AGENT",
-          payload: { actionId },
-        });
-
-        // Auto-suspend channel and create incident
-        await this.incidentRepo.createIncident({
-          channelAccountId,
-          conversationId,
-          outboundActionId: actionId,
-          type: "UNCONFIRMED_SEND",
-          title: "Unconfirmed Message Send",
-          description: `Message "${text.slice(0, 40)}..." was typed and sent, but outgoing bubble confirmation failed. Channel is suspended to prevent duplicate sends.`,
-          autoSuspendChannel: true,
+        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+          errorMessage: "Channel account is suspended or degraded",
+          ownerToken,
+          fencingEpoch,
         });
       }
-    } finally {
-      await this.leaseManager.release(senderLockKey, lease.token);
+      return;
     }
+
+    // 2. Conversation check & Stale inbound version check
+    const convData = await this.convRepo.getConversationById(conversationId);
+    if (!convData) {
+      console.error(`[Sender Worker] Conversation not found: ${conversationId}`);
+      return;
+    }
+
+    const currentVersion = convData.conversation.inboundVersion;
+    if (currentVersion > inboundVersion) {
+      console.warn(`[Sender Worker] Inbound version mismatch for ${actionId}: DB has v${currentVersion}, action has v${inboundVersion}. Aborting stale action.`);
+      if (this.outboundRepo.transitionStatus) {
+        await this.outboundRepo.transitionStatus(actionId, "PENDING", "CANCELLED", { ownerToken, fencingEpoch }).catch(() => {});
+      }
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: `Stale version: DB is at ${currentVersion}, action was created for ${inboundVersion}`,
+        ownerToken,
+        fencingEpoch,
+      });
+
+      await this.eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_CANCELLED_STALE",
+        inboundVersion,
+        actor: "BROWSER_AGENT",
+        payload: { actionId, expectedVersion: inboundVersion, currentVersion },
+      });
+      return;
+    }
+
+    // Check manual mode takeover for AI actions
+    if (actor === "AI" && convData.conversation.manualMode) {
+      console.warn(`[Sender Worker] Conversation ${conversationId} is in manual mode. Aborting AI action.`);
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: "Conversation is in manual mode; AI outbound action cancelled",
+        ownerToken,
+        fencingEpoch,
+      });
+      return;
+    }
+
+    // 3. Validate thread navigation in sender page
+    const threadOpened = await this.adapter.openConversation(externalThreadRef);
+    if (!threadOpened) {
+      console.error(`[Sender Worker] Failed to open thread: ${externalThreadRef}`);
+      await this.outboundRepo.updateStatus(actionId, "FAILED", {
+        errorMessage: `Failed to open conversation thread: ${externalThreadRef}`,
+        ownerToken,
+        fencingEpoch,
+      });
+      return;
+    }
+
+    // 4. Capture pre-send marker to verify delivery strictly after marker
+    let preSendMarker: PreSendMarker | string | undefined;
+    if (typeof this.adapter.capturePreSendMarker === "function") {
+      preSendMarker = await this.adapter.capturePreSendMarker(externalThreadRef);
+    }
+
+    // 5. Transition action state PENDING -> TYPING
+    const typingAction = this.outboundRepo.transitionStatus
+      ? await this.outboundRepo.transitionStatus(actionId, "PENDING", "TYPING", { ownerToken, fencingEpoch })
+      : await this.outboundRepo.updateStatus(actionId, "TYPING", { ownerToken, fencingEpoch });
+
+    if (!typingAction) {
+      console.warn(`[Sender Worker] Failed to transition action ${actionId} to TYPING (may have been cancelled or superseded).`);
+      return;
+    }
+
+    await this.eventRepo.recordEvent({
+      channelAccountId,
+      conversationId,
+      type: "TYPING_STARTED",
+      inboundVersion,
+      actor,
+      payload: { actionId, responseIndex },
+    });
+
+    // Setup local AbortController combined with job context abort signal
+    const typingAbortController = new AbortController();
+    if (ctx?.signal) {
+      ctx.signal.addEventListener("abort", () => typingAbortController.abort(), { once: true });
+    }
+
+    let ackCalled = false;
+    const cancelAck = () => {
+      if (!ackCalled) {
+        ackCalled = true;
+        this.triggerCancelAck(actionId);
+      }
+    };
+
+    this.activeTypings.set(conversationId, {
+      abortController: typingAbortController,
+      inboundVersion,
+      actionId,
+      cancelAck,
+    });
+
+    // 6. Type draft with human-like pacing & abortable signal
+    const settings = await this.settingsRepo.getSettings(channelAccountId);
+    const typingResult = await this.adapter.typeDraft(text, {
+      targetWpmMin: settings.settings.typingTargetWpmMin,
+      targetWpmMax: settings.settings.typingTargetWpmMax,
+      signal: typingAbortController.signal,
+    });
+
+    if (typingResult.aborted) {
+      console.warn(`[Sender Worker] Typing was aborted for action ${actionId}`);
+      await this.adapter.clearComposer();
+      this.activeTypings.delete(conversationId);
+      cancelAck();
+
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: "Typing aborted due to newer inbound message or cancellation signal",
+        ownerToken,
+        fencingEpoch,
+      });
+
+      await this.eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "TYPING_ABORTED",
+        inboundVersion,
+        actor,
+        payload: { actionId, reason: "typing_aborted_by_signal" },
+      });
+      return;
+    }
+
+    // 7. Verify version right before Enter to guard against late races
+    const preSendCheck = await this.convRepo.getConversationById(conversationId);
+    if (preSendCheck && preSendCheck.conversation.inboundVersion > inboundVersion) {
+      console.warn(`[Sender Worker] Stale inbound version detected right before send: expected v${inboundVersion}, found v${preSendCheck.conversation.inboundVersion}`);
+      await this.adapter.clearComposer();
+      this.activeTypings.delete(conversationId);
+      cancelAck();
+
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: "New inbound received right before send",
+        ownerToken,
+        fencingEpoch,
+      });
+
+      await this.eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "TYPING_ABORTED",
+        inboundVersion,
+        actor,
+        payload: { actionId, reason: "inbound_bumped_pre_enter" },
+      });
+      return;
+    }
+
+    // 8. Atomic CAS TYPING -> SEND_INTENT immediately before Enter
+    let casSendIntentSuccess = true;
+    if (this.outboundRepo.transitionStatus) {
+      const sendIntentAction = await this.outboundRepo.transitionStatus(
+        actionId,
+        "TYPING",
+        "SEND_INTENT",
+        { ownerToken, fencingEpoch }
+      );
+      if (!sendIntentAction) {
+        casSendIntentSuccess = false;
+      }
+    } else {
+      await this.outboundRepo.updateStatus(actionId, "SEND_INTENT", { ownerToken, fencingEpoch });
+    }
+
+    if (!casSendIntentSuccess) {
+      console.warn(`[Sender Worker] CAS transition TYPING -> SEND_INTENT failed for action ${actionId}. Aborting Enter.`);
+      await this.adapter.clearComposer();
+      this.activeTypings.delete(conversationId);
+      cancelAck();
+      return;
+    }
+
+    await this.eventRepo.recordEvent({
+      channelAccountId,
+      conversationId,
+      type: "SEND_INTENT",
+      inboundVersion,
+      actor,
+      payload: { actionId },
+    });
+
+    // 9. Press Enter
+    console.log(`[Sender Worker] Pressing Enter for action ${actionId}...`);
+    const sendResult = await this.adapter.sendDraft(actionId);
+    this.activeTypings.delete(conversationId);
+
+    // 10. Verification: wait for outgoing bubble appearing after preSendMarker
+    const verifyTimeoutMs = 10000;
+    const verifyResult = await this.adapter.verifySent(
+      text,
+      textHash,
+      preSendMarker,
+      verifyTimeoutMs
+    );
+
+    if (sendResult.sent && verifyResult.verified && verifyResult.messageRef) {
+      // Send CONFIRMED!
+      console.log(`[Sender Worker] Message delivery confirmed: ${verifyResult.messageRef}`);
+      await this.outboundRepo.confirmSent(actionId, verifyResult.messageRef, { ownerToken, fencingEpoch });
+
+      await this.eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "SEND_CONFIRMED",
+        inboundVersion,
+        actor,
+        payload: { actionId, messageRef: verifyResult.messageRef },
+      });
+
+      await this.convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+      return;
+    }
+
+    // 11. Uncertainty after Enter => SEND_UNCERTAIN + suspend + incident, NO RETRY!
+    console.error(`[Sender Worker] Outbound action ${actionId} unconfirmed after Enter was pressed! Entering SEND_UNCERTAIN fail-closed.`);
+
+    if (this.outboundRepo.markSendUncertain) {
+      await this.outboundRepo.markSendUncertain(
+        actionId,
+        "Message send could not be verified after Enter key was pressed",
+        { ownerToken, fencingEpoch }
+      );
+    } else {
+      await this.outboundRepo.updateStatus(actionId, "SEND_UNCERTAIN", {
+        unconfirmedReason: "Message send could not be verified after Enter key was pressed",
+        ownerToken,
+        fencingEpoch,
+      });
+    }
+
+    await this.eventRepo.recordEvent({
+      channelAccountId,
+      conversationId,
+      type: "SEND_UNCERTAIN",
+      inboundVersion,
+      actor,
+      payload: { actionId, reason: "verification_timeout_after_enter" },
+    });
+
+    // Suspend channel account fail-closed
+    await this.db
+      .update(channelAccounts)
+      .set({
+        isSuspended: true,
+        status: "SUSPENDED",
+        statusReason: `Uncertain outbound delivery for action ${actionId} - suspended pending operator check`,
+        updatedAt: new Date(),
+      })
+      .where(eq(channelAccounts.id, channelAccountId));
+
+    // Create incident
+    await this.incidentRepo.createIncident({
+      channelAccountId,
+      conversationId,
+      outboundActionId: actionId,
+      type: "SEND_UNCERTAIN",
+      title: `Action ${actionId} entered SEND_UNCERTAIN after Enter was pressed`,
+      description: "Verification timed out after Enter key was pressed; fail-closed without retry",
+      metadata: {
+        actionId,
+        textHash,
+        inboundVersion,
+        responseIndex,
+        actor,
+        error: "Verification timed out post-Enter",
+      },
+      autoSuspendChannel: true,
+    });
+
+    // Terminate without retry ("không retry")
   }
 }

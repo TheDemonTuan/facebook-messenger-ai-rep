@@ -10,25 +10,35 @@
   ],
   "scripts": {
     "build": "bun run --filter='!@messenger/dashboard' build && bun run --filter='@messenger/dashboard' build",
-    "test": "vitest run",
+    "test": "bun run --filter='!@messenger/dashboard' build && bunx vitest run --exclude tests/postgres-acceptance.test.ts",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "typecheck": "bun run --workspaces typecheck",
-    "lint": "eslint .",
+    "test:coverage": "bun run --filter='!@messenger/dashboard' build && vitest run --coverage",
+    "typecheck": "bun run --filter='!@messenger/dashboard' build && bun run --workspaces typecheck",
+    "lint": "eslint . --max-warnings=0",
+    "test:postgres-acceptance": "bun run --filter='!@messenger/dashboard' build && vitest run tests/postgres-acceptance.test.ts",
+    "test:dashboard-acceptance": "bun run --filter=@messenger/dashboard build && bun run scripts/dashboard-browser-acceptance.ts",
     "db:generate": "bun run --filter=@messenger/db db:generate",
     "db:migrate": "bun run --filter=@messenger/db db:migrate",
     "db:seed": "bun run --filter=@messenger/db db:seed",
-    "dev:control-plane": "bun run --filter=@messenger/control-plane dev",
-    "dev:scheduler": "bun run --filter=@messenger/scheduler dev",
-    "dev:ai-worker": "bun run --filter=@messenger/ai-worker dev",
+    "build:core": "bun run --filter=@messenger/core build",
+    "start:core": "bun run --filter=@messenger/core start",
+    "dev:core": "bun run --filter=@messenger/core dev",
     "dev:browser-agent": "bun run --filter=@messenger/browser-agent dev",
     "dev:dashboard": "bun run --filter=@messenger/dashboard dev"
   },
+  "overrides": {
+    "esbuild": "^0.25.0"
+  },
   "devDependencies": {
+    "@eslint/js": "^9.20.0",
     "@types/node": "^26.4.1",
     "drizzle-orm": "^0.45.2",
+    "eslint": "^9.20.0",
+    "fastify": "^5.12.3",
+    "globals": "^17.12.0",
     "tsx": "^4.23.13",
-    "typescript": "^7.0.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "^8.24.0",
     "vitest": "^5.0.0"
   },
   "packageManager": "bun@1.4.1"

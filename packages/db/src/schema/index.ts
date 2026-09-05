@@ -12,53 +12,36 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-// 1. Users
+// 1. Users (Cloudflare Identity - no password/TOTP/sessions)
 export const users = pgTable(
   "users",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     email: text("email").notNull().unique(),
-    passwordHash: text("password_hash").notNull(),
-    role: varchar("role", { length: 32 }).notNull().default("OWNER"), // OWNER | OPERATOR
-    totpSecret: text("totp_secret"),
-    totpEnabled: boolean("totp_enabled").notNull().default(false),
-    recoveryCodes: jsonb("recovery_codes").$type<string[]>().default([]),
-    lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    name: text("name"),
+    role: varchar("role", { length: 32 }).notNull().default("OPERATOR"), // OWNER | OPERATOR | VIEWER
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   }
 );
 
-// 2. Sessions
-export const sessions = pgTable(
-  "sessions",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    tokenHash: text("token_hash").notNull().unique(),
-    ipAddress: text("ip_address"),
-    userAgent: text("user_agent"),
-    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (t) => [
-    index("sessions_user_id_idx").on(t.userId),
-    index("sessions_expires_at_idx").on(t.expiresAt),
-  ]
-);
-
-// 3. Channel Accounts
+// 2. Channel Accounts (with runtime fields)
 export const channelAccounts = pgTable(
   "channel_accounts",
   {
     id: varchar("id", { length: 64 }).primaryKey(), // "personal-messenger"
     name: text("name").notNull(),
     type: varchar("type", { length: 32 }).notNull().default("PERSONAL_MESSENGER"),
-    status: varchar("status", { length: 32 }).notNull().default("RUNNING"), // RUNNING | PAUSED | SUSPENDED | ERROR
+    status: varchar("status", { length: 32 }).notNull().default("RUNNING"), // RUNNING | PAUSED | SUSPENDED | DEGRADED | ERROR
     statusReason: text("status_reason"),
     isSuspended: boolean("is_suspended").notNull().default(false),
     isPaused: boolean("is_paused").notNull().default(false),
+    // Runtime fields
+    activeTurnId: uuid("active_turn_id"),
+    currentOwnerToken: text("current_owner_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    fencingEpoch: integer("fencing_epoch").notNull().default(0),
     lastHealthCheckAt: timestamp("last_health_check_at", { withTimezone: true }),
     lastSeenActiveAt: timestamp("last_seen_active_at", { withTimezone: true }),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
@@ -67,7 +50,7 @@ export const channelAccounts = pgTable(
   }
 );
 
-// 4. Customers
+// 3. Customers
 export const customers = pgTable(
   "customers",
   {
@@ -87,7 +70,7 @@ export const customers = pgTable(
   ]
 );
 
-// 5. Conversations
+// 4. Conversations
 export const conversations = pgTable(
   "conversations",
   {
@@ -121,7 +104,33 @@ export const conversations = pgTable(
   ]
 );
 
-// 6. Messages
+// 5. Inbound Messages (stable uniqueness inbox deduplication)
+export const inboundMessages = pgTable(
+  "inbound_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    sourceMessageId: text("source_message_id").notNull(),
+    senderExternalId: text("sender_external_id"),
+    text: text("text").notNull(),
+    textHash: varchar("text_hash", { length: 64 }).notNull(),
+    inboundVersion: integer("inbound_version").notNull().default(1),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+    rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("inbound_messages_channel_src_msg_uniq").on(t.channelAccountId, t.sourceMessageId),
+    index("inbound_messages_conv_received_idx").on(t.conversationId, t.receivedAt),
+  ]
+);
+
+// 6. Messages (timeline messages)
 export const messages = pgTable(
   "messages",
   {
@@ -149,7 +158,65 @@ export const messages = pgTable(
   ]
 );
 
-// 7. Conversation Queue
+// 7. Turns (explicit turn lifecycle)
+export const turns = pgTable(
+  "turns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    inboundVersion: integer("inbound_version").notNull(),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING | THINKING | DRAFT_READY | COMPLETED | FAILED | CANCELLED
+    ownerToken: text("owner_token"),
+    fencingEpoch: integer("fencing_epoch").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true }),
+    completedAt: timestamp("completed_at", { withTimezone: true }),
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("turns_conv_version_uniq").on(t.conversationId, t.inboundVersion),
+    index("turns_channel_status_idx").on(t.channelAccountId, t.status),
+  ]
+);
+
+// 8. Jobs (PostgreSQL durable jobs with FOR UPDATE SKIP LOCKED)
+export const jobs = pgTable(
+  "jobs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    queue: varchar("queue", { length: 64 }).notNull().default("default"),
+    jobType: varchar("job_type", { length: 64 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    status: varchar("status", { length: 32 }).notNull().default("READY"), // READY | RUNNING | RETRY_WAIT | SUCCEEDED | FAILED | CANCELLED
+    priority: integer("priority").notNull().default(0),
+    attempts: integer("attempts").notNull().default(0),
+    maxAttempts: integer("max_attempts").notNull().default(3),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+    lockedUntil: timestamp("locked_until", { withTimezone: true }),
+    ownerToken: text("owner_token"),
+    fencingEpoch: integer("fencing_epoch").notNull().default(0),
+    idempotencyKey: text("idempotency_key"),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("jobs_queue_status_available_idx").on(t.queue, t.status, t.availableAt, t.priority),
+    uniqueIndex("jobs_idempotency_key_uniq").on(t.idempotencyKey),
+  ]
+);
+
+// 9. Conversation Queue (legacy queue compatibility)
 export const conversationQueue = pgTable(
   "conversation_queue",
   {
@@ -176,11 +243,10 @@ export const conversationQueue = pgTable(
   (t) => [
     uniqueIndex("conversation_queue_conv_uniq").on(t.conversationId),
     index("conversation_queue_ready_at_idx").on(t.channelAccountId, t.readyAt),
-    index("conversation_queue_claim_token_idx").on(t.claimToken),
   ]
 );
 
-// 8. Conversation Events (append-only)
+// 10. Conversation Events (append-only audit log)
 export const conversationEvents = pgTable(
   "conversation_events",
   {
@@ -201,7 +267,7 @@ export const conversationEvents = pgTable(
   ]
 );
 
-// 9. AI Runs
+// 11. AI Runs
 export const aiRuns = pgTable(
   "ai_runs",
   {
@@ -219,17 +285,19 @@ export const aiRuns = pgTable(
     totalTokens: integer("total_tokens").notNull().default(0),
     latencyMs: integer("latency_ms").notNull().default(0),
     status: varchar("status", { length: 32 }).notNull(), // SUCCESS | STALE_ABORTED | GUARD_REJECTED | ERROR
-    rawResponse: text("raw_response"),
+    promptHash: varchar("prompt_hash", { length: 64 }),
+    responseHash: varchar("response_hash", { length: 64 }),
     parsedOutput: jsonb("parsed_output").$type<Record<string, unknown>>(),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index("ai_runs_conv_version_idx").on(t.conversationId, t.inboundVersion),
+    index("ai_runs_conv_idx").on(t.conversationId, t.createdAt),
+    index("ai_runs_created_idx").on(t.createdAt),
   ]
 );
 
-// 10. AI Drafts
+// 12. AI Drafts
 export const aiDrafts = pgTable(
   "ai_drafts",
   {
@@ -252,7 +320,7 @@ export const aiDrafts = pgTable(
   ]
 );
 
-// 11. Outbound Actions
+// 13. Outbound Actions (explicit state machine including SEND_UNCERTAIN)
 export const outboundActions = pgTable(
   "outbound_actions",
   {
@@ -263,15 +331,18 @@ export const outboundActions = pgTable(
     conversationId: uuid("conversation_id")
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
+    turnId: uuid("turn_id").references(() => turns.id, { onDelete: "set null" }),
     actionId: varchar("action_id", { length: 128 }).notNull().unique(), // sha256(channelAccountId + conversationId + inboundVersion + responseIndex)
     inboundVersion: integer("inbound_version").notNull(),
     responseIndex: integer("response_index").notNull().default(0),
     text: text("text").notNull(),
     textHash: varchar("text_hash", { length: 64 }).notNull(),
     actor: varchar("actor", { length: 32 }).notNull().default("AI"),
-    status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING | TYPING | SENDING | SENT | ABORTED | UNCONFIRMED | FAILED
+    status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING | TYPING | SEND_INTENT | CONFIRMED | SEND_UNCERTAIN | RETRY_APPROVED | CANCELLED | FAILED
     claimToken: text("claim_token"),
+    ownerToken: text("owner_token"),
     fencingToken: integer("fencing_token"),
+    fencingEpoch: integer("fencing_epoch").notNull().default(0),
     retryCount: integer("retry_count").notNull().default(0),
     externalMessageRef: text("external_message_ref"),
     unconfirmedReason: text("unconfirmed_reason"),
@@ -279,6 +350,7 @@ export const outboundActions = pgTable(
     startedTypingAt: timestamp("started_typing_at", { withTimezone: true }),
     startedSendingAt: timestamp("started_sending_at", { withTimezone: true }),
     confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -288,7 +360,7 @@ export const outboundActions = pgTable(
   ]
 );
 
-// 12. Browser Events
+// 14. Browser Events
 export const browserEvents = pgTable(
   "browser_events",
   {
@@ -306,7 +378,7 @@ export const browserEvents = pgTable(
   ]
 );
 
-// 13. Incidents
+// 15. Incidents (no secrets/API keys stored)
 export const incidents = pgTable(
   "incidents",
   {
@@ -316,7 +388,7 @@ export const incidents = pgTable(
       .references(() => channelAccounts.id, { onDelete: "cascade" }),
     conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
     outboundActionId: uuid("outbound_action_id").references(() => outboundActions.id, { onDelete: "set null" }),
-    type: varchar("type", { length: 64 }).notNull(), // DOM_CHANGED | CHECKPOINT | UNCONFIRMED_SEND | RATE_LIMITED | CHANNEL_SUSPENDED | AI_ERROR | SYSTEM_ERROR
+    type: varchar("type", { length: 64 }).notNull(),
     status: varchar("status", { length: 32 }).notNull().default("OPEN"), // OPEN | ACKNOWLEDGED | RESOLVED
     title: text("title").notNull(),
     description: text("description").notNull(),
@@ -332,7 +404,7 @@ export const incidents = pgTable(
   ]
 );
 
-// 14. Settings
+// 16. Settings (no API keys)
 export const settings = pgTable(
   "settings",
   {
@@ -347,7 +419,7 @@ export const settings = pgTable(
   }
 );
 
-// 15. Setting Revisions
+// 17. Setting Revisions (no API keys)
 export const settingRevisions = pgTable(
   "setting_revisions",
   {
@@ -366,7 +438,7 @@ export const settingRevisions = pgTable(
   ]
 );
 
-// 16. System Metrics
+// 18. System Metrics
 export const systemMetrics = pgTable(
   "system_metrics",
   {
@@ -374,17 +446,53 @@ export const systemMetrics = pgTable(
     channelAccountId: varchar("channel_account_id", { length: 64 })
       .notNull()
       .references(() => channelAccounts.id, { onDelete: "cascade" }),
-    metricName: varchar("metric_name", { length: 64 }).notNull(),
-    value: integer("value").notNull(),
-    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
-    recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull().defaultNow(),
+    metricKey: varchar("metric_key", { length: 64 }).notNull(),
+    metricValue: integer("metric_value").notNull(),
+    dimensions: jsonb("dimensions").$type<Record<string, string>>().default({}),
+    timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index("system_metrics_name_recorded_idx").on(t.channelAccountId, t.metricName, t.recordedAt),
+    index("system_metrics_key_idx").on(t.channelAccountId, t.metricKey, t.timestamp),
+  ]
+);
+
+// 19. Outbox Events (transactional outbox)
+export const outboxEvents = pgTable(
+  "outbox_events",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "set null" }),
+    eventType: varchar("event_type", { length: 64 }).notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull().default({}),
+    status: varchar("status", { length: 32 }).notNull().default("PENDING"), // PENDING | PROCESSED | FAILED
+    attempts: integer("attempts").notNull().default(0),
+    availableAt: timestamp("available_at", { withTimezone: true }).notNull().defaultNow(),
+    processedAt: timestamp("processed_at", { withTimezone: true }),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("outbox_status_available_idx").on(t.status, t.availableAt),
+    index("outbox_channel_created_idx").on(t.channelAccountId, t.createdAt),
   ]
 );
 
 // Relations
+export const channelAccountsRelations = relations(channelAccounts, ({ many }) => ({
+  customers: many(customers),
+  conversations: many(conversations),
+  messages: many(messages),
+  inboundMessages: many(inboundMessages),
+  turns: many(turns),
+  jobs: many(jobs),
+  outboundActions: many(outboundActions),
+  incidents: many(incidents),
+  outboxEvents: many(outboxEvents),
+}));
+
 export const customersRelations = relations(customers, ({ one, many }) => ({
   channelAccount: one(channelAccounts, {
     fields: [customers.channelAccountId],
@@ -403,23 +511,28 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
     references: [customers.id],
   }),
   messages: many(messages),
-  queue: one(conversationQueue),
+  inboundMessages: many(inboundMessages),
+  turns: many(turns),
+  outboundActions: many(outboundActions),
   events: many(conversationEvents),
   aiRuns: many(aiRuns),
-  aiDrafts: many(aiDrafts),
+}));
+
+export const turnsRelations = relations(turns, ({ one, many }) => ({
+  conversation: one(conversations, {
+    fields: [turns.conversationId],
+    references: [conversations.id],
+  }),
   outboundActions: many(outboundActions),
 }));
 
-export const messagesRelations = relations(messages, ({ one }) => ({
+export const outboundActionsRelations = relations(outboundActions, ({ one }) => ({
   conversation: one(conversations, {
-    fields: [messages.conversationId],
+    fields: [outboundActions.conversationId],
     references: [conversations.id],
   }),
-}));
-
-export const conversationQueueRelations = relations(conversationQueue, ({ one }) => ({
-  conversation: one(conversations, {
-    fields: [conversationQueue.conversationId],
-    references: [conversations.id],
+  turn: one(turns, {
+    fields: [outboundActions.turnId],
+    references: [turns.id],
   }),
 }));

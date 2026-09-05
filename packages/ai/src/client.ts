@@ -2,18 +2,27 @@ import OpenAI from "openai";
 import { getEnv } from "@messenger/config";
 
 export interface AiClientConfig {
-  baseURL?: string;
-  apiKey?: string;
   timeoutMs?: number;
 }
 
 let cachedClient: { client: OpenAI; baseURL: string; apiKey: string; timeout: number } | null = null;
 
+export function resetAiClientCache(): void {
+  cachedClient = null;
+}
+
 export function getAiClient(config?: AiClientConfig): OpenAI {
   const env = getEnv();
-  const baseURL = config?.baseURL || env.OMNIROUTE_BASE_URL;
-  const apiKey = config?.apiKey || env.OMNIROUTE_API_KEY;
+  // Server-side xAI configuration only
+  const baseURL = env.XAI_BASE_URL;
+  const rawApiKey = env.XAI_API_KEY || "";
   const timeout = config?.timeoutMs || 30000;
+
+  if (env.NODE_ENV === "production" && (!rawApiKey || rawApiKey.trim() === "")) {
+    throw new Error("Missing XAI_API_KEY: Server-side AI configuration is required in production.");
+  }
+
+  const apiKey = rawApiKey || "xai-dummy-dev-key";
 
   if (
     cachedClient &&
@@ -34,18 +43,53 @@ export function getAiClient(config?: AiClientConfig): OpenAI {
   return client;
 }
 
-export async function checkAiHealth(config?: {
-  baseURL?: string;
-  apiKey?: string;
+export interface AiHealthCheckResult {
+  ok: boolean;
+  healthy: boolean;
+  status: "healthy" | "unhealthy";
+  message: string;
   model?: string;
-}): Promise<{ ok: boolean; message: string }> {
-  const client = getAiClient(config);
-  const model = config?.model || getEnv().DEFAULT_AI_MODEL;
+  latencyMs?: number;
+  error?: string;
+}
+
+export async function checkAiHealth(config?: {
+  model?: string;
+  timeoutMs?: number;
+}): Promise<AiHealthCheckResult> {
+  const env = getEnv();
+  const model = config?.model || env.XAI_MODEL;
+  const start = Date.now();
+
+  let client: OpenAI;
+  try {
+    client = getAiClient({ timeoutMs: config?.timeoutMs });
+  } catch (err: unknown) {
+    const error = err as Error;
+    return {
+      ok: false,
+      healthy: false,
+      status: "unhealthy",
+      model,
+      latencyMs: Date.now() - start,
+      message: `AI client initialization failed: ${error.message || "Unknown error"}`,
+      error: error.message,
+    };
+  }
+
   try {
     // Attempt smoke call or list models
     const models = await client.models.list();
     const count = models.data?.length || 0;
-    return { ok: true, message: `Connected to AI gateway (${count} models available)` };
+    const latencyMs = Date.now() - start;
+    return {
+      ok: true,
+      healthy: true,
+      status: "healthy",
+      model,
+      latencyMs,
+      message: `Connected to AI gateway (${count} models available)`,
+    };
   } catch (err: unknown) {
     const error = err as Error;
     // If /v1/models is not supported, run a minimal completion test
@@ -56,12 +100,38 @@ export async function checkAiHealth(config?: {
         max_tokens: 5,
       });
       if (completion.choices?.[0]) {
-        return { ok: true, message: `Connected to AI gateway via smoke test (model: ${model})` };
+        const latencyMs = Date.now() - start;
+        return {
+          ok: true,
+          healthy: true,
+          status: "healthy",
+          model,
+          latencyMs,
+          message: `Connected to AI gateway via smoke test (model: ${model})`,
+        };
       }
     } catch (innerErr: unknown) {
       const inner = innerErr as Error;
-      return { ok: false, message: `AI connection check failed: ${inner.message || error.message}` };
+      const latencyMs = Date.now() - start;
+      return {
+        ok: false,
+        healthy: false,
+        status: "unhealthy",
+        model,
+        latencyMs,
+        message: `AI connection check failed: ${inner.message || error.message}`,
+        error: inner.message || error.message,
+      };
     }
-    return { ok: false, message: `AI connection check failed: ${error.message}` };
+    const latencyMs = Date.now() - start;
+    return {
+      ok: false,
+      healthy: false,
+      status: "unhealthy",
+      model,
+      latencyMs,
+      message: `AI connection check failed: ${error.message}`,
+      error: error.message,
+    };
   }
 }

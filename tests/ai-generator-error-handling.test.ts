@@ -1,15 +1,26 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import type OpenAI from "openai";
 import { AiReplyGenerator } from "../packages/ai/src/generator.js";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import * as clientModule from "../packages/ai/src/client.js";
-import Fastify from "../apps/control-plane/node_modules/fastify";
-import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
+import Fastify from "fastify";
+import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
+import type {
+  Database,
+  QueueRepository,
+  SettingsRepository,
+  IncidentRepository,
+  EventRepository,
+  JobRepository,
+} from "@messenger/db";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("AI Generator & Proxy Error Handling & Logs", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
   const settings = SystemSettingsSchema.parse({
-    aiBaseUrl: "http://127.0.0.1:8000/v1",
-    aiApiKey: "test-key",
-    aiModel: "test-model",
+    aiModel: "grok-4.5",
   });
 
   const dummyContext = {
@@ -29,13 +40,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
                 message: "Model 'gemini-3.7-flash-low' not found on upstream proxy",
                 code: 404,
               },
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -43,9 +54,10 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     // Must NOT throw TypeError: undefined is not an object (evaluating 'completion.choices[0]')
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("AI Proxy returned error: Model 'gemini-3.7-flash-low' not found");
-    expect(result.requestMessages).toBeDefined();
-    expect(result.requestMessages!.length).toBeGreaterThan(0);
-    expect(result.rawResponse).toContain("gemini-3.7-flash-low");
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.responseHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
+    expect((result as Record<string, unknown>).rawResponse).toBeUndefined();
   });
 
   it("handles empty choices array gracefully without throwing", async () => {
@@ -55,20 +67,21 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
           create: vi.fn(async () => {
             return {
               choices: [],
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
 
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("AI Proxy returned unexpected format");
-    expect(result.requestMessages).toBeDefined();
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
   });
 
   it("returns request messages and parsed output on successful completion", async () => {
@@ -94,13 +107,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
                 completion_tokens: 45,
                 total_tokens: 195,
               },
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -109,8 +122,9 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(result.data?.messages[0]).toContain("Dạ shop vẫn còn size M");
     expect(result.promptTokens).toBe(150);
     expect(result.totalTokens).toBe(195);
-    expect(result.requestMessages).toBeDefined();
-    expect(result.requestMessages!.length).toBeGreaterThan(0);
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
+    expect(result.responseHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("accepts plain text customer response starting with 'D' on first attempt without triggering retry", async () => {
@@ -130,7 +144,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
           completion_tokens: 25,
           total_tokens: 145,
         },
-      } as any;
+      } as unknown as OpenAI.Chat.Completions.ChatCompletion;
     });
 
     const mockOpenAiClient = {
@@ -141,7 +155,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -159,13 +173,14 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
         channelAccountId: "personal-messenger",
         conversationId: "conv-1",
         inboundVersion: 1,
-        model: "gemini-3.7-flash-low",
+        model: "grok-4.5",
         promptTokens: 100,
         completionTokens: 30,
         totalTokens: 130,
         latencyMs: 1200,
         status: "SUCCESS",
-        rawResponse: '{"messages":["Chào bạn"]}',
+        promptHash: "a".repeat(64),
+        responseHash: "b".repeat(64),
         parsedOutput: { messages: ["Chào bạn"] },
         errorMessage: null,
         createdAt: new Date(),
@@ -173,13 +188,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     ];
 
     const mockDb = {
-      select: vi.fn(() => ({
+      select: vi.fn((fields?: unknown) => ({
         from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => ({
-              limit: vi.fn(async () => mockRuns),
-            })),
-          })),
+          where: vi.fn(() => {
+            if (fields && typeof fields === "object" && "count" in fields) {
+              return Promise.resolve([{ count: 1 }]);
+            }
+            return {
+              orderBy: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  offset: vi.fn(async () => mockRuns),
+                })),
+              })),
+            };
+          }),
         })),
       })),
     };
@@ -187,12 +209,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     const fastify = Fastify();
     await fastify.register(
       createAdminRoutes({
-        db: mockDb as any,
-        queueRepo: {} as any,
-        settingsRepo: { getSettings: vi.fn(async () => ({ settings })) } as any,
-        incidentRepo: {} as any,
-        eventRepo: {} as any,
-        broadcaster: { broadcast: vi.fn() } as any,
+        db: mockDb as unknown as Database,
+        queueRepo: {} as unknown as QueueRepository,
+        settingsRepo: { getSettings: vi.fn(async () => ({ settings })) } as unknown as SettingsRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: {} as unknown as EventRepository,
+        jobRepo: {} as unknown as JobRepository,
+        broadcaster: { broadcast: vi.fn() } as unknown as OutboxBroadcaster,
         requireAuth: async () => ({
           id: "u-1",
           email: "owner@example.com",
@@ -211,6 +234,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.items.length).toBe(1);
-    expect(body.items[0].model).toBe("gemini-3.7-flash-low");
+    expect(body.items[0].model).toBe("grok-4.5");
+    expect(body.items[0].rawResponse).toBeUndefined();
   });
 });
