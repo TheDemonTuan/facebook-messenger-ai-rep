@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger Group Mention</title></head>
+<body>
+  <!-- Header indicates verified Group thread -->
+  <div role="banner">
+    <div aria-label="Thông tin nhóm" data-testid="group_chat_header">
+      <h2 dir="auto">Nhóm Khách Hàng Sỉ</h2>
+      <span>4 thành viên</span>
+    </div>
+  </div>
+
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Row 1: Group verified mention with structured bot profile link -->
+      <div role="row" id="mid.$gABgrp1001" aria-label="Nguyễn Văn An: Chào @ShopBot shop kiểm tra giá đơn này giúp mình nhé">
+        <a href="https://www.facebook.com/profile.php?id=100091122334" data-testid="author_link">
+          <span dir="auto">Nguyễn Văn An</span>
+        </a>
+        <div dir="auto">Chào <a href="https://www.facebook.com/profile.php?id=1000888000" role="link" class="mention">@ShopBot</a> shop kiểm tra giá đơn này giúp mình nhé</div>
+        <time datetime="2026-09-05T07:30:00.000Z" data-timestamp="1788614546000"></time>
+      </div>
+
+      <!-- Row 2: Fake plain text mention (NO anchor, NO entity attribute) -->
+      <div role="row" id="mid.$gABgrp1002" aria-label="Trần Bình: @ShopBot tư vấn giúp mình với">
+        <a href="https://www.facebook.com/profile.php?id=100091122335" data-testid="author_link">
+          <span dir="auto">Trần Bình</span>
+        </a>
+        <div dir="auto">@ShopBot tư vấn giúp mình với</div>
+        <time>14:35</time>
+      </div>
+
+      <!-- Row 3: Mention of another group member (not the bot) -->
+      <div role="row" id="mid.$gABgrp1003" aria-label="Lê Cường: @OtherMember mai giao hàng nhé">
+        <a href="https://www.facebook.com/profile.php?id=100091122336" data-testid="author_link">
+          <span dir="auto">Lê Cường</span>
+        </a>
+        <div dir="auto"><a href="https://www.facebook.com/profile.php?id=100099999999" role="link" class="mention">@OtherMember</a> mai giao hàng nhé</div>
+        <div data-testid="message_timestamp">5 phút trước</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

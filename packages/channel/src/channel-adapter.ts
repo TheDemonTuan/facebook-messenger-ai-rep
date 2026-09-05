@@ -12,8 +12,18 @@ export interface PreSendMarker {
   capturedAt: Date;
 }
 
+export interface ChannelAdapterOptions {
+  channelAccountId?: string;
+  timeZone?: string;
+  botParticipantId?: string;
+  botProfileUrl?: string;
+}
+
 export interface ChannelAdapter {
   readonly channelAccountId: string;
+  readonly timeZone?: string;
+  readonly botParticipantId?: string;
+  readonly botProfileUrl?: string;
 
   /**
    * Start listening for inbound messages. Calls `callback` whenever a message arrives.

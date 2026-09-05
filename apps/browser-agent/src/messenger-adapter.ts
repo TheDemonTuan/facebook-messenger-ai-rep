@@ -1,6 +1,6 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
-import type { ChannelAdapter, PreSendMarker } from "@messenger/channel";
-import { TypingEngine } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker, BubbleParseResult } from "@messenger/channel";
+import { TypingEngine, parseMessengerBubblesFromHtml } from "@messenger/channel";
 import type {
   InboundMessagePayload,
   ChannelHealthReport,
@@ -12,10 +12,16 @@ export interface PlaywrightAdapterOptions {
   profileDir: string;
   headless?: boolean;
   channelAccountId?: string;
+  timeZone?: string;
+  botParticipantId?: string;
+  botProfileUrl?: string;
 }
 
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
+  readonly timeZone: string;
+  readonly botParticipantId?: string;
+  readonly botProfileUrl?: string;
   private profileDir: string;
   private headless: boolean;
   private context: BrowserContext | null = null;
@@ -36,6 +42,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
     this.profileDir = path.resolve(options.profileDir);
     this.headless = options.headless ?? true;
+    this.timeZone = options.timeZone || "Asia/Ho_Chi_Minh";
+    this.botParticipantId = options.botParticipantId;
+    this.botProfileUrl = options.botProfileUrl;
   }
 
   onDegradedDom(callback: (reason: string) => Promise<void>): void {
@@ -204,18 +213,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         for (const t of threadElements) {
           if (!t.threadId || !t.snippet) continue;
 
-          // Skip group chats
-          const isGroupChat =
-            t.customerName.toLowerCase().includes("group") ||
-            t.customerName.toLowerCase().includes("club") ||
-            t.snippet.includes("left the group") ||
-            t.snippet.includes("đã rời khỏi");
-
-          if (isGroupChat) {
-            this.lastSeenSnippets.set(t.threadId, t.snippet);
-            continue;
-          }
-
           const prevSnippet = this.lastSeenSnippets.get(t.threadId);
           const hasTrigger = t.isUnread || (prevSnippet !== undefined && prevSnippet !== t.snippet);
 
@@ -262,15 +259,43 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 ? t.href
                 : `https://www.facebook.com/messages/t/${t.threadId}`;
 
+              const isVerifiedSender = Boolean(bubble.senderId && bubble.senderReliability === "VERIFIED");
+
               await this.inboundCallback({
                 channelAccountId: this.channelAccountId,
                 externalThreadId: t.threadId,
                 externalThreadRef: fullThreadRef,
-                externalCustomerId: t.threadId,
-                customerName: t.customerName,
+                // Never conflate externalThreadId with actual sender identity
+                externalCustomerId: bubble.senderId ?? null,
+                customerName: bubble.senderName || t.customerName || null,
                 externalMessageId: bubble.id,
                 text: bubble.text,
-                timestamp: new Date(),
+                timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
+                threadKind: bubble.threadKind ?? bubbleResult.threadClassification?.kind ?? "UNKNOWN",
+                threadReliability: bubble.threadReliability ?? bubbleResult.threadClassification?.reliability ?? "UNVERIFIED",
+                threadEvidence: bubble.threadEvidence ?? bubbleResult.threadClassification?.evidence ?? [],
+                senderKind: bubble.senderKind ?? "UNKNOWN",
+                senderReliability: bubble.senderReliability ?? "UNVERIFIED",
+                senderEvidence: bubble.senderEvidence ?? [],
+                senderExternalId: bubble.senderId ?? null,
+                senderParticipantId: bubble.senderId ?? null,
+                participantIdentity: isVerifiedSender
+                  ? {
+                      channelAccountId: this.channelAccountId,
+                      participantId: bubble.senderId!,
+                      senderKind: bubble.senderKind ?? "PERSON",
+                      isVerified: true,
+                      profileUrl: bubble.senderProfileUrl ?? null,
+                      displayName: bubble.senderName ?? null,
+                      verifiedAt: new Date(),
+                      metadata: {},
+                    }
+                  : null,
+                mentions: bubble.mentions ?? [],
+                timestamps: bubble.timestamps,
+                observedTimestamp: bubble.observedTimestamp,
+                timestampProvenance: bubble.timestampProvenance,
+                timestampPrecision: bubble.timestampPrecision,
               });
             }
           }
@@ -290,78 +315,25 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   /**
-   * Reads message bubbles from a page, extracting stable identity.
+   * Reads message bubbles from a page, extracting stable identity, sender, thread type, mentions, and timestamps.
    */
-  private async readBubblesFromPage(page: Page): Promise<{
-    bubbles: Array<{ id: string; text: string; isOutgoing: boolean }>;
-    isDegraded: boolean;
-    degradedReason?: string;
-  }> {
+  private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
     try {
-      return await page.evaluate(() => {
-        const rows = Array.from(
-          document.querySelectorAll('div[role="row"], div[data-scope="messages_table"], div[data-testid="mw_message_row"]')
-        );
-
-        const bubbles: Array<{ id: string; text: string; isOutgoing: boolean }> = [];
-
-        for (const row of rows) {
-          // Extract message text
-          const textEl =
-            row.querySelector('div[dir="auto"], span[dir="auto"], div[data-scope="message_bubble"]') ||
-            row.querySelector('span');
-
-          const rawText = textEl?.textContent?.trim() || "";
-          if (!rawText) continue;
-
-          // Stable ID extraction (mid.$..., data-message-id, data-mid, id, data-id)
-          const midMatch = row.querySelector('[id^="mid."]')?.getAttribute("id");
-          const rowId = row.getAttribute("id");
-          const idAttr =
-            midMatch ||
-            (rowId && rowId.startsWith("mid.") ? rowId : null) ||
-            row.getAttribute("data-message-id") ||
-            row.querySelector('[data-message-id]')?.getAttribute("data-message-id") ||
-            row.getAttribute("data-mid") ||
-            row.querySelector('[data-mid]')?.getAttribute("data-mid") ||
-            row.getAttribute("data-id") ||
-            (rowId && !rowId.startsWith(":") && !rowId.startsWith("js_") ? rowId : null);
-
-          if (!idAttr) {
-            const isMessageRow =
-              row.matches('[data-testid="mw_message_row"]') ||
-              row.querySelector('[data-scope="message_bubble"]') !== null;
-
-            if (isMessageRow) {
-              return {
-                bubbles: [],
-                isDegraded: true,
-                degradedReason: `Message row with text "${rawText.slice(0, 30)}" lacks stable mid identifier`,
-              };
-            }
-            continue;
-          }
-
-          // Direction extraction
-          const ariaLabel = (row.getAttribute("aria-label") || "").toLowerCase();
-          const isOutgoing =
-            ariaLabel.includes("bạn đã gửi") ||
-            ariaLabel.includes("bạn:") ||
-            ariaLabel.includes("you sent") ||
-            ariaLabel.includes("you:") ||
-            row.querySelector('[data-testid="outgoing_message"]') !== null;
-
-          bubbles.push({
-            id: idAttr,
-            text: rawText,
-            isOutgoing,
-          });
-        }
-
-        return { bubbles, isDegraded: false };
+      const html = await page.evaluate(() => {
+        const main = document.querySelector('div[role="main"]') || document.body;
+        return main.outerHTML || main.innerHTML;
       });
-    } catch (_err) {
+      return parseMessengerBubblesFromHtml(html, {
+        observedAt: new Date(),
+        timeZone: this.timeZone,
+        botChannelAccountId: this.channelAccountId,
+        botParticipantId: this.botParticipantId,
+        botProfileUrl: this.botProfileUrl,
+      });
+    } catch (err) {
+      console.warn("[BrowserAdapter] Error reading bubbles from page:", err);
       return {
+        ok: false,
         bubbles: [],
         isDegraded: false,
       };
