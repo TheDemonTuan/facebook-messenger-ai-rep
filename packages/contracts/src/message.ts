@@ -24,9 +24,9 @@ export const ClassificationEvidenceSourceSchema = z.enum([
 export type ClassificationEvidenceSource = z.infer<typeof ClassificationEvidenceSourceSchema>;
 
 export const ClassificationEvidenceSchema = z.object({
-  source: ClassificationEvidenceSourceSchema,
-  signal: z.string(),
-  confidence: z.number().min(0).max(1).default(1),
+  source: ClassificationEvidenceSourceSchema.default("UNKNOWN"),
+  signal: z.string().default(""),
+  confidence: z.number().min(0).max(1).default(0),
   details: z.record(z.string(), z.unknown()).optional().default({}),
 });
 export type ClassificationEvidence = z.infer<typeof ClassificationEvidenceSchema>;
@@ -45,7 +45,7 @@ export const MentionEvidenceSchema = z.object({
   mentionText: z.string().optional(),
   offset: z.number().int().nonnegative().optional(),
   length: z.number().int().nonnegative().optional(),
-  isVerified: z.boolean().default(true),
+  isVerified: z.boolean().default(false),
   evidenceType: MentionEvidenceTypeSchema.default("DOM_ANCHOR"),
   rawMetadata: z.record(z.string(), z.unknown()).optional().default({}),
 });
@@ -107,6 +107,126 @@ export function createMessageTimestamps(options: {
   };
 }
 
+/**
+ * Validates whether a raw URL belongs to an approved Facebook hostname.
+ */
+export function isApprovedFacebookUrl(rawUrl: string): boolean {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  try {
+    const parsed = new URL(rawUrl.trim());
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return false;
+    const hostname = parsed.hostname.toLowerCase();
+    return hostname === "facebook.com" || hostname.endsWith(".facebook.com");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Normalizes an approved Facebook profile/entity URL into canonical form.
+ * Returns null if the URL is invalid, untrusted, or ambiguous.
+ */
+export function canonicalizeFacebookUrl(rawUrl: string): string | null {
+  if (!rawUrl || typeof rawUrl !== "string") return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return null;
+    }
+
+    const hostname = parsed.hostname.toLowerCase();
+    const isFacebook = hostname === "facebook.com" || hostname.endsWith(".facebook.com");
+    if (!isFacebook) {
+      return null;
+    }
+
+    // Strip trailing slashes
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+
+    // Reject ambiguous or non-identity paths
+    const lowerPath = pathname.toLowerCase();
+    if (
+      lowerPath === "" ||
+      lowerPath === "/" ||
+      lowerPath.startsWith("/messages") ||
+      lowerPath.startsWith("/chat") ||
+      lowerPath.startsWith("/home") ||
+      lowerPath.startsWith("/login") ||
+      lowerPath.startsWith("/recover") ||
+      lowerPath.startsWith("/help") ||
+      lowerPath.startsWith("/settings") ||
+      lowerPath.startsWith("/privacy") ||
+      lowerPath.startsWith("/watch") ||
+      lowerPath.startsWith("/marketplace")
+    ) {
+      return null;
+    }
+
+    // If profile.php?id=<digits>
+    if (pathname.toLowerCase() === "/profile.php") {
+      const id = parsed.searchParams.get("id");
+      if (id && /^\d+$/.test(id.trim())) {
+        return `https://www.facebook.com/profile.php?id=${id.trim()}`;
+      }
+      return null;
+    }
+
+    // Canonicalize to https://www.facebook.com/<username>
+    return `https://www.facebook.com${pathname.toLowerCase()}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extracts a stable Facebook entity ID from a raw ID or approved Facebook profile URL.
+ */
+export function extractFacebookEntityId(urlOrId: string): string | null {
+  if (!urlOrId || typeof urlOrId !== "string") return null;
+  const trimmed = urlOrId.trim();
+  if (!trimmed) return null;
+
+  // If already an alphanumeric ID without slashes or domain dots
+  if (/^[a-zA-Z0-9._-]+$/.test(trimmed) && !trimmed.includes("/") && !trimmed.includes(".com")) {
+    return trimmed;
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (!isApprovedFacebookUrl(trimmed)) return null;
+
+    if (parsed.pathname.toLowerCase() === "/profile.php") {
+      const id = parsed.searchParams.get("id");
+      if (id && id.trim().length > 0) {
+        return id.trim();
+      }
+    }
+    const match = parsed.pathname.match(/\/messages\/t\/([0-9]+)/);
+    if (match && match[1]) {
+      return match[1];
+    }
+  } catch {
+    // Not a URL
+  }
+  return null;
+}
+
+// Single source of truth for message classification & evidence fields
+export const MessageClassificationFields = {
+  threadKind: ThreadKindSchema.optional(),
+  senderKind: SenderKindSchema.optional(),
+  threadReliability: ClassificationReliabilitySchema.optional(),
+  senderReliability: ClassificationReliabilitySchema.optional(),
+  participantIdentity: VerifiedParticipantIdentitySchema.nullable().optional(),
+  mentions: z.array(MentionEvidenceSchema).optional(),
+  timestamps: MessageTimestampsSchema.optional(),
+  threadEvidence: z.array(ClassificationEvidenceSchema).optional(),
+  senderEvidence: z.array(ClassificationEvidenceSchema).optional(),
+};
+
 export const MessageSchema = z.object({
   id: z.string().uuid(),
   channelAccountId: z.string(),
@@ -121,16 +241,7 @@ export const MessageSchema = z.object({
   timestamp: z.coerce.date(),
   metadata: z.record(z.string(), z.unknown()).optional().default({}),
   createdAt: z.coerce.date(),
-  threadKind: ThreadKindSchema.optional(),
-  senderKind: SenderKindSchema.optional(),
-  threadReliability: ClassificationReliabilitySchema.optional(),
-  senderReliability: ClassificationReliabilitySchema.optional(),
-  participantIdentity: VerifiedParticipantIdentitySchema.nullable().optional(),
-  mentions: z.array(MentionEvidenceSchema).optional(),
-  timestamps: MessageTimestampsSchema.optional(),
-  threadEvidence: z.array(ClassificationEvidenceSchema).optional(),
-  senderEvidence: z.array(ClassificationEvidenceSchema).optional(),
-});
+}).extend(MessageClassificationFields);
 export type Message = z.infer<typeof MessageSchema>;
 
 export const InboundMessageSchema = z.object({
@@ -145,16 +256,7 @@ export const InboundMessageSchema = z.object({
   receivedAt: z.coerce.date(),
   rawPayload: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.coerce.date(),
-  threadKind: ThreadKindSchema.optional(),
-  senderKind: SenderKindSchema.optional(),
-  threadReliability: ClassificationReliabilitySchema.optional(),
-  senderReliability: ClassificationReliabilitySchema.optional(),
-  participantIdentity: VerifiedParticipantIdentitySchema.nullable().optional(),
-  mentions: z.array(MentionEvidenceSchema).optional(),
-  timestamps: MessageTimestampsSchema.optional(),
-  threadEvidence: z.array(ClassificationEvidenceSchema).optional(),
-  senderEvidence: z.array(ClassificationEvidenceSchema).optional(),
-});
+}).extend(MessageClassificationFields);
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;
 
 export const InboundMessagePayloadSchema = z.object({
@@ -166,14 +268,5 @@ export const InboundMessagePayloadSchema = z.object({
   externalMessageId: z.string(),
   text: z.string(),
   timestamp: z.coerce.date(),
-  threadKind: ThreadKindSchema.optional(),
-  senderKind: SenderKindSchema.optional(),
-  threadReliability: ClassificationReliabilitySchema.optional(),
-  senderReliability: ClassificationReliabilitySchema.optional(),
-  participantIdentity: VerifiedParticipantIdentitySchema.nullable().optional(),
-  mentions: z.array(MentionEvidenceSchema).optional(),
-  timestamps: MessageTimestampsSchema.optional(),
-  threadEvidence: z.array(ClassificationEvidenceSchema).optional(),
-  senderEvidence: z.array(ClassificationEvidenceSchema).optional(),
-});
+}).extend(MessageClassificationFields);
 export type InboundMessagePayload = z.infer<typeof InboundMessagePayloadSchema>;

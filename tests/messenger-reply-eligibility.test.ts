@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
   SystemSettingsSchema,
+  SystemSettingsPatchSchema,
+  SystemSettingsBaseShape,
+  mergeSystemSettings,
   isValidTimeZone,
   ReplyModeSchema,
   ThreadKindSchema,
   SenderKindSchema,
   ChannelAccountTypeSchema,
   ClassificationReliabilitySchema,
+  ClassificationEvidenceSchema,
   TimestampProvenanceSchema,
   TimestampPrecisionSchema,
   ReplyEligibilityDecisionSchema,
@@ -15,6 +19,7 @@ import {
   MessageSchema,
   InboundMessageSchema,
   InboundMessagePayloadSchema,
+  MessageClassificationFields,
   VerifiedParticipantIdentitySchema,
   MentionEvidenceSchema,
   TimestampDetailSchema,
@@ -22,6 +27,9 @@ import {
   createMessageTimestamps,
   formatChannelScopedParticipantId,
   matchesParticipantList,
+  canonicalizeFacebookUrl,
+  extractFacebookEntityId,
+  isApprovedFacebookUrl,
   evaluateReplyEligibility,
   type ReplyEligibilityInput,
 } from "../packages/contracts/src/index.js";
@@ -906,4 +914,328 @@ describe("PR 1: Messenger Reply Eligibility Contracts & Pure Policy", () => {
       expect(result.reasonCode).toBe("PERSON_EXCLUDED");
     });
   });
+
+  describe("10. Material Review Regression Tests (Findings 1-6)", () => {
+    describe("Finding 1: Self-Message Inspection of All Candidate Stable IDs Without Short-Circuiting", () => {
+      it("detects self-message when sender.id is customer ID but participantIdentity.participantId matches botParticipantId", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-main",
+            accountType: "PERSONAL_MESSENGER",
+            botParticipantId: "bot-stable-456",
+          },
+          thread: { kind: "DIRECT", reliability: "VERIFIED" },
+          sender: {
+            id: "customer-dom-ref-789", // sender.id does not match
+            kind: "PERSON",
+            reliability: "VERIFIED",
+            participantIdentity: {
+              channelAccountId: "chan-main",
+              participantId: "bot-stable-456", // matches botParticipantId!
+              senderKind: "PERSON",
+              isVerified: true,
+            },
+          },
+          message: { direction: "INBOUND", text: "Loop test" },
+          settings: SystemSettingsSchema.parse({}),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("SELF_MESSAGE");
+        expect(result.precedenceStep).toBe("HARD_GATES");
+      });
+
+      it("detects self-message when sender.id is customer ID but participantIdentity.participantId matches channel.id", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-main",
+            accountType: "PERSONAL_MESSENGER",
+          },
+          thread: { kind: "DIRECT", reliability: "VERIFIED" },
+          sender: {
+            id: "customer-dom-ref-789",
+            kind: "PERSON",
+            reliability: "VERIFIED",
+            participantIdentity: {
+              channelAccountId: "chan-main",
+              participantId: "chan-main", // matches channel.id!
+              senderKind: "PERSON",
+              isVerified: true,
+            },
+          },
+          message: { direction: "INBOUND", text: "Loop test" },
+          settings: SystemSettingsSchema.parse({}),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("SELF_MESSAGE");
+        expect(result.precedenceStep).toBe("HARD_GATES");
+      });
+
+      it("detects self-message when sender canonical profileUrl matches channel botProfileUrl", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-main",
+            accountType: "PERSONAL_MESSENGER",
+            botProfileUrl: "https://www.facebook.com/myshop.official",
+          },
+          thread: { kind: "DIRECT", reliability: "VERIFIED" },
+          sender: {
+            id: "customer-999",
+            kind: "PERSON",
+            reliability: "VERIFIED",
+            participantIdentity: {
+              channelAccountId: "chan-main",
+              participantId: "customer-999",
+              senderKind: "PERSON",
+              profileUrl: "https://m.facebook.com/myshop.official?ref=bookmarks", // canonical matches bot!
+              isVerified: true,
+            },
+          },
+          message: { direction: "INBOUND", text: "Loop test via URL" },
+          settings: SystemSettingsSchema.parse({}),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("SELF_MESSAGE");
+        expect(result.precedenceStep).toBe("HARD_GATES");
+      });
+    });
+
+    describe("Finding 2: Schema Defaults Fail-Closed (Never Fail Open)", () => {
+      it("MentionEvidenceSchema defaults isVerified to false (fails closed)", () => {
+        const parsed = MentionEvidenceSchema.parse({
+          entityId: "bot-123",
+        });
+        expect(parsed.isVerified).toBe(false);
+      });
+
+      it("VerifiedParticipantIdentitySchema defaults isVerified to false (fails closed)", () => {
+        const parsed = VerifiedParticipantIdentitySchema.parse({
+          channelAccountId: "chan-1",
+          participantId: "user-1",
+          senderKind: "PERSON",
+        });
+        expect(parsed.isVerified).toBe(false);
+      });
+
+      it("ClassificationEvidenceSchema defaults confidence to 0 and source to UNKNOWN", () => {
+        const parsed = ClassificationEvidenceSchema.parse({});
+        expect(parsed.confidence).toBe(0);
+        expect(parsed.source).toBe("UNKNOWN");
+      });
+
+      it("evaluateReplyEligibility fails closed when input omits thread/sender classification", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-1",
+            accountType: "PERSONAL_MESSENGER",
+          },
+          thread: {} as unknown as ReplyEligibilityInput["thread"],
+          sender: {} as unknown as ReplyEligibilityInput["sender"],
+          message: { direction: "INBOUND", text: "Hello" },
+          settings: SystemSettingsSchema.parse({}),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.precedenceStep).toBe("VERIFIED_CLASSIFICATION");
+      });
+
+      it("group reply fails closed when mention uses default isVerified: false", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-1",
+            accountType: "PERSONAL_MESSENGER",
+            botParticipantId: "bot-1",
+          },
+          thread: { kind: "GROUP", reliability: "VERIFIED" },
+          sender: { id: "user-1", kind: "PERSON", reliability: "VERIFIED" },
+          message: {
+            direction: "INBOUND",
+            text: "@bot help",
+            mentions: [
+              MentionEvidenceSchema.parse({
+                entityId: "bot-1", // isVerified defaults to false!
+              }),
+            ],
+          },
+          settings: SystemSettingsSchema.parse({ groupRepliesEnabled: true, requireGroupMention: true }),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("GROUP_MENTION_UNVERIFIED");
+        expect(result.precedenceStep).toBe("GROUP_MENTION_REQUIREMENT");
+      });
+    });
+
+    describe("Finding 3: Partial Settings Update Preservation & No Whole-Object Reset Regressions", () => {
+      it("SystemSettingsSchema.partial() returns only provided keys without populating defaults for omitted keys", () => {
+        const partialResult = SystemSettingsSchema.partial().parse({
+          pauseIntakeProcessing: true,
+        });
+
+        expect(Object.keys(partialResult)).toEqual(["pauseIntakeProcessing"]);
+        expect(partialResult.pauseIntakeProcessing).toBe(true);
+        expect(partialResult.debounceMs).toBeUndefined();
+        expect(partialResult.aiModel).toBeUndefined();
+        expect(partialResult.businessTimeZone).toBeUndefined();
+      });
+
+      it("SystemSettingsPatchSchema parses partial fields cleanly", () => {
+        const patch = SystemSettingsPatchSchema.parse({
+          aiTimeoutMs: 30000,
+          replyMode: "ONLY_SELECTED",
+        });
+
+        expect(Object.keys(patch)).toEqual(["aiTimeoutMs", "replyMode"]);
+        expect(patch.aiTimeoutMs).toBe(30000);
+        expect(patch.replyMode).toBe("ONLY_SELECTED");
+      });
+
+      it("mergeSystemSettings preserves all existing customized settings when applying a single-field patch", () => {
+        const existing = SystemSettingsSchema.parse({
+          debounceMs: 15000,
+          aiModel: "custom-vendor/llm-pro",
+          businessTimeZone: "Asia/Bangkok",
+          autoReplyEnabled: true,
+          directRepliesEnabled: true,
+          excludedParticipantIds: ["blocked-user-1"],
+        });
+
+        const patch = { pauseIntakeProcessing: true };
+        const merged = mergeSystemSettings(existing, patch);
+
+        // Specified field was updated
+        expect(merged.pauseIntakeProcessing).toBe(true);
+        // All customized existing fields are preserved and NOT reset to defaults!
+        expect(merged.debounceMs).toBe(15000);
+        expect(merged.aiModel).toBe("custom-vendor/llm-pro");
+        expect(merged.businessTimeZone).toBe("Asia/Bangkok");
+        expect(merged.autoReplyEnabled).toBe(true);
+        expect(merged.directRepliesEnabled).toBe(true);
+        expect(merged.excludedParticipantIds).toEqual(["blocked-user-1"]);
+      });
+    });
+
+    describe("Finding 4: Mention Identity Normalization & Rejection of Text/Alias or Ambiguous URLs", () => {
+      it("canonicalizeFacebookUrl normalizes variations of legitimate Facebook profile URLs", () => {
+        const expected = "https://www.facebook.com/customerbot";
+
+        expect(canonicalizeFacebookUrl("https://www.facebook.com/customerbot")).toBe(expected);
+        expect(canonicalizeFacebookUrl("https://facebook.com/customerbot/")).toBe(expected);
+        expect(canonicalizeFacebookUrl("https://m.facebook.com/customerbot?ref=bookmarks")).toBe(expected);
+        expect(canonicalizeFacebookUrl("https://web.facebook.com/CustomerBot/")).toBe(expected);
+        expect(canonicalizeFacebookUrl("https://www.facebook.com/profile.php?id=100012345678")).toBe(
+          "https://www.facebook.com/profile.php?id=100012345678"
+        );
+      });
+
+      it("canonicalizeFacebookUrl rejects ambiguous, non-identity, or untrusted URLs", () => {
+        expect(canonicalizeFacebookUrl("https://facebook.com")).toBeNull();
+        expect(canonicalizeFacebookUrl("https://facebook.com/")).toBeNull();
+        expect(canonicalizeFacebookUrl("https://facebook.com/messages/t/123")).toBeNull();
+        expect(canonicalizeFacebookUrl("https://facebook.com/home.php")).toBeNull();
+        expect(canonicalizeFacebookUrl("https://facebook.com/profile.php")).toBeNull(); // missing id
+        expect(canonicalizeFacebookUrl("https://attacker-facebook.com/customerbot")).toBeNull();
+        expect(canonicalizeFacebookUrl("https://facebook.com.phishing.io/customerbot")).toBeNull();
+        expect(canonicalizeFacebookUrl("javascript:alert(1)")).toBeNull();
+        expect(canonicalizeFacebookUrl("not a url")).toBeNull();
+      });
+
+      it("extractFacebookEntityId extracts entity ID from numeric ID, alphanumeric ID, and profile.php URLs", () => {
+        expect(extractFacebookEntityId("100012345678")).toBe("100012345678");
+        expect(extractFacebookEntityId("my_bot_page")).toBe("my_bot_page");
+        expect(extractFacebookEntityId("https://www.facebook.com/profile.php?id=100012345678")).toBe("100012345678");
+        expect(extractFacebookEntityId("https://www.facebook.com/messages/t/987654321")).toBe("987654321");
+        expect(extractFacebookEntityId("https://attacker.com/profile.php?id=100012345678")).toBeNull();
+      });
+
+      it("isApprovedFacebookUrl validates approved Facebook domains", () => {
+        expect(isApprovedFacebookUrl("https://facebook.com/test")).toBe(true);
+        expect(isApprovedFacebookUrl("https://www.facebook.com/test")).toBe(true);
+        expect(isApprovedFacebookUrl("https://m.facebook.com/test")).toBe(true);
+        expect(isApprovedFacebookUrl("https://evil-facebook.com/test")).toBe(false);
+      });
+
+      it("strictly rejects mention matching based on mentionText / alias alone", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-1",
+            accountType: "PERSONAL_MESSENGER",
+            botParticipantId: "bot-real-id",
+          },
+          thread: { kind: "GROUP", reliability: "VERIFIED" },
+          sender: { id: "user-1", kind: "PERSON", reliability: "VERIFIED" },
+          message: {
+            direction: "INBOUND",
+            text: "@CustomerBot help me",
+            mentions: [
+              {
+                entityId: "some-other-user", // Mismatching ID
+                mentionText: "@CustomerBot", // Matching alias text!
+                isVerified: true,
+              },
+            ],
+          },
+          settings: SystemSettingsSchema.parse({ groupRepliesEnabled: true, requireGroupMention: true }),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        // Must be rejected because mentionText alone is never permitted for identity verification
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("GROUP_MENTION_REQUIRED");
+      });
+
+      it("strictly rejects mention with untrusted external profileUrl pointing to same path", () => {
+        const input: ReplyEligibilityInput = {
+          channel: {
+            id: "chan-1",
+            accountType: "PERSONAL_MESSENGER",
+            botParticipantId: "bot-real-id",
+            botProfileUrl: "https://www.facebook.com/mybot",
+          },
+          thread: { kind: "GROUP", reliability: "VERIFIED" },
+          sender: { id: "user-1", kind: "PERSON", reliability: "VERIFIED" },
+          message: {
+            direction: "INBOUND",
+            text: "Hello",
+            mentions: [
+              {
+                entityId: "untrusted-entity",
+                profileUrl: "https://evil-site.com/mybot", // Untrusted domain
+                isVerified: true,
+              },
+            ],
+          },
+          settings: SystemSettingsSchema.parse({ groupRepliesEnabled: true, requireGroupMention: true }),
+        };
+
+        const result = evaluateReplyEligibility(input);
+        expect(result.eligible).toBe(false);
+        expect(result.reasonCode).toBe("GROUP_MENTION_REQUIRED");
+      });
+    });
+
+    describe("Finding 5: Single Source of Truth & Concise Composition", () => {
+      it("MessageClassificationFields provides unified schema extension across message types", () => {
+        expect(MessageClassificationFields.threadKind).toBeDefined();
+        expect(MessageClassificationFields.senderKind).toBeDefined();
+        expect(MessageClassificationFields.participantIdentity).toBeDefined();
+        expect(MessageClassificationFields.mentions).toBeDefined();
+        expect(MessageClassificationFields.timestamps).toBeDefined();
+      });
+
+      it("SystemSettingsBaseShape defines all settings keys without duplicated defaults", () => {
+        const baseKeys = Object.keys(SystemSettingsBaseShape);
+        const schemaKeys = Object.keys(SystemSettingsSchema.shape);
+        expect(baseKeys.sort()).toEqual(schemaKeys.sort());
+      });
+    });
+  });
 });
+

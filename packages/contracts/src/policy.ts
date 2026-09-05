@@ -16,6 +16,9 @@ import {
   MentionEvidenceSchema,
   MessageTimestampsSchema,
   VerifiedParticipantIdentitySchema,
+  canonicalizeFacebookUrl,
+  extractFacebookEntityId,
+  isApprovedFacebookUrl,
 } from "./message.js";
 
 export const ReplyEligibilityChannelContextSchema = z.object({
@@ -62,9 +65,9 @@ export type ReplyEligibilityMessageContext = z.infer<typeof ReplyEligibilityMess
 
 export const ReplyEligibilityInputSchema = z.object({
   channel: ReplyEligibilityChannelContextSchema,
-  thread: ReplyEligibilityThreadContextSchema,
-  sender: ReplyEligibilitySenderContextSchema,
-  message: ReplyEligibilityMessageContextSchema,
+  thread: ReplyEligibilityThreadContextSchema.default(() => ReplyEligibilityThreadContextSchema.parse({})),
+  sender: ReplyEligibilitySenderContextSchema.default(() => ReplyEligibilitySenderContextSchema.parse({})),
+  message: ReplyEligibilityMessageContextSchema.default(() => ReplyEligibilityMessageContextSchema.parse({})),
   settings: SystemSettingsSchema.default(() => SystemSettingsSchema.parse({})),
   now: z.coerce.date().optional(),
 });
@@ -217,13 +220,52 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
     };
   }
 
-  const senderId = input.sender.id?.trim();
-  const channelId = input.channel.id.trim();
-  const botParticipantId = input.channel.botParticipantId?.trim();
+  // Self-message detection: inspect ALL candidate stable IDs and profile URLs
+  const candidateSenderIds = new Set<string>();
+  if (input.sender.id && input.sender.id.trim().length > 0) {
+    candidateSenderIds.add(input.sender.id.trim());
+    const extracted = extractFacebookEntityId(input.sender.id);
+    if (extracted) candidateSenderIds.add(extracted);
+  }
   if (
-    (senderId && senderId === channelId) ||
-    (senderId && botParticipantId && senderId === botParticipantId)
+    input.sender.participantIdentity?.participantId &&
+    input.sender.participantIdentity.participantId.trim().length > 0
   ) {
+    candidateSenderIds.add(input.sender.participantIdentity.participantId.trim());
+    const extracted = extractFacebookEntityId(input.sender.participantIdentity.participantId);
+    if (extracted) candidateSenderIds.add(extracted);
+  }
+
+  const candidateBotIds = new Set<string>();
+  if (input.channel.id && input.channel.id.trim().length > 0) {
+    candidateBotIds.add(input.channel.id.trim());
+    const extracted = extractFacebookEntityId(input.channel.id);
+    if (extracted) candidateBotIds.add(extracted);
+  }
+  if (input.channel.botParticipantId && input.channel.botParticipantId.trim().length > 0) {
+    candidateBotIds.add(input.channel.botParticipantId.trim());
+    const extracted = extractFacebookEntityId(input.channel.botParticipantId);
+    if (extracted) candidateBotIds.add(extracted);
+  }
+
+  let isSelfIdMatch = false;
+  for (const sId of candidateSenderIds) {
+    if (candidateBotIds.has(sId)) {
+      isSelfIdMatch = true;
+      break;
+    }
+  }
+
+  let isSelfUrlMatch = false;
+  if (input.channel.botProfileUrl && input.sender.participantIdentity?.profileUrl) {
+    const canonicalBotUrl = canonicalizeFacebookUrl(input.channel.botProfileUrl);
+    const canonicalSenderUrl = canonicalizeFacebookUrl(input.sender.participantIdentity.profileUrl);
+    if (canonicalBotUrl && canonicalSenderUrl && canonicalBotUrl === canonicalSenderUrl) {
+      isSelfUrlMatch = true;
+    }
+  }
+
+  if (isSelfIdMatch || isSelfUrlMatch) {
     return {
       decision: "INELIGIBLE",
       eligible: false,
@@ -231,12 +273,17 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
       reason: "Message sender matches local channel/bot identity.",
       precedenceStep: "HARD_GATES",
       evaluatedAt: now,
-      details: { senderId, channelId, botParticipantId },
+      details: {
+        candidateSenderIds: Array.from(candidateSenderIds),
+        candidateBotIds: Array.from(candidateBotIds),
+        isSelfIdMatch,
+        isSelfUrlMatch,
+      },
     };
   }
 
   // --------------------------------------------------------------------------
-  // 2. VERIFIED CLASSIFICATION
+  // 2. VERIFIED CLASSIFICATION (Fail-Closed on any missing/unverified evidence)
   // --------------------------------------------------------------------------
   if (input.thread.kind === "UNKNOWN") {
     return {
@@ -286,10 +333,7 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
     };
   }
 
-  const hasParticipantId = Boolean(
-    (input.sender.id && input.sender.id.trim().length > 0) ||
-    (input.sender.participantIdentity?.participantId && input.sender.participantIdentity.participantId.trim().length > 0)
-  );
+  const hasParticipantId = candidateSenderIds.size > 0;
   if (!hasParticipantId) {
     return {
       decision: "INELIGIBLE",
@@ -420,18 +464,37 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
   // 6. GROUP VERIFIED-MENTION REQUIREMENT
   // --------------------------------------------------------------------------
   if (input.thread.kind === "GROUP" && input.settings.requireGroupMention) {
-    const candidateBotIds = [
-      input.channel.botParticipantId,
-      input.channel.id,
-    ].filter((id): id is string => Boolean(id && id.trim().length > 0));
+    const canonicalBotUrl = input.channel.botProfileUrl
+      ? canonicalizeFacebookUrl(input.channel.botProfileUrl)
+      : null;
 
     const botMentions = (input.message.mentions ?? []).filter((m) => {
-      const idMatch = candidateBotIds.length > 0 && candidateBotIds.includes(m.entityId);
-      const urlMatch = Boolean(
-        input.channel.botProfileUrl &&
-          m.profileUrl &&
-          m.profileUrl.trim().toLowerCase() === input.channel.botProfileUrl.trim().toLowerCase()
-      );
+      // Identity matching is strictly limited to stable IDs and canonical Facebook profile URLs.
+      // Text / alias matching (m.mentionText) is NEVER permitted for identity verification.
+      const mentionEntityId = m.entityId ? m.entityId.trim() : "";
+      const extractedMentionId = extractFacebookEntityId(mentionEntityId);
+
+      let idMatch = false;
+      if (mentionEntityId && candidateBotIds.has(mentionEntityId)) {
+        idMatch = true;
+      } else if (extractedMentionId && candidateBotIds.has(extractedMentionId)) {
+        idMatch = true;
+      }
+
+      let urlMatch = false;
+      if (m.profileUrl) {
+        const canonicalMentionUrl = canonicalizeFacebookUrl(m.profileUrl);
+        if (canonicalMentionUrl && canonicalBotUrl && canonicalMentionUrl === canonicalBotUrl) {
+          urlMatch = true;
+        } else {
+          // If mention URL contains an entity ID matching bot candidates and is an approved Facebook URL
+          const extractedUrlId = extractFacebookEntityId(m.profileUrl);
+          if (extractedUrlId && candidateBotIds.has(extractedUrlId) && isApprovedFacebookUrl(m.profileUrl)) {
+            urlMatch = true;
+          }
+        }
+      }
+
       return idMatch || urlMatch;
     });
 
@@ -447,13 +510,13 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
       };
     }
 
-    const hasVerifiedMention = botMentions.some((m) => m.isVerified);
+    const hasVerifiedMention = botMentions.some((m) => m.isVerified === true);
     if (!hasVerifiedMention) {
       return {
         decision: "INELIGIBLE",
         eligible: false,
         reasonCode: "GROUP_MENTION_UNVERIFIED",
-        reason: "Bot mention in group message is not verified.",
+        reason: "Bot mention in group message lacks verified evidence.",
         precedenceStep: "GROUP_MENTION_REQUIREMENT",
         evaluatedAt: now,
         details: { botMentionsCount: botMentions.length },
