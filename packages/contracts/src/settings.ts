@@ -1,23 +1,8 @@
 import { z } from "zod";
 
-export const ALLOWED_AI_MODELS = [
-  "grok-4.5",
-  "grok-4.5-mini",
-  "grok-beta",
-  "grok-2",
-  "grok-2-latest",
-  "grok-2-vision-1212",
-  "grok-3",
-  "grok-3-mini",
-  "test-model",
-] as const;
-
 export function isValidAiModel(model: string): boolean {
-  return (
-    ALLOWED_AI_MODELS.includes(model as (typeof ALLOWED_AI_MODELS)[number]) ||
-    /^grok-[a-z0-9.-]+$/i.test(model) ||
-    model === "test-model"
-  );
+  const value = model.trim();
+  return value.length > 0 && value.length <= 128 && /^[a-z0-9][a-z0-9._:/-]*$/i.test(value);
 }
 
 export const SystemSettingsSchema = z.object({
@@ -25,8 +10,8 @@ export const SystemSettingsSchema = z.object({
   stickyWindowMs: z.number().int().min(5000).max(300000).default(45000),
   stickyMaxTurns: z.number().int().min(1).max(10).default(3),
   stickyMaxDurationMs: z.number().int().min(10000).max(600000).default(120000),
-  aiModel: z.string().min(1).default("grok-4.5").refine(isValidAiModel, {
-    message: "Invalid AI model. Allowed models must be from the approved xAI list.",
+  aiModel: z.string().trim().min(1).default("auto/best-chat").refine(isValidAiModel, {
+    message: "Invalid AI model name.",
   }),
   aiTimeoutMs: z.number().int().min(2000).max(60000).default(20000),
   aiMaxResponseCount: z.number().int().min(1).max(3).default(3),

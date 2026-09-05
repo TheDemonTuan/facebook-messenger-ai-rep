@@ -197,7 +197,7 @@ export const SettingsPage: React.FC = () => {
                 <Cpu size={18} color="#2563eb" /> Mô hình AI & Kiểm tra sức khỏe (Health)
               </h2>
               <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                Khóa bí mật (API Key) và Endpoint được bảo vệ tại máy chủ, không hiển thị trên trình duyệt.
+                Gateway hiện được quản trị bằng biến môi trường trên VPS. API Key và URL đầy đủ không được gửi xuống trình duyệt.
               </span>
             </div>
             <button
@@ -267,7 +267,7 @@ export const SettingsPage: React.FC = () => {
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              Tên model AI gửi tới Gateway AI (hỗ trợ OmniRoute, OpenAI, Grok, hoặc Gateway tùy chỉnh)
+              Tên model gửi tới endpoint <code>/chat/completions</code> của gateway đang cấu hình trên VPS. Ví dụ: <code>auto/best-chat</code>.
             </span>
           </div>
         </div>

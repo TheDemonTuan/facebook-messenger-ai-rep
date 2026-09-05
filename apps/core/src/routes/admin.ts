@@ -306,13 +306,14 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       "/api/settings/test-ai",
       { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
-        const { model } = request.body || {};
-        if (model && !isValidAiModel(model)) {
+        const current = await settingsRepo.getSettings(channelAccountId);
+        const model = request.body?.model || current.settings.aiModel;
+        if (!isValidAiModel(model)) {
           return reply.status(400).send({
             ok: false,
             healthy: false,
             status: "unhealthy",
-            message: `Model '${model}' is not in approved allowlist`,
+            message: `Model '${model}' has an invalid name`,
           });
         }
         const health = await checkAiHealth({ model });
@@ -320,7 +321,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           ...health,
           healthy: health.healthy ?? health.ok,
           status: health.status ?? (health.ok ? "healthy" : "unhealthy"),
-          model: model || health.model,
+          model,
         });
       }
     );
@@ -382,7 +383,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         if (requestedModel && !isValidAiModel(requestedModel)) {
           return reply.status(400).send({
             success: false,
-            errorMessage: `Model '${requestedModel}' is not in approved allowlist`,
+            errorMessage: `Model '${requestedModel}' has an invalid name`,
           });
         }
         const model = requestedModel || settings.aiModel;

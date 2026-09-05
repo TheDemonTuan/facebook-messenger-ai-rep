@@ -19,15 +19,15 @@ describe("Settings API & Server-Side xAI Configuration", () => {
     const defaultSettings = SystemSettingsSchema.parse({});
     expect((defaultSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
     expect((defaultSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
-    expect(defaultSettings.aiModel).toBe("grok-4.5");
+    expect(defaultSettings.aiModel).toBe("auto/best-chat");
 
     const customSettings = SystemSettingsSchema.parse({
-      aiModel: "grok-beta",
+      aiModel: "openai/gpt-4.1-mini",
     });
 
     expect((customSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
     expect((customSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
-    expect(customSettings.aiModel).toBe("grok-beta");
+    expect(customSettings.aiModel).toBe("openai/gpt-4.1-mini");
   });
 
   it("fails fast when the production core configuration is incomplete", () => {
