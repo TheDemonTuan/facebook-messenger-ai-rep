@@ -36,13 +36,15 @@ async function mockApi(page: Page): Promise<void> {
       });
     }
     if (path === "/api/inbox") {
+      const items = [
+        {
+          conversation: { id: conversationId, status: "WAITING", manualMode, inboundVersion: 1, updatedAt: now },
+          customer: { name: "Khách thử nghiệm", externalCustomerId: "customer-1" },
+        },
+      ];
       return json({
-        items: [
-          {
-            conversation: { id: conversationId, status: "WAITING", manualMode, inboundVersion: 1, updatedAt: now },
-            customer: { name: "Khách thử nghiệm", externalCustomerId: "customer-1" },
-          },
-        ],
+        items,
+        conversations: items,
         hasMore: false,
         nextCursor: null,
       });
@@ -117,6 +119,41 @@ async function mockApi(page: Page): Promise<void> {
   });
 }
 
+async function waitForRoute(page: Page, route: string): Promise<void> {
+  await page.locator("main").waitFor();
+  switch (route) {
+    case "overview":
+      await page.getByRole("heading", { name: "Tổng quan hệ thống" }).waitFor();
+      await page.getByText("Hội thoại hôm nay").waitFor();
+      break;
+    case "inbox":
+      await page.getByRole("heading", { name: "Hộp thư khách hàng" }).waitFor();
+      await page.getByText("Khách thử nghiệm").first().waitFor();
+      break;
+    case "queue":
+      await page.getByRole("heading", { name: "Quản lý hàng đợi xử lý" }).waitFor();
+      await page.getByText("Không có tác vụ nào theo bộ lọc đã chọn!").waitFor();
+      break;
+    case "incidents":
+      await page.getByRole("heading", { name: "Quản lý sự cố & Giám sát an toàn" }).waitFor();
+      await page.getByText("Không có sự cố nào cần xử lý").waitFor();
+      break;
+    case "ai-logs":
+      await page.getByRole("heading", { name: "Nhật ký hoạt động AI" }).waitFor();
+      await page.getByText("Không tìm thấy lượt xử lý AI nào phù hợp bộ lọc.").waitFor();
+      break;
+    case "settings":
+      await page.getByRole("heading", { name: "Cài đặt hệ thống & Chính sách phản hồi" }).waitFor();
+      await page.getByText("Loại dịch vụ AI").waitFor();
+      await page.getByText(/Phiên bản cấu hình:\s*v2/).waitFor();
+      break;
+    case "audit":
+      await page.getByRole("heading", { name: "Nhật ký hoạt động" }).waitFor();
+      await page.getByText("Không có sự kiện kiểm toán nào").waitFor();
+      break;
+  }
+}
+
 async function exercise(browser: Browser, name: string, viewport: { width: number; height: number }): Promise<void> {
   const context = await browser.newContext({ viewport });
   const page = await context.newPage();
@@ -127,18 +164,20 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   for (const route of ["overview", "inbox", "queue", "incidents", "ai-logs", "settings", "audit"]) {
     const response = await page.goto(`${baseURL}/${route}`);
     assert(response?.ok(), `${name}: ${route} returned ${response?.status()}`);
-    await page.locator("main").waitFor();
+    await waitForRoute(page, route);
   }
 
   const bodyText = (await page.locator("body").innerText()).toLowerCase();
   assert(!bodyText.includes("novnc"), `${name}: public noVNC control is visible`);
 
   await page.goto(`${baseURL}/overview`);
+  await waitForRoute(page, "overview");
   const overviewText = await page.locator("main").innerText();
   assert(overviewText.includes("Tổng quan hệ thống"), `${name}: missing overview title`);
   assert(overviewText.includes("Hội thoại hôm nay"), `${name}: missing friendly conversation metric`);
 
   await page.goto(`${baseURL}/settings`);
+  await waitForRoute(page, "settings");
   const settingsText = await page.locator("main").innerText();
   assert(settingsText.includes("Loại dịch vụ AI"), `${name}: missing customer-friendly AI provider format label`);
   assert(settingsText.includes("Địa chỉ dịch vụ"), `${name}: missing customer-friendly address label`);
@@ -156,22 +195,26 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.getByText(/Đã lưu cấu hình mới thành công/).waitFor();
 
   await page.goto(`${baseURL}/incidents`);
+  await waitForRoute(page, "incidents");
   const incidentsText = await page.locator("main").innerText();
   assert(incidentsText.includes("Quản lý sự cố & Giám sát an toàn"), `${name}: missing customer-friendly incident title`);
   assert(!incidentsText.includes("fail-closed"), `${name}: raw internal jargon 'fail-closed' exposed`);
   assert(!incidentsText.includes("Circuit Breakers"), `${name}: raw 'Circuit Breakers' jargon exposed`);
 
   await page.goto(`${baseURL}/queue`);
+  await waitForRoute(page, "queue");
   const queueText = await page.locator("main").innerText();
   assert(!queueText.includes("fencingEpoch"), `${name}: raw technical token 'fencingEpoch' visible in normal queue view`);
 
   await page.goto(`${baseURL}/audit`);
+  await waitForRoute(page, "audit");
   const auditText = await page.locator("main").innerText();
   assert(auditText.includes("Nhật ký hoạt động"), `${name}: missing friendly audit title`);
   assert(!auditText.includes("Audit Trail"), `${name}: raw 'Audit Trail' jargon exposed`);
 
   await page.goto(`${baseURL}/inbox/${conversationId}`);
   await page.getByText("Khách thử nghiệm").first().waitFor();
+  await page.getByText("Chi tiết kỹ thuật").waitFor();
   const convDetailText = await page.locator("main").innerText();
   assert(convDetailText.includes("Chi tiết kỹ thuật"), `${name}: missing collapsible technical details block`);
   assert(!convDetailText.includes("Inbound Version:"), `${name}: raw 'Inbound Version:' exposed in default detail view`);
