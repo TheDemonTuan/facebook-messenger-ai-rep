@@ -162,6 +162,26 @@ export interface AiRunItem {
   status: "SUCCESS" | "GUARD_REJECTED" | "ERROR" | "STALE_ABORTED";
   promptHash?: string | null;
   responseHash?: string | null;
+  requestSnapshot?: {
+    apiFormat?: "OPENAI_COMPATIBLE" | "ANTHROPIC_COMPATIBLE";
+    endpoint?: string;
+    method?: string;
+    model?: string;
+    payload?: unknown;
+    [key: string]: unknown;
+  } | null;
+  responseSnapshot?: {
+    status?: number;
+    raw?: unknown;
+    content?: string | null;
+    error?: string;
+    [key: string]: unknown;
+  } | null;
+  usedResult?: {
+    messages?: string[];
+    needsClarification?: boolean;
+    [key: string]: unknown;
+  } | null;
   parsedOutput: {
     messages?: string[];
     needsClarification?: boolean;

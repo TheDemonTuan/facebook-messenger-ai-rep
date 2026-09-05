@@ -287,6 +287,9 @@ export const aiRuns = pgTable(
     status: varchar("status", { length: 32 }).notNull(), // SUCCESS | STALE_ABORTED | GUARD_REJECTED | ERROR
     promptHash: varchar("prompt_hash", { length: 64 }),
     responseHash: varchar("response_hash", { length: 64 }),
+    requestSnapshot: jsonb("request_snapshot").$type<Record<string, unknown>>(),
+    responseSnapshot: jsonb("response_snapshot").$type<Record<string, unknown>>(),
+    usedResult: jsonb("used_result").$type<Record<string, unknown>>(),
     parsedOutput: jsonb("parsed_output").$type<Record<string, unknown>>(),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

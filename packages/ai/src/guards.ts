@@ -188,6 +188,13 @@ export function validateAiOutput(
     };
   }
   const data = parseResult.data;
+  data.messages = data.messages.map((msg) =>
+    msg
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+      .replace(/<thought>[\s\S]*?<\/thought>/gi, "")
+      .trim()
+  );
 
   // Check message count
   if (data.messages.length === 0 || data.messages.length > maxResponseCount) {

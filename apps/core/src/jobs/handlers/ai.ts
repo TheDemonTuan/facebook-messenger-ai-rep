@@ -161,8 +161,16 @@ export function createAiHandler(deps: AiHandlerDeps) {
         status: runStatus,
         promptHash: result.promptHash,
         responseHash: result.responseHash || null,
+        requestSnapshot: result.requestSnapshot || null,
+        responseSnapshot: result.responseSnapshot || null,
+        usedResult: result.usedResult || null,
         parsedOutput: {
-          data: result.data || null,
+          data: result.data
+            ? {
+                messages: result.data.messages,
+                needsClarification: result.data.needsClarification,
+              }
+            : null,
           messageCount: result.data?.messages?.length || 0,
         },
         errorMessage: result.errorMessage || null,

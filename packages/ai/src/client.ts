@@ -15,6 +15,7 @@ export interface AiCompletionResult {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  rawResponse?: unknown;
 }
 
 function envConnectionConfig(timeoutMs?: number): AiConnectionConfig {
@@ -69,6 +70,7 @@ export async function createAiCompletion(
       promptTokens: completion.usage?.prompt_tokens || 0,
       completionTokens: completion.usage?.completion_tokens || 0,
       totalTokens: completion.usage?.total_tokens || 0,
+      rawResponse: completion,
     };
   }
 
@@ -96,7 +98,13 @@ export async function createAiCompletion(
   if (!content) throw new Error("AI provider returned unexpected format (missing text content)");
   const promptTokens = result.usage?.input_tokens || 0;
   const completionTokens = result.usage?.output_tokens || 0;
-  return { content, promptTokens, completionTokens, totalTokens: promptTokens + completionTokens };
+  return {
+    content,
+    promptTokens,
+    completionTokens,
+    totalTokens: promptTokens + completionTokens,
+    rawResponse: result,
+  };
 }
 
 export interface AiHealthCheckResult {

@@ -13,6 +13,10 @@ import {
   Send,
   Copy,
   Sparkles,
+  Terminal,
+  ShieldCheck,
+  MessageSquare,
+  ArrowRight,
 } from "lucide-react";
 
 interface AiTestResult {
@@ -24,11 +28,96 @@ interface AiTestResult {
   totalTokens?: number;
   promptHash?: string;
   responseHash?: string;
+  requestSnapshot?: {
+    apiFormat?: "OPENAI_COMPATIBLE" | "ANTHROPIC_COMPATIBLE";
+    endpoint?: string;
+    method?: string;
+    model?: string;
+    payload?: unknown;
+    [key: string]: unknown;
+  };
+  responseSnapshot?: {
+    status?: number;
+    raw?: unknown;
+    content?: string | null;
+    error?: string;
+    [key: string]: unknown;
+  };
+  usedResult?: {
+    messages?: string[];
+    needsClarification?: boolean;
+    [key: string]: unknown;
+  };
   data?: {
     messages?: string[];
+    needsClarification?: boolean;
     [key: string]: unknown;
   } | null;
   errorMessage?: string;
+}
+
+function formatProviderVi(apiFormat?: string, endpoint?: string): string {
+  const isAnthropic = apiFormat === "ANTHROPIC_COMPATIBLE" || (endpoint && endpoint.includes("/messages"));
+  if (isAnthropic) {
+    return "Dịch vụ AI chuẩn Anthropic Claude";
+  }
+  return "Dịch vụ AI chuẩn OpenAI";
+}
+
+function formatEndpointVi(apiFormat?: string, endpoint?: string): string {
+  if (endpoint) return endpoint;
+  if (apiFormat === "ANTHROPIC_COMPATIBLE") {
+    return "POST {baseUrl}/messages";
+  }
+  return "POST {baseUrl}/chat/completions";
+}
+
+function formatDurationVi(ms?: number): string {
+  if (ms == null || ms < 0) return "Chưa có thông tin";
+  if (ms < 1000) return `${ms} mili-giây`;
+  return `${(ms / 1000).toFixed(1).replace(".", ",")} giây`;
+}
+
+function formatUsageVi(total?: number, prompt?: number, completion?: number): string {
+  if (total == null || total === 0) {
+    if ((prompt && prompt > 0) || (completion && completion > 0)) {
+      return `Đầu vào: ${prompt || 0}, Phản hồi: ${completion || 0}`;
+    }
+    return "0 ký hiệu/token";
+  }
+  const parts: string[] = [];
+  if (prompt != null && prompt > 0) parts.push(`Đầu vào: ${prompt}`);
+  if (completion != null && completion > 0) parts.push(`Phản hồi: ${completion}`);
+  const details = parts.length > 0 ? ` (${parts.join(", ")})` : "";
+  return `${total} từ/token${details}`;
+}
+
+function formatStatusVi(status: string): { label: string; color: string; bgColor: string } {
+  switch (status) {
+    case "SUCCESS":
+      return { label: "Thành công", color: "#166534", bgColor: "#dcfce7" };
+    case "GUARD_REJECTED":
+      return { label: "Từ chối an toàn", color: "#92400e", bgColor: "#fef3c7" };
+    case "STALE_ABORTED":
+      return { label: "Đã hủy do tin nhắn mới", color: "#475569", bgColor: "#f1f5f9" };
+    case "ERROR":
+      return { label: "Lỗi xử lý", color: "#991b1b", bgColor: "#fee2e2" };
+    default:
+      return { label: status, color: "#475569", bgColor: "#f1f5f9" };
+  }
+}
+
+function getStatusIcon(status: string) {
+  switch (status) {
+    case "SUCCESS":
+      return <CheckCircle2 size={13} />;
+    case "GUARD_REJECTED":
+      return <AlertTriangle size={13} />;
+    case "ERROR":
+      return <XCircle size={13} />;
+    default:
+      return <Clock size={13} />;
+  }
 }
 
 export const AiLogsPage: React.FC = () => {
@@ -100,12 +189,11 @@ export const AiLogsPage: React.FC = () => {
         body: JSON.stringify({ message: testMessage.trim() }),
       });
       setTestResult(res);
-      // Reload logs to show new entry if created
       loadRuns(convFilter, statusFilter);
     } catch (err: unknown) {
       setTestResult({
         success: false,
-        errorMessage: (err as Error).message || "Unknown error during test",
+        errorMessage: (err as Error).message || "Lỗi không xác định trong quá trình thử nghiệm",
       });
     } finally {
       setTestLoading(false);
@@ -119,77 +207,298 @@ export const AiLogsPage: React.FC = () => {
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "SUCCESS":
-        return (
-          <span
-            style={{
-              backgroundColor: "#dcfce7",
-              color: "#166534",
-              padding: "2px 8px",
-              borderRadius: "4px",
-              fontSize: "0.75rem",
-              fontWeight: "bold",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            <CheckCircle2 size={12} /> SUCCESS
-          </span>
-        );
-      case "GUARD_REJECTED":
-        return (
-          <span
-            style={{
-              backgroundColor: "#fef3c7",
-              color: "#92400e",
-              padding: "2px 8px",
-              borderRadius: "4px",
-              fontSize: "0.75rem",
-              fontWeight: "bold",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            <AlertTriangle size={12} /> GUARD REJECTED
-          </span>
-        );
-      case "ERROR":
-        return (
-          <span
-            style={{
-              backgroundColor: "#fee2e2",
-              color: "#991b1b",
-              padding: "2px 8px",
-              borderRadius: "4px",
-              fontSize: "0.75rem",
-              fontWeight: "bold",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "4px",
-            }}
-          >
-            <XCircle size={12} /> ERROR
-          </span>
-        );
-      default:
-        return (
-          <span
-            style={{
-              backgroundColor: "#f1f5f9",
-              color: "#475569",
-              padding: "2px 8px",
-              borderRadius: "4px",
-              fontSize: "0.75rem",
-              fontWeight: "bold",
-            }}
-          >
-            {status}
-          </span>
-        );
+    const s = formatStatusVi(status);
+    return (
+      <span
+        style={{
+          backgroundColor: s.bgColor,
+          color: s.color,
+          padding: "3px 8px",
+          borderRadius: "4px",
+          fontSize: "0.75rem",
+          fontWeight: "600",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: "4px",
+        }}
+      >
+        {getStatusIcon(status)} {s.label}
+      </span>
+    );
+  };
+
+  // Helper to extract customer output messages safely (never expose internalReasoning)
+  const getCustomerOutputMessages = (run: AiRunItem): string[] => {
+    if (run.usedResult?.messages && Array.isArray(run.usedResult.messages)) {
+      return run.usedResult.messages;
     }
+    const parsed = run.parsedOutput;
+    if (parsed?.messages && Array.isArray(parsed.messages)) {
+      return parsed.messages;
+    }
+    const nestedData = parsed?.data as { messages?: string[] } | undefined;
+    if (nestedData?.messages && Array.isArray(nestedData.messages)) {
+      return nestedData.messages;
+    }
+    return [];
+  };
+
+  const getCustomerOutputClarification = (run: AiRunItem): boolean => {
+    if (typeof run.usedResult?.needsClarification === "boolean") {
+      return run.usedResult.needsClarification;
+    }
+    if (typeof run.parsedOutput?.needsClarification === "boolean") {
+      return run.parsedOutput.needsClarification;
+    }
+    const nestedData = run.parsedOutput?.data as { needsClarification?: boolean } | undefined;
+    if (typeof nestedData?.needsClarification === "boolean") {
+      return nestedData.needsClarification;
+    }
+    return false;
+  };
+
+  const renderRequestSnapshotContent = (req?: AiRunItem["requestSnapshot"]) => {
+    if (!req) {
+      return (
+        <div style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem" }}>
+          Lượt chạy này được ghi nhận từ phiên bản trước; chưa có bản chụp chi tiết yêu cầu.
+        </div>
+      );
+    }
+
+    const payload = req.payload as {
+      model?: string;
+      system?: string;
+      messages?: Array<{ role: string; content: string }>;
+    } | undefined;
+
+    return (
+      <div>
+        <div
+          style={{
+            backgroundColor: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: "6px",
+            padding: "10px 12px",
+            marginBottom: "12px",
+            fontSize: "0.82rem",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+            <span style={{ color: "#475569" }}>Dịch vụ AI:</span>
+            <span style={{ fontWeight: "600", color: "#1e293b" }}>
+              {formatProviderVi(req.apiFormat, req.endpoint)}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+            <span style={{ color: "#475569" }}>Cổng kết nối (Endpoint):</span>
+            <span style={{ fontWeight: "600", color: "#1e293b", wordBreak: "break-all" }}>
+              {req.method || "POST"} {formatEndpointVi(req.apiFormat, req.endpoint)}
+            </span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: "#475569" }}>Mô hình xử lý:</span>
+            <span style={{ fontWeight: "600", color: "#1e293b" }}>
+              {req.model || payload?.model || "Mặc định"}
+            </span>
+          </div>
+        </div>
+
+        {/* System Prompt (if Anthropic format or system message) */}
+        {payload?.system && (
+          <div style={{ marginBottom: "12px" }}>
+            <div style={{ fontWeight: "600", color: "#334155", fontSize: "0.8rem", marginBottom: "4px" }}>
+              Hướng dẫn hệ thống (System Prompt):
+            </div>
+            <div
+              style={{
+                backgroundColor: "#f8fafc",
+                border: "1px solid #cbd5e1",
+                borderRadius: "6px",
+                padding: "8px 10px",
+                fontSize: "0.8rem",
+                color: "#334155",
+                whiteSpace: "pre-wrap",
+                maxHeight: "150px",
+                overflowY: "auto",
+              }}
+            >
+              {payload.system}
+            </div>
+          </div>
+        )}
+
+        {/* Message history sent to provider */}
+        {payload?.messages && Array.isArray(payload.messages) && (
+          <div>
+            <div style={{ fontWeight: "600", color: "#334155", fontSize: "0.8rem", marginBottom: "6px" }}>
+              Nội dung hội thoại gửi đi ({payload.messages.length} phần):
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "280px", overflowY: "auto" }}>
+              {payload.messages.map((m, idx) => {
+                const isUser = m.role === "user";
+                const isSystem = m.role === "system";
+                return (
+                  <div
+                    key={idx}
+                    style={{
+                      backgroundColor: isUser ? "#eff6ff" : isSystem ? "#f1f5f9" : "#f0fdf4",
+                      border: `1px solid ${isUser ? "#bfdbfe" : isSystem ? "#cbd5e1" : "#bbf7d0"}`,
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "0.82rem",
+                    }}
+                  >
+                    <div style={{ fontWeight: "600", fontSize: "0.75rem", color: isUser ? "#1d4ed8" : isSystem ? "#475569" : "#15803d", marginBottom: "2px" }}>
+                      {isUser ? "Khách hàng" : isSystem ? "Hướng dẫn hệ thống" : "Trợ lý phản hồi trước"}:
+                    </div>
+                    <div style={{ whiteSpace: "pre-wrap", color: "#1e293b" }}>{m.content}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderResponseSnapshotContent = (res?: AiRunItem["responseSnapshot"], fallbackError?: string | null) => {
+    const rawContent = res?.content || (typeof res?.raw === "string" ? res.raw : undefined);
+    const hasError = Boolean(res?.error || fallbackError);
+
+    return (
+      <div>
+        <div
+          style={{
+            backgroundColor: "#f8fafc",
+            border: "1px solid #e2e8f0",
+            borderRadius: "6px",
+            padding: "8px 12px",
+            marginBottom: "12px",
+            fontSize: "0.82rem",
+            display: "flex",
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ color: "#475569" }}>Trạng thái nhận được:</span>
+          <span style={{ fontWeight: "600", color: hasError ? "#b91c1c" : "#15803d" }}>
+            {res?.status ? `Mã HTTP ${res.status}` : hasError ? "Lỗi tiếp nhận" : "Đã hoàn tất (200)"}
+          </span>
+        </div>
+
+        {rawContent ? (
+          <div>
+            <div style={{ fontWeight: "600", color: "#334155", fontSize: "0.8rem", marginBottom: "4px" }}>
+              Nội dung gốc từ nhà cung cấp AI:
+            </div>
+            <div
+              style={{
+                backgroundColor: "#ffffff",
+                border: "1px solid #cbd5e1",
+                borderRadius: "6px",
+                padding: "10px",
+                fontSize: "0.82rem",
+                color: "#0f172a",
+                whiteSpace: "pre-wrap",
+                maxHeight: "320px",
+                overflowY: "auto",
+                fontFamily: "ui-monospace, monospace",
+              }}
+            >
+              {rawContent}
+            </div>
+          </div>
+        ) : res?.raw && typeof res.raw === "object" ? (
+          <div>
+            <div style={{ fontWeight: "600", color: "#334155", fontSize: "0.8rem", marginBottom: "4px" }}>
+              Nội dung trả về dạng cấu trúc:
+            </div>
+            <pre
+              style={{
+                backgroundColor: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: "6px",
+                padding: "10px",
+                fontSize: "0.78rem",
+                color: "#1e293b",
+                maxHeight: "320px",
+                overflowY: "auto",
+              }}
+            >
+              {JSON.stringify(res.raw, null, 2)}
+            </pre>
+          </div>
+        ) : (
+          <div style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem" }}>
+            {hasError ? "Không nhận được nội dung phản hồi hợp lệ từ nhà cung cấp AI." : "Không có dữ liệu phản hồi dạng văn bản."}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderUsedResultContent = (run: AiRunItem) => {
+    const messages = getCustomerOutputMessages(run);
+    const needsClarification = getCustomerOutputClarification(run);
+
+    if (messages.length === 0) {
+      return (
+        <div style={{ color: "#64748b", fontStyle: "italic", fontSize: "0.85rem", padding: "12px 0" }}>
+          Hệ thống không sử dụng kết quả nào từ lượt gọi này (lượt gọi chưa thành công hoặc không tạo ra câu trả lời hợp lệ).
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <div style={{ marginBottom: "12px" }}>
+          <div style={{ fontWeight: "600", color: "#166534", fontSize: "0.85rem", marginBottom: "8px" }}>
+            Tin nhắn gửi đến khách hàng ({messages.length} câu phản hồi):
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            {messages.map((msg, idx) => (
+              <div
+                key={idx}
+                style={{
+                  backgroundColor: "#f0fdf4",
+                  border: "1px solid #bbf7d0",
+                  borderRadius: "6px",
+                  padding: "10px 12px",
+                  color: "#166534",
+                  fontSize: "0.85rem",
+                  lineHeight: "1.4",
+                }}
+              >
+                <div style={{ fontWeight: "600", fontSize: "0.75rem", marginBottom: "4px" }}>
+                  Câu phản hồi #{idx + 1}:
+                </div>
+                <div>{msg}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div
+          style={{
+            backgroundColor: needsClarification ? "#fef3c7" : "#f8fafc",
+            border: `1px solid ${needsClarification ? "#fde68a" : "#e2e8f0"}`,
+            borderRadius: "6px",
+            padding: "8px 12px",
+            fontSize: "0.82rem",
+            color: needsClarification ? "#92400e" : "#475569",
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+          }}
+        >
+          {needsClarification ? <AlertTriangle size={15} /> : <CheckCircle2 size={15} />}
+          <span>
+            <b>Cần khách hàng làm rõ thêm:</b> {needsClarification ? "Có (Chờ khách bổ sung thông tin)" : "Không (Đã đủ thông tin giải đáp)"}
+          </span>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -212,13 +521,13 @@ export const AiLogsPage: React.FC = () => {
               display: "flex",
               alignItems: "center",
               gap: "8px",
+              color: "#1e293b",
             }}
           >
-            <Cpu size={26} color="#2563eb" />
-            Nhật ký AI & Proxy Gateway (AI Proxy Logs)
+            <Cpu size={24} color="#2563eb" /> Nhật ký hoạt động AI
           </h1>
           <div style={{ color: "#64748b", fontSize: "0.9rem" }}>
-            Xem chi tiết toàn bộ lượt gọi AI, độ trễ, token, prompt/response hash và kết quả parsed output để kiểm tra & gỡ lỗi (debug).
+            Xem chi tiết các lượt xử lý AI: nội dung đã gửi, phản hồi nhận được và kết quả hệ thống sử dụng phản hồi khách hàng.
           </div>
         </div>
 
@@ -240,7 +549,7 @@ export const AiLogsPage: React.FC = () => {
             }}
           >
             <Sparkles size={16} color={showTester ? "#ffffff" : "#2563eb"} />
-            {showTester ? "Đóng Test Tool" : "Test gửi chat lên Proxy"}
+            {showTester ? "Đóng công cụ thử nghiệm" : "Thử nghiệm gửi tin"}
           </button>
           <button
             onClick={() => loadRuns(convFilter, statusFilter)}
@@ -275,16 +584,29 @@ export const AiLogsPage: React.FC = () => {
             marginBottom: "16px",
           }}
         >
-          <div style={{ fontWeight: "bold", fontSize: "1rem", color: "#1e3a8a", marginBottom: "8px" }}>
-            ⚡ Thử nghiệm gửi Chat trực tiếp lên AI Gateway & Xem phản hồi Realtime
+          <div
+            style={{
+              fontWeight: "bold",
+              marginBottom: "8px",
+              fontSize: "0.95rem",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              color: "#1e3a8a",
+            }}
+          >
+            <Sparkles size={16} /> Thử nghiệm gửi tin nhắn lên dịch vụ AI
           </div>
+          <div style={{ color: "#475569", fontSize: "0.85rem", marginBottom: "12px" }}>
+            Mô phỏng tin nhắn của khách hàng để kiểm tra cấu hình dịch vụ AI và quan sát dữ liệu gửi/nhận.
+          </div>
+
           <form onSubmit={handleRunLiveTest} style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
             <input
               type="text"
               value={testMessage}
               onChange={(e) => setTestMessage(e.target.value)}
-              placeholder="Nhập tin nhắn khách hàng giả lập..."
-              disabled={testLoading}
+              placeholder="Nhập nội dung khách hàng gửi đến..."
               style={{
                 flex: 1,
                 padding: "8px 12px",
@@ -310,7 +632,7 @@ export const AiLogsPage: React.FC = () => {
               }}
             >
               <Send size={16} />
-              {testLoading ? "Đang gửi lên proxy..." : "Gửi Test"}
+              {testLoading ? "Đang gửi xử lý..." : "Gửi tin thử nghiệm"}
             </button>
           </form>
 
@@ -320,67 +642,88 @@ export const AiLogsPage: React.FC = () => {
                 backgroundColor: "#ffffff",
                 border: "1px solid #e2e8f0",
                 borderRadius: "6px",
-                padding: "12px",
+                padding: "14px",
                 fontSize: "0.85rem",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "12px" }}>
                 <div>
                   <span style={{ fontWeight: "bold" }}>Trạng thái: </span>
                   {testResult.success ? (
-                    <span style={{ color: "#166534", fontWeight: "bold" }}>THÀNH CÔNG (200 OK)</span>
+                    <span style={{ color: "#166534", fontWeight: "bold" }}>Thành công</span>
                   ) : (
-                    <span style={{ color: "#991b1b", fontWeight: "bold" }}>THẤT BẠI: {testResult.errorMessage}</span>
+                    <span style={{ color: "#991b1b", fontWeight: "bold" }}>Thất bại: {testResult.errorMessage}</span>
                   )}
                 </div>
-                <div style={{ color: "#64748b" }}>
-                  Model: <b>{testResult.model}</b> | Latency: <b>{testResult.latencyMs}ms</b> | Tokens:{" "}
-                  <b>{testResult.totalTokens}</b>
+                <div style={{ color: "#475569" }}>
+                  Mô hình: <b>{testResult.model}</b> | Thời gian: <b>{formatDurationVi(testResult.latencyMs)}</b> | Dung lượng:{" "}
+                  <b>{formatUsageVi(testResult.totalTokens, testResult.promptTokens, testResult.completionTokens)}</b>
                 </div>
               </div>
 
-              <div style={{ display: "flex", gap: "12px", marginBottom: "8px", fontSize: "0.8rem", color: "#475569" }}>
-                {testResult.promptHash && (
-                  <div>Prompt Hash: <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px" }}>{testResult.promptHash.slice(0, 16)}...</code></div>
-                )}
-                {testResult.responseHash && (
-                  <div>Response Hash: <code style={{ backgroundColor: "#f1f5f9", padding: "2px 6px", borderRadius: "4px" }}>{testResult.responseHash.slice(0, 16)}...</code></div>
-                )}
+              {/* Three main sections for test result */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "6px", padding: "10px" }}>
+                  <div style={{ fontWeight: "600", color: "#1e293b", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <ArrowRight size={14} color="#2563eb" /> Nội dung đã gửi đến dịch vụ AI
+                  </div>
+                  {renderRequestSnapshotContent(testResult.requestSnapshot)}
+                </div>
+
+                <div style={{ border: "1px solid #e2e8f0", borderRadius: "6px", padding: "10px" }}>
+                  <div style={{ fontWeight: "600", color: "#1e293b", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <MessageSquare size={14} color="#166534" /> Phản hồi nhận được
+                  </div>
+                  {renderResponseSnapshotContent(testResult.responseSnapshot, testResult.errorMessage)}
+                </div>
               </div>
 
-              {testResult.data?.messages && testResult.data.messages.length > 0 && (
-                <div style={{ marginBottom: "8px" }}>
-                  <div style={{ fontWeight: "600", color: "#334155", marginBottom: "4px" }}>Câu trả lời được sinh:</div>
-                  {testResult.data.messages.map((m: string, idx: number) => (
-                    <div
-                      key={idx}
-                      style={{
-                        backgroundColor: "#f0fdf4",
-                        border: "1px solid #bbf7d0",
-                        borderRadius: "4px",
-                        padding: "6px 10px",
-                        marginBottom: "4px",
-                        color: "#166534",
-                        fontSize: "0.85rem",
-                      }}
-                    >
-                      <b>Câu #{idx + 1}:</b> {m}
-                    </div>
-                  ))}
+              {testResult.usedResult && (
+                <div style={{ border: "1px solid #bbf7d0", borderRadius: "6px", padding: "10px", backgroundColor: "#f0fdf4", marginBottom: "12px" }}>
+                  <div style={{ fontWeight: "600", color: "#166534", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <ShieldCheck size={14} color="#166534" /> Kết quả hệ thống đã sử dụng
+                  </div>
+                  {renderUsedResultContent({
+                    id: "test",
+                    channelAccountId: "test",
+                    conversationId: "test",
+                    inboundVersion: 1,
+                    model: testResult.model || "",
+                    promptTokens: testResult.promptTokens || 0,
+                    completionTokens: testResult.completionTokens || 0,
+                    totalTokens: testResult.totalTokens || 0,
+                    latencyMs: testResult.latencyMs || 0,
+                    status: testResult.success ? "SUCCESS" : "ERROR",
+                    usedResult: testResult.usedResult,
+                    parsedOutput: testResult.data ? { messages: testResult.data.messages, needsClarification: testResult.data.needsClarification } : null,
+                    errorMessage: testResult.errorMessage || null,
+                    createdAt: new Date().toISOString(),
+                  })}
                 </div>
               )}
 
-              {testResult.errorMessage && (
-                <div style={{ marginTop: "8px", padding: "8px", backgroundColor: "#fef2f2", borderRadius: "4px", color: "#991b1b", fontSize: "0.8rem" }}>
-                  <b>Lỗi:</b> {testResult.errorMessage}
+              {/* Collapsed Technical Details for Test */}
+              <details style={{ marginTop: "10px", border: "1px solid #e2e8f0", borderRadius: "6px", padding: "8px 12px", backgroundColor: "#f8fafc" }}>
+                <summary style={{ cursor: "pointer", fontWeight: "600", fontSize: "0.8rem", color: "#475569" }}>
+                  Chi tiết kỹ thuật
+                </summary>
+                <div style={{ marginTop: "8px", fontSize: "0.78rem" }}>
+                  <div>Độ trễ: {testResult.latencyMs}ms | Token: {testResult.totalTokens} (Đầu vào: {testResult.promptTokens}, Phản hồi: {testResult.completionTokens})</div>
+                  {testResult.promptHash && <div>Mã băm gửi: <code>{testResult.promptHash}</code></div>}
+                  {testResult.responseHash && <div>Mã băm phản hồi: <code>{testResult.responseHash}</code></div>}
+                  {testResult.requestSnapshot && (
+                    <pre style={{ backgroundColor: "#ffffff", padding: "8px", borderRadius: "4px", marginTop: "4px", overflowX: "auto" }}>
+                      {JSON.stringify(testResult.requestSnapshot, null, 2)}
+                    </pre>
+                  )}
                 </div>
-              )}
+              </details>
             </div>
           )}
         </div>
       )}
 
-      {/* Filter Bar */}
+      {/* Filter and Search Bar */}
       <div
         style={{
           display: "flex",
@@ -389,9 +732,8 @@ export const AiLogsPage: React.FC = () => {
           backgroundColor: "#ffffff",
           padding: "12px 16px",
           borderRadius: "8px",
-          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
           marginBottom: "16px",
-          flexWrap: "wrap",
+          boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -404,21 +746,23 @@ export const AiLogsPage: React.FC = () => {
               borderRadius: "6px",
               border: "1px solid #cbd5e1",
               fontSize: "0.85rem",
+              color: "#1e293b",
             }}
           >
             <option value="ALL">Tất cả trạng thái</option>
-            <option value="SUCCESS">Chỉ SUCCESS</option>
-            <option value="ERROR">Chỉ ERROR (Lỗi AI/Proxy)</option>
-            <option value="GUARD_REJECTED">Chỉ GUARD_REJECTED</option>
+            <option value="SUCCESS">Thành công</option>
+            <option value="ERROR">Lỗi xử lý</option>
+            <option value="GUARD_REJECTED">Từ chối an toàn</option>
+            <option value="STALE_ABORTED">Đã hủy do tin nhắn mới</option>
           </select>
         </div>
 
-        <form onSubmit={handleFilterSubmit} style={{ display: "flex", gap: "6px", flex: 1, minWidth: "240px" }}>
+        <form onSubmit={handleFilterSubmit} style={{ display: "flex", flex: 1, gap: "8px" }}>
           <input
             type="text"
             value={convFilter}
             onChange={(e) => setConvFilter(e.target.value)}
-            placeholder="Lọc theo Conversation ID..."
+            placeholder="Lọc theo mã cuộc trò chuyện..."
             style={{
               flex: 1,
               padding: "6px 12px",
@@ -514,18 +858,19 @@ export const AiLogsPage: React.FC = () => {
               backgroundColor: "#f8fafc",
             }}
           >
-            <span>Danh sách lượt gọi AI ({runs.length})</span>
+            <span>Danh sách lượt xử lý ({runs.length})</span>
             {loading && <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Đang tải...</span>}
           </div>
 
           <div style={{ overflowY: "auto", flex: 1 }}>
             {runs.length === 0 ? (
               <div style={{ padding: "32px 16px", textAlign: "center", color: "#94a3b8", fontSize: "0.85rem" }}>
-                Không tìm thấy lượt gọi AI nào phù hợp bộ lọc.
+                Không tìm thấy lượt xử lý AI nào phù hợp bộ lọc.
               </div>
             ) : (
               runs.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
+                const convShortId = run.conversationId ? run.conversationId.slice(0, 8) : "";
                 return (
                   <div
                     key={run.id}
@@ -536,24 +881,27 @@ export const AiLogsPage: React.FC = () => {
                       cursor: "pointer",
                       backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
                       borderLeft: isSelected ? "4px solid #2563eb" : "4px solid transparent",
-                      transition: "background-color 0.15s",
+                      transition: "background 0.15s",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                       {getStatusBadge(run.status)}
-                      <span style={{ fontSize: "0.75rem", color: "#64748b", display: "flex", alignItems: "center", gap: "4px" }}>
-                        <Clock size={12} />
-                        {new Date(run.createdAt).toLocaleTimeString("vi-VN")}
+                      <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                        {new Date(run.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                       </span>
                     </div>
 
-                    <div style={{ fontSize: "0.8rem", fontWeight: "600", color: "#1e293b", marginBottom: "4px" }}>
-                      {run.model}
+                    <div style={{ fontSize: "0.82rem", fontWeight: "600", color: "#1e293b", marginBottom: "4px" }}>
+                      Mô hình: {run.model}
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b" }}>
-                      <span>Độ trễ: {run.latencyMs}ms</span>
-                      <span>Tokens: {run.totalTokens || 0}</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: "4px" }}>
+                      <span>Thời gian: {formatDurationVi(run.latencyMs)}</span>
+                      <span>Dung lượng: {run.totalTokens || 0} từ</span>
+                    </div>
+
+                    <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
+                      Cuộc trò chuyện: #{convShortId}
                     </div>
 
                     {run.errorMessage && (
@@ -594,27 +942,32 @@ export const AiLogsPage: React.FC = () => {
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
-                  alignItems: "center",
+                  alignItems: "flex-start",
                   paddingBottom: "16px",
                   borderBottom: "1px solid #e2e8f0",
                   marginBottom: "16px",
                 }}
               >
                 <div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontWeight: "bold", fontSize: "1.1rem" }}>Chi tiết lượt gọi AI</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" }}>
+                    <span style={{ fontWeight: "bold", fontSize: "1.05rem", color: "#1e293b" }}>
+                      Chi tiết hoạt động AI
+                    </span>
                     {getStatusBadge(selectedRun.status)}
                   </div>
-                  <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px" }}>
-                    ID: <code style={{ backgroundColor: "#f1f5f9", padding: "1px 4px", borderRadius: "3px" }}>{selectedRun.id}</code> |
-                    Thời gian: {new Date(selectedRun.createdAt).toLocaleString("vi-VN")} |
-                    Hội thoại: <code style={{ backgroundColor: "#f1f5f9", padding: "1px 4px", borderRadius: "3px" }}>{selectedRun.conversationId}</code> (v{selectedRun.inboundVersion})
+                  <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                    Thời gian: {new Date(selectedRun.createdAt).toLocaleString("vi-VN")} | Cuộc trò chuyện: #{selectedRun.conversationId?.slice(0, 8)}
                   </div>
                 </div>
 
-                <div style={{ textAlign: "right", fontSize: "0.8rem", color: "#475569" }}>
-                  <div>Model: <b>{selectedRun.model}</b></div>
-                  <div>Độ trễ: <b>{selectedRun.latencyMs}ms</b> | Token: <b>{selectedRun.totalTokens}</b> (P:{selectedRun.promptTokens} / C:{selectedRun.completionTokens})</div>
+                <div style={{ textAlign: "right", fontSize: "0.82rem", color: "#475569" }}>
+                  <div>Mô hình: <b>{selectedRun.model}</b></div>
+                  <div>
+                    Thời gian phản hồi: <b>{formatDurationVi(selectedRun.latencyMs)}</b>
+                  </div>
+                  <div>
+                    Dung lượng xử lý: <b>{formatUsageVi(selectedRun.totalTokens, selectedRun.promptTokens, selectedRun.completionTokens)}</b>
+                  </div>
                 </div>
               </div>
 
@@ -631,21 +984,21 @@ export const AiLogsPage: React.FC = () => {
                   }}
                 >
                   <div style={{ fontWeight: "bold", display: "flex", alignItems: "center", gap: "6px" }}>
-                    <XCircle size={16} /> Lỗi xảy ra trong quá trình gọi AI / Proxy:
+                    <XCircle size={16} /> Lỗi phát sinh trong quá trình xử lý:
                   </div>
-                  <div style={{ marginTop: "4px", fontSize: "0.9rem", fontFamily: "monospace", wordBreak: "break-word" }}>
+                  <div style={{ marginTop: "4px", fontSize: "0.85rem", wordBreak: "break-word" }}>
                     {selectedRun.errorMessage}
                   </div>
                 </div>
               )}
 
-              {/* Inspector Content: Two Halves (Request vs Response) */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px" }}>
-                {/* Column 1: Run Metadata & Hashes */}
+              {/* Three Main Understandable Sections */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+                {/* Section 1: What was sent to AI */}
                 <div
                   style={{
                     border: "1px solid #e2e8f0",
-                    borderRadius: "6px",
+                    borderRadius: "8px",
                     overflow: "hidden",
                     display: "flex",
                     flexDirection: "column",
@@ -653,85 +1006,29 @@ export const AiLogsPage: React.FC = () => {
                 >
                   <div
                     style={{
-                      padding: "8px 12px",
+                      padding: "10px 14px",
                       backgroundColor: "#f8fafc",
                       borderBottom: "1px solid #e2e8f0",
                       display: "flex",
-                      justifyContent: "space-between",
                       alignItems: "center",
+                      gap: "6px",
+                      fontWeight: "600",
+                      fontSize: "0.88rem",
+                      color: "#1e293b",
                     }}
                   >
-                    <span style={{ fontWeight: "600", fontSize: "0.85rem", color: "#1e293b" }}>
-                      🔒 Metadata & Hashes (Bảo mật - Không lưu raw prompt)
-                    </span>
+                    <ArrowRight size={15} color="#2563eb" /> Nội dung đã gửi đến dịch vụ AI
                   </div>
-
-                  <div style={{ padding: "12px", overflowY: "auto", maxHeight: "500px", fontSize: "0.85rem" }}>
-                    <div style={{ marginBottom: "12px" }}>
-                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
-                        Prompt SHA-256 Hash:
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <code style={{ backgroundColor: "#f1f5f9", padding: "4px 8px", borderRadius: "4px", fontSize: "0.75rem", wordBreak: "break-all" }}>
-                          {selectedRun.promptHash || "(Chưa có hash)"}
-                        </code>
-                        {selectedRun.promptHash && (
-                          <button
-                            onClick={() => copyToClipboard(selectedRun.promptHash || "", "Prompt Hash")}
-                            style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
-                          >
-                            <Copy size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ marginBottom: "12px" }}>
-                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
-                        Response SHA-256 Hash:
-                      </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <code style={{ backgroundColor: "#f1f5f9", padding: "4px 8px", borderRadius: "4px", fontSize: "0.75rem", wordBreak: "break-all" }}>
-                          {selectedRun.responseHash || "(Chưa có hash)"}
-                        </code>
-                        {selectedRun.responseHash && (
-                          <button
-                            onClick={() => copyToClipboard(selectedRun.responseHash || "", "Response Hash")}
-                            style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
-                          >
-                            <Copy size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div style={{ marginBottom: "12px" }}>
-                      <div style={{ fontWeight: "600", color: "#475569", marginBottom: "4px", fontSize: "0.8rem" }}>
-                        Token Usage Breakdown:
-                      </div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", textAlign: "center" }}>
-                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
-                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Prompt</div>
-                          <div style={{ fontWeight: "bold" }}>{selectedRun.promptTokens}</div>
-                        </div>
-                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
-                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Completion</div>
-                          <div style={{ fontWeight: "bold" }}>{selectedRun.completionTokens}</div>
-                        </div>
-                        <div style={{ backgroundColor: "#f8fafc", padding: "8px", borderRadius: "4px" }}>
-                          <div style={{ fontSize: "0.7rem", color: "#64748b" }}>Total</div>
-                          <div style={{ fontWeight: "bold" }}>{selectedRun.totalTokens}</div>
-                        </div>
-                      </div>
-                    </div>
+                  <div style={{ padding: "14px", flex: 1, overflowY: "auto", maxHeight: "480px" }}>
+                    {renderRequestSnapshotContent(selectedRun.requestSnapshot)}
                   </div>
                 </div>
 
-                {/* Column 2: Response from AI / Proxy */}
+                {/* Section 2: What provider returned */}
                 <div
                   style={{
                     border: "1px solid #e2e8f0",
-                    borderRadius: "6px",
+                    borderRadius: "8px",
                     overflow: "hidden",
                     display: "flex",
                     flexDirection: "column",
@@ -739,94 +1036,179 @@ export const AiLogsPage: React.FC = () => {
                 >
                   <div
                     style={{
-                      padding: "8px 12px",
+                      padding: "10px 14px",
                       backgroundColor: "#f8fafc",
                       borderBottom: "1px solid #e2e8f0",
                       display: "flex",
-                      justifyContent: "space-between",
                       alignItems: "center",
+                      gap: "6px",
+                      fontWeight: "600",
+                      fontSize: "0.88rem",
+                      color: "#1e293b",
                     }}
                   >
-                    <span style={{ fontWeight: "600", fontSize: "0.85rem", color: "#1e293b" }}>
-                      📥 Chat từ AI trả về (Parsed Output)
-                    </span>
+                    <MessageSquare size={15} color="#166534" /> Phản hồi nhận được
                   </div>
-
-                  <div style={{ padding: "12px", overflowY: "auto", maxHeight: "500px", fontSize: "0.85rem" }}>
-                    {/* Parsed Output Messages preview if available */}
-                    {selectedRun.parsedOutput?.messages && (
-                      <div style={{ marginBottom: "16px" }}>
-                        <div style={{ fontWeight: "bold", color: "#166534", marginBottom: "6px" }}>
-                          ✓ Nội dung soạn thảo đề xuất ({selectedRun.parsedOutput.messages.length} câu):
-                        </div>
-                        {selectedRun.parsedOutput.messages.map((m, idx) => (
-                          <div
-                            key={idx}
-                            style={{
-                              backgroundColor: "#f0fdf4",
-                              border: "1px solid #bbf7d0",
-                              borderRadius: "4px",
-                              padding: "8px 10px",
-                              marginBottom: "6px",
-                              color: "#166534",
-                            }}
-                          >
-                            <b>Câu #{idx + 1}:</b> {m}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Needs clarification indicator */}
-                    {(selectedRun.parsedOutput?.needsClarification ||
-                      (selectedRun.parsedOutput?.data as { needsClarification?: boolean } | undefined)?.needsClarification) && (
-                      <div
-                        style={{
-                          backgroundColor: "#fef3c7",
-                          border: "1px solid #fde68a",
-                          borderRadius: "4px",
-                          padding: "8px 10px",
-                          marginBottom: "12px",
-                          color: "#92400e",
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        ⚠️ AI yêu cầu làm rõ thêm thông tin từ khách hàng (needsClarification: true)
-                      </div>
-                    )}
-
-                    {/* Error display if status is ERROR */}
-                    {selectedRun.status === "ERROR" && selectedRun.errorMessage && (
-                      <div
-                        style={{
-                          backgroundColor: "#fef2f2",
-                          border: "1px solid #fecaca",
-                          borderRadius: "4px",
-                          padding: "10px",
-                          color: "#991b1b",
-                          fontSize: "0.8rem",
-                          lineHeight: "1.4",
-                        }}
-                      >
-                        <div style={{ fontWeight: "bold", marginBottom: "4px" }}>Lỗi xử lý AI:</div>
-                        <div style={{ wordBreak: "break-word" }}>{selectedRun.errorMessage}</div>
-                      </div>
-                    )}
-
-                    {selectedRun.status !== "ERROR" &&
-                      !selectedRun.parsedOutput?.messages &&
-                      !(selectedRun.parsedOutput?.data as { messages?: unknown[] } | undefined)?.messages && (
-                        <div style={{ color: "#64748b", fontSize: "0.8rem", fontStyle: "italic" }}>
-                          (Không có nội dung tin nhắn được trích xuất)
-                        </div>
-                      )}
+                  <div style={{ padding: "14px", flex: 1, overflowY: "auto", maxHeight: "480px" }}>
+                    {renderResponseSnapshotContent(selectedRun.responseSnapshot, selectedRun.errorMessage)}
                   </div>
                 </div>
               </div>
+
+              {/* Section 3: What result application used (Customer Output) */}
+              <div
+                style={{
+                  border: "1px solid #bbf7d0",
+                  borderRadius: "8px",
+                  overflow: "hidden",
+                  marginBottom: "16px",
+                }}
+              >
+                <div
+                  style={{
+                    padding: "10px 14px",
+                    backgroundColor: "#f0fdf4",
+                    borderBottom: "1px solid #bbf7d0",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    fontWeight: "600",
+                    fontSize: "0.88rem",
+                    color: "#166534",
+                  }}
+                >
+                  <ShieldCheck size={16} color="#166534" /> Kết quả hệ thống đã sử dụng
+                </div>
+                <div style={{ padding: "14px", backgroundColor: "#ffffff" }}>
+                  {renderUsedResultContent(selectedRun)}
+                </div>
+              </div>
+
+              {/* Collapsed Technical Details Section */}
+              <details
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: "8px",
+                  padding: "12px 16px",
+                  backgroundColor: "#f8fafc",
+                }}
+              >
+                <summary
+                  style={{
+                    cursor: "pointer",
+                    fontWeight: "600",
+                    fontSize: "0.85rem",
+                    color: "#475569",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  <Terminal size={14} /> Chi tiết kỹ thuật
+                </summary>
+
+                <div style={{ marginTop: "14px", fontSize: "0.8rem", color: "#334155" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
+                    <div>
+                      <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "2px" }}>Mã định danh (Run ID):</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <code style={{ backgroundColor: "#ffffff", padding: "3px 6px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "0.75rem" }}>
+                          {selectedRun.id}
+                        </code>
+                        <button
+                          onClick={() => copyToClipboard(selectedRun.id, "Mã ID")}
+                          style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "2px" }}>Mã hội thoại (Conversation ID):</div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <code style={{ backgroundColor: "#ffffff", padding: "3px 6px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "0.75rem" }}>
+                          {selectedRun.conversationId}
+                        </code>
+                        <button
+                          onClick={() => copyToClipboard(selectedRun.conversationId, "Mã hội thoại")}
+                          style={{ border: "none", background: "none", color: "#2563eb", cursor: "pointer" }}
+                        >
+                          <Copy size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
+                    <div>
+                      <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "2px" }}>Mã băm gửi đi (Prompt SHA-256):</div>
+                      <code style={{ backgroundColor: "#ffffff", padding: "3px 6px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "0.75rem", wordBreak: "break-all" }}>
+                        {selectedRun.promptHash || "(Chưa có hash)"}
+                      </code>
+                    </div>
+
+                    <div>
+                      <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "2px" }}>Mã băm phản hồi (Response SHA-256):</div>
+                      <code style={{ backgroundColor: "#ffffff", padding: "3px 6px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "0.75rem", wordBreak: "break-all" }}>
+                        {selectedRun.responseHash || "(Chưa có hash)"}
+                      </code>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: "12px" }}>
+                    <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "4px" }}>
+                      Bản chụp yêu cầu đã làm sạch bảo mật (Sanitized Request Snapshot):
+                    </div>
+                    <pre
+                      style={{
+                        backgroundColor: "#ffffff",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "6px",
+                        padding: "10px",
+                        fontSize: "0.75rem",
+                        maxHeight: "200px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {JSON.stringify(selectedRun.requestSnapshot || {}, null, 2)}
+                    </pre>
+                  </div>
+
+                  <div>
+                    <div style={{ fontWeight: "600", color: "#64748b", marginBottom: "4px" }}>
+                      Bản chụp phản hồi nhà cung cấp (Response Snapshot):
+                    </div>
+                    <pre
+                      style={{
+                        backgroundColor: "#ffffff",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "6px",
+                        padding: "10px",
+                        fontSize: "0.75rem",
+                        maxHeight: "200px",
+                        overflowY: "auto",
+                      }}
+                    >
+                      {JSON.stringify(selectedRun.responseSnapshot || {}, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </details>
             </div>
           ) : (
-            <div style={{ padding: "40px", textAlign: "center", color: "#94a3b8" }}>
-              Chọn một lượt gọi AI ở danh sách bên trái để xem chi tiết kết quả.
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "350px",
+                color: "#94a3b8",
+              }}
+            >
+              <Cpu size={48} strokeWidth={1} style={{ marginBottom: "12px" }} />
+              <div>Chọn một lượt xử lý AI từ danh sách bên trái để xem chi tiết.</div>
             </div>
           )}
         </div>

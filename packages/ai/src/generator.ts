@@ -29,6 +29,92 @@ export interface GenerationResult {
   promptHash: string;
   responseHash?: string;
   errorMessage?: string;
+  requestSnapshot?: Record<string, unknown>;
+  responseSnapshot?: Record<string, unknown>;
+  usedResult?: {
+    messages: string[];
+    needsClarification: boolean;
+  } | null;
+}
+
+export function buildSanitizedRequestSnapshot(
+  provider: AiConnectionConfig,
+  model: string,
+  messages: Array<{ role: string; content: string }>
+): Record<string, unknown> {
+  const isAnthropic = provider.apiFormat === "ANTHROPIC_COMPATIBLE";
+  let cleanBaseUrl = (provider.baseUrl || "").replace(/\/$/, "");
+  try {
+    const url = new URL(cleanBaseUrl);
+    url.username = "";
+    url.password = "";
+    for (const key of ["key", "apiKey", "api_key", "token", "auth", "secret"]) {
+      url.searchParams.delete(key);
+    }
+    cleanBaseUrl = url.toString().replace(/\/$/, "");
+  } catch {
+    // Keep cleanBaseUrl
+  }
+
+  const endpoint = isAnthropic
+    ? `${cleanBaseUrl}/messages`
+    : `${cleanBaseUrl}/chat/completions`;
+
+  const payload = isAnthropic
+    ? {
+        model,
+        max_tokens: 1024,
+        temperature: 0.3,
+        system: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n"),
+        messages: messages
+          .filter((m) => m.role !== "system")
+          .map((m) => ({ role: m.role, content: m.content })),
+      }
+    : {
+        model,
+        messages,
+        temperature: 0.3,
+        response_format: { type: "json_object" },
+      };
+
+  return {
+    apiFormat: provider.apiFormat,
+    endpoint,
+    method: "POST",
+    model,
+    payload,
+  };
+}
+
+export function toUsedResult(
+  data?: AiStructuredOutput
+): { messages: string[]; needsClarification: boolean } | null {
+  if (!data || !Array.isArray(data.messages)) return null;
+  return {
+    messages: [...data.messages],
+    needsClarification: Boolean(data.needsClarification),
+  };
+}
+
+export function buildResponseSnapshot(
+  rawResponse: unknown,
+  status = 200,
+  error?: string,
+  content?: string
+): Record<string, unknown> {
+  const snapshot: Record<string, unknown> = {
+    status,
+    raw: rawResponse ?? null,
+  };
+  if (typeof content === "string") {
+    snapshot.content = content;
+  } else if (typeof rawResponse === "string") {
+    snapshot.content = rawResponse;
+  }
+  if (error) {
+    snapshot.error = sanitizeAiError(error);
+  }
+  return snapshot;
 }
 
 export class AiReplyGenerator {
@@ -46,6 +132,7 @@ export class AiReplyGenerator {
     const startTime = Date.now();
     const initialMessages = buildChatMessages(context);
     const promptHash = sha256(JSON.stringify(initialMessages));
+    const requestSnapshot = buildSanitizedRequestSnapshot(provider, model, initialMessages);
 
     console.log(`[AI Proxy] ---> ${provider.apiFormat} | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
 
@@ -82,6 +169,9 @@ export class AiReplyGenerator {
           totalTokens,
           promptHash,
           responseHash,
+          requestSnapshot,
+          responseSnapshot: buildResponseSnapshot(completion.rawResponse || rawResponse, 200, undefined, rawResponse),
+          usedResult: toUsedResult(firstValidation.data),
         };
       }
 
@@ -100,6 +190,9 @@ export class AiReplyGenerator {
           totalTokens,
           promptHash,
           responseHash,
+          requestSnapshot,
+          responseSnapshot: buildResponseSnapshot(completion.rawResponse || rawResponse, 502, firstValidation.error, rawResponse),
+          usedResult: null,
         };
       }
 
@@ -119,6 +212,7 @@ export class AiReplyGenerator {
           content: retryPrompt,
         },
       ];
+      const retryRequestSnapshot = buildSanitizedRequestSnapshot(provider, model, retryMessages);
 
       console.log(`[AI Proxy Retry] ---> ${provider.apiFormat} (retry with error feedback) | Model: ${model}`);
 
@@ -151,6 +245,9 @@ export class AiReplyGenerator {
           totalTokens,
           promptHash,
           responseHash: retryRaw ? sha256(retryRaw) : undefined,
+          requestSnapshot: retryRequestSnapshot,
+          responseSnapshot: buildResponseSnapshot(retryCompletion.rawResponse || retryRaw, 500, errMsg, retryRaw),
+          usedResult: null,
         };
       }
 
@@ -171,6 +268,9 @@ export class AiReplyGenerator {
           totalTokens: totalTokens + retryCompletion.totalTokens,
           promptHash,
           responseHash: sha256(retryRaw),
+          requestSnapshot: retryRequestSnapshot,
+          responseSnapshot: buildResponseSnapshot(retryCompletion.rawResponse || retryRaw, 200, undefined, retryRaw),
+          usedResult: toUsedResult(retryValidation.data),
         };
       }
 
@@ -184,6 +284,9 @@ export class AiReplyGenerator {
         totalTokens,
         promptHash,
         responseHash: retryRaw ? sha256(retryRaw) : undefined,
+        requestSnapshot: retryRequestSnapshot,
+        responseSnapshot: buildResponseSnapshot(retryCompletion.rawResponse || retryRaw, 200, retryValidation.error, retryRaw),
+        usedResult: null,
       };
     } catch (err: unknown) {
       const error = err as Error;
@@ -199,6 +302,9 @@ export class AiReplyGenerator {
         totalTokens: 0,
         promptHash,
         responseHash: sha256(error.message || "Failed to generate reply"),
+        requestSnapshot,
+        responseSnapshot: buildResponseSnapshot(null, undefined, error.message),
+        usedResult: null,
       };
     }
   }

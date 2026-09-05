@@ -16,6 +16,8 @@ import {
   aiRuns,
   conversationEvents,
   jobs,
+  stripSensitiveData,
+  sanitizeCustomerOutput,
 } from "@messenger/db";
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
@@ -404,8 +406,15 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const total = totalRes[0]?.count || 0;
         const hasMore = offset + items.length < total;
 
+        const sanitizedItems = items.map((item) => ({
+          ...item,
+          requestSnapshot: item.requestSnapshot ? stripSensitiveData(item.requestSnapshot) : null,
+          responseSnapshot: item.responseSnapshot ? stripSensitiveData(item.responseSnapshot) : null,
+          usedResult: item.usedResult ? sanitizeCustomerOutput(item.usedResult) : null,
+        }));
+
         return reply.send({
-          items,
+          items: sanitizedItems,
           total,
           limit,
           offset,
@@ -453,6 +462,13 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           timeoutMs: settings.aiTimeoutMs,
         });
 
+        const customerData = result.data
+          ? {
+              messages: result.data.messages,
+              needsClarification: result.data.needsClarification,
+            }
+          : undefined;
+
         return reply.send({
           success: result.success,
           latencyMs: result.latencyMs,
@@ -462,7 +478,10 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           totalTokens: result.totalTokens,
           promptHash: result.promptHash,
           responseHash: result.responseHash,
-          data: result.data,
+          requestSnapshot: result.requestSnapshot ? stripSensitiveData(result.requestSnapshot) : null,
+          responseSnapshot: result.responseSnapshot ? stripSensitiveData(result.responseSnapshot) : null,
+          usedResult: result.usedResult ? sanitizeCustomerOutput(result.usedResult) : null,
+          data: customerData,
           errorMessage: result.errorMessage,
         });
       }
