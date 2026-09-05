@@ -53,13 +53,14 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
       (request as unknown as { user: SessionUser }).user = user;
     });
 
-    // 1. List conversations with Pagination
-    fastify.get<{ Querystring: { filter?: string; limit?: string; offset?: string } }>(
+    // 1. List conversations with Pagination (supports limit/offset and cursor)
+    fastify.get<{ Querystring: { filter?: string; limit?: string; offset?: string; cursor?: string } }>(
       "/api/inbox",
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
         const offset = Math.max(0, parseInt(request.query.offset || "0", 10));
         const filter = request.query.filter || "all";
+        const cursor = request.query.cursor;
 
         const conditions = [eq(conversations.channelAccountId, channelAccountId)];
 
@@ -69,6 +70,13 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           conditions.push(sql`${conversations.status} IN ('QUEUED', 'DEBOUNCING')`);
         } else if (filter === "error") {
           conditions.push(eq(conversations.status, "ERROR"));
+        }
+
+        if (cursor) {
+          const cursorDate = new Date(cursor);
+          if (!isNaN(cursorDate.getTime())) {
+            conditions.push(sql`${conversations.lastInboundAt} < ${cursorDate}`);
+          }
         }
 
         const [rows, totalRes] = await Promise.all([
@@ -82,7 +90,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             .where(and(...conditions))
             .orderBy(desc(conversations.lastInboundAt))
             .limit(limit)
-            .offset(offset),
+            .offset(cursor ? 0 : offset),
           db
             .select({ count: sql<number>`count(*)::int` })
             .from(conversations)
@@ -90,7 +98,13 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         ]);
 
         const total = totalRes[0]?.count || 0;
-        const hasMore = offset + rows.length < total;
+        const lastItem = rows[rows.length - 1];
+        const nextCursor =
+          rows.length >= limit && lastItem?.conversation?.lastInboundAt
+            ? new Date(lastItem.conversation.lastInboundAt).toISOString()
+            : null;
+
+        const hasMore = Boolean(nextCursor) || offset + rows.length < total;
 
         return reply.send({
           conversations: rows,
@@ -98,12 +112,16 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           limit,
           offset,
           hasMore,
+          nextCursor,
         });
       }
     );
 
-    // 2. Conversation timeline details
-    fastify.get<{ Params: { conversationId: string } }>(
+    // 2. Conversation timeline details (supports messageCursor pagination)
+    fastify.get<{
+      Params: { conversationId: string };
+      Querystring: { messageCursor?: string; messageLimit?: string };
+    }>(
       "/api/inbox/:conversationId",
       async (request, reply) => {
         const { conversationId } = request.params;
@@ -112,12 +130,24 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           return reply.status(404).send({ error: "Conversation not found" });
         }
 
+        const messageLimit = Math.min(Math.max(1, parseInt(request.query?.messageLimit || "50", 10)), 200);
+        const messageCursor = request.query?.messageCursor;
+
+        const msgConditions = [eq(messages.conversationId, conversationId)];
+        if (messageCursor) {
+          const cursorDate = new Date(messageCursor);
+          if (!isNaN(cursorDate.getTime())) {
+            msgConditions.push(sql`${messages.timestamp} < ${cursorDate}`);
+          }
+        }
+
         const [convMessages, runs, actions, events] = await Promise.all([
           db
             .select()
             .from(messages)
-            .where(eq(messages.conversationId, conversationId))
-            .orderBy(messages.timestamp),
+            .where(and(...msgConditions))
+            .orderBy(desc(messages.timestamp))
+            .limit(messageLimit),
           db
             .select()
             .from(aiRuns)
@@ -133,9 +163,21 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           eventRepo.getRecentEvents(conversationId, 30),
         ]);
 
+        const chronologicalMessages = [...convMessages].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+
+        const oldestMessage = convMessages[convMessages.length - 1];
+        const nextMessageCursor =
+          convMessages.length >= messageLimit && oldestMessage
+            ? new Date(oldestMessage.timestamp).toISOString()
+            : null;
+
         return reply.send({
           ...convData,
-          messages: convMessages,
+          messages: chronologicalMessages,
+          nextMessageCursor,
+          hasMoreMessages: Boolean(nextMessageCursor),
           aiRuns: runs,
           outboundActions: actions,
           events,
@@ -143,7 +185,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
       }
     );
 
-    // 3. Manual takeover
+    // 3. Manual takeover (aborts active typing, sends cancel ack)
     fastify.post<{ Params: { conversationId: string } }>(
       "/api/inbox/:conversationId/takeover",
       { preHandler: [requireRole("OPERATOR")] },
@@ -152,6 +194,17 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const { conversationId } = request.params;
 
         await convRepo.setManualMode(conversationId, true);
+        await outboundRepo.abortStaleActions(conversationId, 9999999);
+        try {
+          await db.execute(
+            sql`SELECT pg_notify('browser_cancel_typing', ${JSON.stringify({
+              channelAccountId,
+              conversationId,
+              inboundVersion: 9999999,
+            })})`
+          );
+        } catch {}
+
         await eventRepo.recordEvent({
           channelAccountId,
           conversationId,
@@ -159,8 +212,12 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           actor: user.email,
         });
 
-        await broadcaster.broadcast("conversation:takeover", { conversationId, manualMode: true });
-        return reply.send({ success: true, conversationId, manualMode: true });
+        await broadcaster.broadcast("conversation:takeover", {
+          conversationId,
+          manualMode: true,
+          cancelAck: true,
+        });
+        return reply.send({ success: true, conversationId, manualMode: true, cancelAck: true });
       }
     );
 

@@ -15,6 +15,7 @@ import {
   incidents,
   aiRuns,
   conversationEvents,
+  jobs,
 } from "@messenger/db";
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
@@ -141,9 +142,18 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     });
 
     // 2. Queue list
-    fastify.get("/api/queue", async (_request, reply) => {
-      const items = await queueRepo.getQueueList(channelAccountId);
-      return reply.send({ items });
+    fastify.get<{ Querystring: { limit?: string } }>("/api/queue", async (request, reply) => {
+      const jobLimit = Math.min(Math.max(1, parseInt(request.query?.limit || "50", 10)), 100);
+      const [items, jobsList] = await Promise.all([
+        queueRepo.getQueueList(channelAccountId),
+        db
+          .select()
+          .from(jobs)
+          .where(eq(jobs.channelAccountId, channelAccountId))
+          .orderBy(desc(jobs.createdAt))
+          .limit(jobLimit),
+      ]);
+      return reply.send({ items, jobs: jobsList });
     });
 
     fastify.post<{ Params: { conversationId: string } }>(
