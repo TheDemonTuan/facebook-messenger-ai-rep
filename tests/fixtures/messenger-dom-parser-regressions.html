@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger DOM Parser Regressions</title></head>
+<body>
+  <!-- Header / Banner separate from main -->
+  <div role="banner">
+    <div data-testid="conversation_header" aria-label="Thông tin cuộc trò chuyện">
+      <h2>Hỗ Trợ Trực Tuyến</h2>
+    </div>
+  </div>
+
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Status Notice Row without MID (Finding 4: non-message row must not trigger degraded) -->
+      <div role="status" class="system_notice">
+        Cuộc trò chuyện này được mã hóa đầu cuối.
+      </div>
+
+      <!-- Date Divider Row without MID (Finding 4: date divider row must not trigger degraded) -->
+      <div role="row">
+        <div>Hôm nay</div>
+      </div>
+
+      <!-- Finding 1: Message body link to profile must NEVER be parsed as sender identity -->
+      <div role="row" id="mid.$regIssue001" aria-label="Khách Hàng: Xem trang này nhé">
+        <div dir="auto">Xem trang này nhé: <a href="https://www.facebook.com/attacker.profile.99">attacker link</a></div>
+        <time datetime="2026-09-05T08:00:00Z"></time>
+      </div>
+
+      <!-- Finding 2: Message body text discussing 'members' or 'thông tin nhóm' must NOT classify thread as GROUP -->
+      <div role="row" id="mid.$regIssue002" aria-label="Khách Hàng: Câu lạc bộ có 50 members">
+        <div dir="auto">Câu lạc bộ của chúng tôi có 50 members và cần thông tin nhóm để họp mặt.</div>
+        <time datetime="2026-09-05T08:05:00Z"></time>
+      </div>
+
+      <!-- Finding 5: Incoming message containing 'bạn đã gửi' in body/aria-label must NOT be classified as outgoing -->
+      <div role="row" id="mid.$regIssue003" aria-label="Khách Hàng: Bạn đã gửi nhầm hàng rồi shop ơi">
+        <div dir="auto">Bạn đã gửi nhầm hàng rồi shop ơi!</div>
+        <time datetime="2026-09-05T08:10:00Z"></time>
+      </div>
+
+      <!-- Finding 5: Incoming message containing 'You: ' in customer text must NOT be outgoing -->
+      <div role="row" id="mid.$regIssue004" aria-label="John Doe: You: I need help immediately">
+        <div dir="auto">You: I need help immediately</div>
+        <time datetime="2026-09-05T08:15:00Z"></time>
+      </div>
+
+      <!-- Finding 6: Complete nested bubble text with spans, bold, and mention -->
+      <div role="row" id="mid.$regIssue005" aria-label="Khách Hàng: Xin chào">
+        <div dir="auto">
+          <span>Xin chào <b>shop</b></span>,
+          <a class="mention" href="https://www.facebook.com/profile.php?id=1000888000">@ShopBot</a>
+          <span>tôi muốn hỏi về đơn hàng <i>#98765</i> nhé!</span>
+        </div>
+        <time datetime="2026-09-05T08:20:00Z"></time>
+      </div>
+
+      <!-- Finding 8: Message with time text only in row aria-label (NO <time> element) must fall back to OBSERVED -->
+      <div role="row" id="mid.$regIssue006" aria-label="Khách Hàng: Hẹn gặp lúc 10:45 AM ngày mai">
+        <div dir="auto">Hẹn gặp lúc 10:45 AM ngày mai</div>
+      </div>
+
+      <!-- Finding 8: Invalid date bounds in machine attribute (year 1995) must fall back to OBSERVED -->
+      <div role="row" id="mid.$regIssue007" aria-label="Khách Hàng: Tin nhắn có ngày lỗi">
+        <div dir="auto">Tin nhắn có ngày lỗi</div>
+        <time datetime="1995-05-01T00:00:00Z"></time>
+      </div>
+
+      <!-- Finding 9: Relative hour without trước/ago is 10:00 clock time, not 10 hours ago -->
+      <div role="row" id="mid.$regIssue008" aria-label="Khách Hàng: Giờ hẹn">
+        <div dir="auto">Giờ hẹn</div>
+        <time>10:00</time>
+      </div>
+
+      <!-- Finding 9: Relative hour WITH trước is parsed as relative time -->
+      <div role="row" id="mid.$regIssue009" aria-label="Khách Hàng: Đã gửi trước đó">
+        <div dir="auto">Đã gửi trước đó</div>
+        <time>2 giờ trước</time>
+      </div>
+
+      <!-- Finding 10: Generic role=link anchor without mention class must NOT be verified structured mention -->
+      <div role="row" id="mid.$regIssue010" aria-label="Khách Hàng: Link thông thường">
+        <div dir="auto">Vui lòng ghé thăm <a href="https://www.facebook.com/profile.php?id=1000888000" role="link">@ShopBot</a> tại trang web</div>
+        <time datetime="2026-09-05T08:30:00Z"></time>
+      </div>
+
+      <!-- Finding 10: Mention deduplication across multiple tokens in same row -->
+      <div role="row" id="mid.$regIssue011" aria-label="Khách Hàng: Mention nhiều lần">
+        <div dir="auto">
+          Chào <a class="mention" href="https://www.facebook.com/profile.php?id=1000888000">@ShopBot</a>,
+          nhờ @ShopBot và @shopbot hỗ trợ!
+        </div>
+        <time datetime="2026-09-05T08:35:00Z"></time>
+      </div>
+
+      <!-- Finding 10: Thread URL in anchor must never be parsed as entity ID -->
+      <div role="row" id="mid.$regIssue012" aria-label="Khách Hàng: Thread link">
+        <div dir="auto">Tham khảo <a class="mention" href="https://www.facebook.com/messages/t/123456789">@thread</a> này nhé</div>
+        <time datetime="2026-09-05T08:40:00Z"></time>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

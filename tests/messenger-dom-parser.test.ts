@@ -478,4 +478,149 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(result.bubbles[1]!.isOutgoing).toBe(true);
     });
   });
+
+  describe("7. Regression Tests for 10 Hardening Issues", () => {
+    const regressionsHtml = fs.readFileSync(
+      path.resolve(__dirname, "fixtures/messenger-dom-parser-regressions.html"),
+      "utf-8"
+    );
+
+    it("Issue 1: Sender identity only from opening row attributes or dedicated author elements, never body links", () => {
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+      // Row 1 contains a link to https://www.facebook.com/attacker.profile.99 in message text
+      const b1 = result.bubbles.find((b) => b.id === "mid.$regIssue001");
+      expect(b1).toBeDefined();
+      expect(b1!.senderId).toBeNull();
+      expect(b1!.senderKind).toBe("UNKNOWN");
+      expect(b1!.senderReliability).toBe("UNVERIFIED");
+      expect(b1!.senderProfileUrl).toBeNull();
+    });
+
+    it("Issue 2: Group classification only from header/banner structured cues (never body text)", () => {
+      // In regressionsHtml, header indicates DIRECT conversation, while Row 2 text mentions '50 members' and 'thông tin nhóm'
+      const result = parseThreadClassification(regressionsHtml);
+      expect(result.kind).toBe("DIRECT");
+      expect(result.reliability).toBe("VERIFIED");
+
+      // Without header, body text with '50 members' must fail closed to UNKNOWN
+      const bodyOnly = `<div><span>Câu lạc bộ có 50 members và thông tin nhóm</span></div>`;
+      const unverifiedResult = parseThreadClassification(bodyOnly);
+      expect(unverifiedResult.kind).toBe("UNKNOWN");
+      expect(unverifiedResult.reliability).toBe("UNVERIFIED");
+    });
+
+    it("Issue 3: Browser snapshot includes header safely when separate from main", () => {
+      // regressionsHtml has header in div[role="banner"] and messages in div[role="main"]
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+      expect(result.threadClassification?.kind).toBe("DIRECT");
+      expect(result.threadClassification?.reliability).toBe("VERIFIED");
+      expect(result.bubbles.length).toBeGreaterThan(0);
+    });
+
+    it("Issue 4: Degraded only for actual message rows (system/status rows and date dividers do not degrade)", () => {
+      // regressionsHtml contains status notices and date dividers lacking MID
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+      expect(result.isDegraded).toBe(false);
+      expect(result.ok).toBe(true);
+    });
+
+    it("Issue 5: Anchor outgoing aria prefixes (customer aria-labels containing 'Bạn đã gửi' or 'You:' are not outgoing)", () => {
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+      // Row 3: aria-label="Khách Hàng: Bạn đã gửi nhầm hàng rồi shop ơi"
+      const b3 = result.bubbles.find((b) => b.id === "mid.$regIssue003");
+      expect(b3).toBeDefined();
+      expect(b3!.isOutgoing).toBe(false);
+
+      // Row 4: aria-label="John Doe: You: I need help immediately"
+      const b4 = result.bubbles.find((b) => b.id === "mid.$regIssue004");
+      expect(b4).toBeDefined();
+      expect(b4!.isOutgoing).toBe(false);
+    });
+
+    it("Issue 6: Preserve complete nested bubble text across spans, bold, and mention elements", () => {
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+      const b5 = result.bubbles.find((b) => b.id === "mid.$regIssue005");
+      expect(b5).toBeDefined();
+      expect(b5!.text).toBe("Xin chào shop, @ShopBot tôi muốn hỏi về đơn hàng #98765 nhé!");
+    });
+
+    it("Issue 7: Two-pass DST offset handling across standard/daylight transition boundaries", () => {
+      // In America/New_York, 2026 spring forward occurs on March 8:
+      // 01:30 is EST (UTC-5) -> 06:30 UTC
+      const nyBefore = getUtcDateFromZonedParts(
+        { year: 2026, month: 3, day: 8, hour: 1, minute: 30 },
+        "America/New_York"
+      );
+      expect(nyBefore.toISOString()).toBe("2026-03-08T06:30:00.000Z");
+
+      // 03:30 is EDT (UTC-4) -> 07:30 UTC
+      const nyAfter = getUtcDateFromZonedParts(
+        { year: 2026, month: 3, day: 8, hour: 3, minute: 30 },
+        "America/New_York"
+      );
+      expect(nyAfter.toISOString()).toBe("2026-03-08T07:30:00.000Z");
+    });
+
+    it("Issue 8: Validate date/time bounds and never use row aria-label as timestamp", () => {
+      const fixedObserved = new Date("2026-09-05T12:00:00.000Z");
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, {
+        ...mockBotOptions,
+        observedAt: fixedObserved,
+      });
+
+      // Row 6: Time only in row aria-label (10:45 AM) without timestamp element -> must fall back to OBSERVED
+      const b6 = result.bubbles.find((b) => b.id === "mid.$regIssue006");
+      expect(b6).toBeDefined();
+      expect(b6!.timestampProvenance).toBe("OBSERVED");
+      expect(b6!.facebookEventTimestamp).toBeNull();
+
+      // Row 7: Datetime with invalid year 1995 -> must fall back to OBSERVED
+      const b7 = result.bubbles.find((b) => b.id === "mid.$regIssue007");
+      expect(b7).toBeDefined();
+      expect(b7!.timestampProvenance).toBe("OBSERVED");
+      expect(b7!.facebookEventTimestamp).toBeNull();
+    });
+
+    it("Issue 9: Relative hour requires ago/trước marker", () => {
+      const fixedObserved = new Date("2026-09-05T12:00:00.000Z"); // 19:00 VN time
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, {
+        ...mockBotOptions,
+        observedAt: fixedObserved,
+      });
+
+      // Row 8: <time>10:00</time> is clock time 10:00 VN (03:00 UTC), not 10 hours ago
+      const b8 = result.bubbles.find((b) => b.id === "mid.$regIssue008");
+      expect(b8).toBeDefined();
+      expect(b8!.timestampProvenance).toBe("FACEBOOK_EVENT");
+      expect(b8!.facebookEventTimestamp?.toISOString()).toBe("2026-09-05T03:00:00.000Z");
+
+      // Row 9: <time>2 giờ trước</time> has 'trước' -> 2 hours before fixedObserved (10:00 UTC)
+      const b9 = result.bubbles.find((b) => b.id === "mid.$regIssue009");
+      expect(b9).toBeDefined();
+      expect(b9!.timestampProvenance).toBe("FACEBOOK_EVENT");
+      expect(b9!.facebookEventTimestamp?.toISOString()).toBe("2026-09-05T10:00:00.000Z");
+    });
+
+    it("Issue 10: Mentions must be designated structured elements, dedupe normalized tokens, and never parse thread URLs", () => {
+      const result = parseMessengerBubblesFromHtml(regressionsHtml, mockBotOptions);
+
+      // Row 10: Generic role=link anchor without mention class is not verified
+      const b10 = result.bubbles.find((b) => b.id === "mid.$regIssue010");
+      expect(b10).toBeDefined();
+      expect(b10!.mentions?.every((m) => !m.isVerified)).toBe(true);
+
+      // Row 11: @ShopBot, @ShopBot, and @shopbot in same row must be deduped to exactly 1 mention
+      const b11 = result.bubbles.find((b) => b.id === "mid.$regIssue011");
+      expect(b11).toBeDefined();
+      expect(b11!.mentions?.length).toBe(1);
+      expect(b11!.mentions![0]!.isVerified).toBe(true);
+
+      // Row 12: Anchor with thread URL /messages/t/123456789 must never extract entity ID
+      const b12 = result.bubbles.find((b) => b.id === "mid.$regIssue012");
+      expect(b12).toBeDefined();
+      expect(b12!.mentions?.length).toBe(1);
+      expect(b12!.mentions![0]!.entityId).toBe("");
+      expect(b12!.mentions![0]!.isVerified).toBe(false);
+    });
+  });
 });

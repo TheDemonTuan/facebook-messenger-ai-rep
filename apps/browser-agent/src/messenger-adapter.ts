@@ -320,8 +320,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
     try {
       const html = await page.evaluate(() => {
-        const main = document.querySelector('div[role="main"]') || document.body;
-        return main.outerHTML || main.innerHTML;
+        const header = document.querySelector('div[role="banner"], header, [data-testid*="header"]');
+        const main = document.querySelector('div[role="main"]');
+        if (header && main && !main.contains(header)) {
+          return header.outerHTML + "\n" + main.outerHTML;
+        }
+        if (main) {
+          return main.outerHTML;
+        }
+        return document.body ? document.body.innerHTML : "";
       });
       return parseMessengerBubblesFromHtml(html, {
         observedAt: new Date(),
