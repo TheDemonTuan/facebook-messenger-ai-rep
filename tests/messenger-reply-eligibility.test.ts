@@ -4,6 +4,8 @@ import {
   SystemSettingsPatchSchema,
   SystemSettingsBaseShape,
   mergeSystemSettings,
+  SettingRevisionSchema,
+  type SettingRevision,
   isValidTimeZone,
   ReplyModeSchema,
   ThreadKindSchema,
@@ -80,6 +82,41 @@ describe("PR 1: Messenger Reply Eligibility Contracts & Pure Policy", () => {
       const unknownSwitches = keys.filter((k) => k.toLowerCase().includes("unknown"));
       expect(unknownSwitches).toEqual([]);
     });
+
+    it("exports SettingRevisionSchema exactly compatible with base branch contract", () => {
+      const sampleRevision: SettingRevision = SettingRevisionSchema.parse({
+        id: "123e4567-e89b-12d3-a456-426614174000",
+        channelAccountId: "chan-123",
+        revision: 2,
+        settings: {
+          businessTimeZone: "Asia/Bangkok",
+        },
+        changedBy: "admin-user",
+        reason: "Updated timezone",
+        createdAt: "2026-09-05T12:00:00.000Z",
+      });
+
+      expect(sampleRevision.id).toBe("123e4567-e89b-12d3-a456-426614174000");
+      expect(sampleRevision.channelAccountId).toBe("chan-123");
+      expect(sampleRevision.revision).toBe(2);
+      expect(sampleRevision.settings.businessTimeZone).toBe("Asia/Bangkok");
+      expect(sampleRevision.settings.replyMode).toBe("EVERYONE_EXCEPT");
+      expect(sampleRevision.changedBy).toBe("admin-user");
+      expect(sampleRevision.reason).toBe("Updated timezone");
+      expect(sampleRevision.createdAt).toBeInstanceOf(Date);
+
+      // Rejects invalid UUID or non-positive revision
+      expect(() =>
+        SettingRevisionSchema.parse({
+          id: "not-a-uuid",
+          channelAccountId: "chan-123",
+          revision: 0,
+          settings: {},
+          changedBy: "admin",
+          createdAt: new Date(),
+        })
+      ).toThrow();
+    });
   });
 
   describe("2. Enums and Extended Schemas", () => {
@@ -145,6 +182,19 @@ describe("PR 1: Messenger Reply Eligibility Contracts & Pure Policy", () => {
       const parsed = MessageTimestampsSchema.parse(timestamps);
       expect(parsed.facebookEvent).toBeNull();
       expect(parsed.observed.provenance).toBe("OBSERVED");
+    });
+
+    it("preserves numeric timestamp 0 for both facebookEventAt and observedAt using nullish checks", () => {
+      const timestamps = createMessageTimestamps({
+        facebookEventAt: 0,
+        observedAt: 0,
+      });
+      const parsed = MessageTimestampsSchema.parse(timestamps);
+      expect(parsed.facebookEvent).not.toBeNull();
+      expect(parsed.facebookEvent?.timestamp.getTime()).toBe(0);
+      expect(parsed.facebookEvent?.timestamp.toISOString()).toBe("1970-01-01T00:00:00.000Z");
+      expect(parsed.observed.timestamp.getTime()).toBe(0);
+      expect(parsed.observed.timestamp.toISOString()).toBe("1970-01-01T00:00:00.000Z");
     });
 
     it("formats and validates channel-scoped participant identity", () => {

@@ -146,3 +146,15 @@ export function mergeSystemSettings(
     ...cleanPatch,
   });
 }
+
+export const SettingRevisionSchema = z.object({
+  id: z.string().uuid(),
+  channelAccountId: z.string(),
+  revision: z.number().int().positive(),
+  settings: SystemSettingsSchema,
+  changedBy: z.string(),
+  reason: z.string().nullable().optional(),
+  createdAt: z.coerce.date(),
+});
+export type SettingRevision = z.infer<typeof SettingRevisionSchema>;
+

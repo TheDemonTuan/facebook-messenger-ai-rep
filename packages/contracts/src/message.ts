@@ -90,16 +90,17 @@ export function createMessageTimestamps(options: {
   observedSourceLabel?: string;
 }): MessageTimestamps {
   return {
-    facebookEvent: options.facebookEventAt
-      ? {
-          timestamp: new Date(options.facebookEventAt),
-          provenance: "FACEBOOK_EVENT",
-          precision: options.facebookPrecision ?? "MINUTE",
-          sourceLabel: options.facebookSourceLabel,
-        }
-      : null,
+    facebookEvent:
+      options.facebookEventAt != null
+        ? {
+            timestamp: new Date(options.facebookEventAt),
+            provenance: "FACEBOOK_EVENT",
+            precision: options.facebookPrecision ?? "MINUTE",
+            sourceLabel: options.facebookSourceLabel,
+          }
+        : null,
     observed: {
-      timestamp: options.observedAt ? new Date(options.observedAt) : new Date(),
+      timestamp: options.observedAt != null ? new Date(options.observedAt) : new Date(),
       provenance: "OBSERVED",
       precision: options.observedPrecision ?? "MILLISECOND",
       sourceLabel: options.observedSourceLabel,
