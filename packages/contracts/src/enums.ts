@@ -124,3 +124,102 @@ export const SenderActorSchema = z.enum([
   "SYSTEM",
 ]);
 export type SenderActor = z.infer<typeof SenderActorSchema>;
+
+export const ChannelAccountTypeSchema = z.enum([
+  "PERSONAL_MESSENGER",
+  "FACEBOOK_PAGE",
+]);
+export type ChannelAccountType = z.infer<typeof ChannelAccountTypeSchema>;
+
+export const ReplyModeSchema = z.enum([
+  "EVERYONE_EXCEPT",
+  "ONLY_SELECTED",
+]);
+export type ReplyMode = z.infer<typeof ReplyModeSchema>;
+
+export const ThreadKindSchema = z.enum([
+  "DIRECT",
+  "GROUP",
+  "UNKNOWN",
+]);
+export type ThreadKind = z.infer<typeof ThreadKindSchema>;
+
+export const SenderKindSchema = z.enum([
+  "PERSON",
+  "PAGE",
+  "NON_PERSON",
+  "UNKNOWN",
+]);
+export type SenderKind = z.infer<typeof SenderKindSchema>;
+
+export const ClassificationReliabilitySchema = z.enum([
+  "VERIFIED",
+  "UNVERIFIED",
+]);
+export type ClassificationReliability = z.infer<typeof ClassificationReliabilitySchema>;
+
+export const TimestampProvenanceSchema = z.enum([
+  "FACEBOOK_EVENT",
+  "OBSERVED",
+  "SYSTEM",
+  "UNKNOWN",
+]);
+export type TimestampProvenance = z.infer<typeof TimestampProvenanceSchema>;
+
+export const TimestampPrecisionSchema = z.enum([
+  "MILLISECOND",
+  "SECOND",
+  "MINUTE",
+  "APPROXIMATE",
+  "UNKNOWN",
+]);
+export type TimestampPrecision = z.infer<typeof TimestampPrecisionSchema>;
+
+export const ReplyEligibilityDecisionSchema = z.enum([
+  "ELIGIBLE",
+  "INELIGIBLE",
+]);
+export type ReplyEligibilityDecision = z.infer<typeof ReplyEligibilityDecisionSchema>;
+
+export const ReplyEligibilityReasonCodeSchema = z.enum([
+  "ELIGIBLE",
+  // Hard gates
+  "AUTO_REPLY_DISABLED",
+  "INTAKE_PAUSED",
+  "CHANNEL_SUSPENDED",
+  "CHANNEL_PAUSED",
+  "CONVERSATION_BLOCKED",
+  "CONVERSATION_MANUAL_MODE",
+  "DIRECTION_NOT_INBOUND",
+  "SELF_MESSAGE",
+  // Verified classification
+  "UNKNOWN_THREAD_KIND",
+  "UNVERIFIED_THREAD_CLASSIFICATION",
+  "UNKNOWN_SENDER_KIND",
+  "UNVERIFIED_SENDER_CLASSIFICATION",
+  "UNVERIFIED_PARTICIPANT_IDENTITY",
+  // Source controls
+  "DIRECT_REPLIES_DISABLED",
+  "GROUP_REPLIES_DISABLED",
+  // PERSON list mode
+  "PERSON_EXCLUDED",
+  "PERSON_NOT_SELECTED",
+  // Page / Non-person controls
+  "PAGE_REPLIES_DISABLED",
+  "NON_PERSON_REPLIES_DISABLED",
+  // Group verified-mention requirement
+  "GROUP_MENTION_REQUIRED",
+  "GROUP_MENTION_UNVERIFIED",
+]);
+export type ReplyEligibilityReasonCode = z.infer<typeof ReplyEligibilityReasonCodeSchema>;
+
+export const ReplyPrecedenceStepSchema = z.enum([
+  "HARD_GATES",
+  "VERIFIED_CLASSIFICATION",
+  "SOURCE_CONTROLS",
+  "PERSON_LIST_MODE",
+  "PAGE_NON_PERSON_CONTROLS",
+  "GROUP_MENTION_REQUIREMENT",
+  "ELIGIBLE",
+]);
+export type ReplyPrecedenceStep = z.infer<typeof ReplyPrecedenceStepSchema>;

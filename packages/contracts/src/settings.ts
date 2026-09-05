@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ReplyModeSchema } from "./enums.js";
 
 export const AiApiFormatSchema = z.enum(["OPENAI_COMPATIBLE", "ANTHROPIC_COMPATIBLE"]);
 export type AiApiFormat = z.infer<typeof AiApiFormatSchema>;
@@ -12,6 +13,18 @@ export function isValidAiBaseUrl(baseUrl: string): boolean {
   try {
     const url = new URL(baseUrl);
     return url.protocol === "https:" || (url.protocol === "http:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname));
+  } catch {
+    return false;
+  }
+}
+
+export function isValidTimeZone(timeZone: string): boolean {
+  if (typeof timeZone !== "string" || timeZone.trim().length === 0) {
+    return false;
+  }
+  try {
+    Intl.DateTimeFormat(undefined, { timeZone: timeZone.trim() });
+    return true;
   } catch {
     return false;
   }
@@ -37,6 +50,18 @@ export const SystemSettingsSchema = z.object({
   busyMode: z.boolean().default(false),
   autoReplyEnabled: z.boolean().default(true),
   pauseIntakeProcessing: z.boolean().default(false),
+  // Messenger reply eligibility controls
+  businessTimeZone: z.string().default("Asia/Ho_Chi_Minh").refine(isValidTimeZone, {
+    message: "Invalid IANA time zone identifier.",
+  }),
+  replyMode: ReplyModeSchema.default("EVERYONE_EXCEPT"),
+  directRepliesEnabled: z.boolean().default(true),
+  groupRepliesEnabled: z.boolean().default(false),
+  pageRepliesEnabled: z.boolean().default(false),
+  nonPersonRepliesEnabled: z.boolean().default(false),
+  requireGroupMention: z.boolean().default(true),
+  selectedParticipantIds: z.array(z.string().trim().min(1)).default([]),
+  excludedParticipantIds: z.array(z.string().trim().min(1)).default([]),
 });
 export type SystemSettings = z.infer<typeof SystemSettingsSchema>;
 
