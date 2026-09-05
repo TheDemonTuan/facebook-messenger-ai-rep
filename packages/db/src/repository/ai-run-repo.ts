@@ -4,8 +4,30 @@ import { aiRuns } from "../schema/index.js";
 import type { AiRun } from "@messenger/contracts";
 
 const SENSITIVE_KEY_PATTERN = /(?:api[_-]?key|authorization|bearer|cookie|token|secret|password|credential)/i;
+const HIDDEN_REASONING_KEY_PATTERN = /^(?:internalReasoning|thinking|chainOfThought|thought|reasoning)$/i;
+
+function cleanSnapshotString(value: string): unknown {
+  const cleaned = value
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+    .replace(/<thought>[\s\S]*?<\/thought>/gi, "")
+    .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-.]{8,}/gi, "[REDACTED]")
+    .replace(/https?:\/\/[^\s@]+:[^\s@]+@/gi, "https://[REDACTED]@");
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object") {
+      return JSON.stringify(stripSensitiveData(parsed));
+    }
+  } catch {
+    // Keep non-JSON provider text as text.
+  }
+
+  return cleaned.trim();
+}
 
 export function stripSensitiveData<T>(obj: T): T {
+  if (typeof obj === "string") return cleanSnapshotString(obj) as T;
   if (!obj || typeof obj !== "object") return obj;
 
   if (Array.isArray(obj)) {
@@ -14,21 +36,12 @@ export function stripSensitiveData<T>(obj: T): T {
 
   const cleaned: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    if (HIDDEN_REASONING_KEY_PATTERN.test(key)) continue;
     if (SENSITIVE_KEY_PATTERN.test(key)) {
       cleaned[key] = "[REDACTED]";
       continue;
     }
-
-    if (typeof value === "string") {
-      // Redact sensitive patterns inside strings (like Bearer tokens or URLs with keys)
-      cleaned[key] = value
-        .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-.]{8,}/gi, "[REDACTED]")
-        .replace(/https?:\/\/[^\s@]+:[^\s@]+@/gi, "https://[REDACTED]@");
-    } else if (value && typeof value === "object") {
-      cleaned[key] = stripSensitiveData(value);
-    } else {
-      cleaned[key] = value;
-    }
+    cleaned[key] = stripSensitiveData(value);
   }
 
   return cleaned as T;
@@ -36,23 +49,7 @@ export function stripSensitiveData<T>(obj: T): T {
 
 export function sanitizeCustomerOutput(data?: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!data) return null;
-  const clone = { ...data };
-
-  // Never expose hidden chain-of-thought or internalReasoning in customer output
-  delete clone.internalReasoning;
-  delete clone.thinking;
-  delete clone.chainOfThought;
-  delete clone.thought;
-
-  if (Array.isArray(clone.messages)) {
-    clone.messages = clone.messages.map((m) =>
-      typeof m === "string"
-        ? m.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "").trim()
-        : String(m)
-    );
-  }
-
-  return clone;
+  return stripSensitiveData(data);
 }
 
 export interface CreateAiRunParams {

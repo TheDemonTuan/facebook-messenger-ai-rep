@@ -93,7 +93,9 @@ describe("Safe & Understandable AI Activity Request/Response Details", () => {
       // 2. Response snapshot inspection
       expect(result.responseSnapshot).toBeDefined();
       expect(result.responseSnapshot?.status).toBe(200);
-      expect(result.responseSnapshot?.content).toBe(mockRawResponse);
+      expect(result.responseSnapshot?.content).toContain("Dạ shop còn áo sơ mi trắng size L bạn nhé!");
+      expect(JSON.stringify(result.responseSnapshot)).not.toContain("internalReasoning");
+      expect(JSON.stringify(result.responseSnapshot)).not.toContain("Customer asks about size L");
 
       // 3. Customer output (usedResult) must NEVER expose internalReasoning
       expect(result.usedResult).toBeDefined();

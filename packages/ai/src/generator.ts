@@ -18,6 +18,38 @@ export function sanitizeAiError(err?: string | null): string | undefined {
     .slice(0, 500);
 }
 
+function sanitizeProviderSnapshot(value: unknown): unknown {
+  if (typeof value === "string") {
+    const cleaned = value
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+      .replace(/<thought>[\s\S]*?<\/thought>/gi, "")
+      .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-.]{8,}/gi, "[REDACTED]");
+    try {
+      const parsed = JSON.parse(cleaned);
+      if (parsed && typeof parsed === "object") {
+        return JSON.stringify(sanitizeProviderSnapshot(parsed));
+      }
+    } catch {
+      // Keep non-JSON provider text as text.
+    }
+    return cleaned.trim();
+  }
+  if (Array.isArray(value)) return value.map(sanitizeProviderSnapshot);
+  if (!value || typeof value !== "object") return value;
+
+  const cleaned: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(?:internalReasoning|thinking|chainOfThought|thought|reasoning)$/i.test(key)) continue;
+    if (/(?:api[_-]?key|authorization|bearer|cookie|token|secret|password|credential)/i.test(key)) {
+      cleaned[key] = "[REDACTED]";
+    } else {
+      cleaned[key] = sanitizeProviderSnapshot(item);
+    }
+  }
+  return cleaned;
+}
+
 export interface GenerationResult {
   success: boolean;
   data?: AiStructuredOutput;
@@ -104,12 +136,12 @@ export function buildResponseSnapshot(
 ): Record<string, unknown> {
   const snapshot: Record<string, unknown> = {
     status,
-    raw: rawResponse ?? null,
+    raw: sanitizeProviderSnapshot(rawResponse ?? null),
   };
   if (typeof content === "string") {
-    snapshot.content = content;
+    snapshot.content = sanitizeProviderSnapshot(content);
   } else if (typeof rawResponse === "string") {
-    snapshot.content = rawResponse;
+    snapshot.content = sanitizeProviderSnapshot(rawResponse);
   }
   if (error) {
     snapshot.error = sanitizeAiError(error);
