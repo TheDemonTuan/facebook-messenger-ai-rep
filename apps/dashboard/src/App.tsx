@@ -11,7 +11,6 @@ import { IncidentsPage } from "./pages/IncidentsPage";
 import { AiLogsPage } from "./pages/AiLogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AuditPage } from "./pages/AuditPage";
-import { SessionConsolePage } from "./pages/SessionConsolePage";
 import { LoginPage } from "./pages/LoginPage";
 
 export const App: React.FC = () => {
@@ -84,14 +83,6 @@ export const App: React.FC = () => {
               element={
                 <Layout>
                   <AuditPage />
-                </Layout>
-              }
-            />
-            <Route
-              path="/session"
-              element={
-                <Layout>
-                  <SessionConsolePage />
                 </Layout>
               }
             />

@@ -11,8 +11,7 @@ export class SettingsRepository {
     try {
       const env = getEnv();
       return {
-        aiBaseUrl: env.XAI_BASE_URL || env.OMNIROUTE_BASE_URL,
-        aiModel: env.XAI_MODEL || env.DEFAULT_AI_MODEL,
+        aiModel: env.XAI_MODEL || "grok-4.5",
       };
     } catch {
       return {};

@@ -14,7 +14,6 @@ import {
   AlertTriangle,
   CheckCircle,
   ShieldAlert,
-  Cpu,
   RefreshCw,
   CheckCheck,
   ChevronDown,
@@ -22,7 +21,6 @@ import {
   Search,
   ExternalLink,
   ShieldCheck,
-  RotateCcw,
   Check,
   Loader2,
   AlertOctagon,
@@ -393,23 +391,6 @@ export const IncidentsPage: React.FC = () => {
 
                     {isOpen && isCp && (
                       <div style={{ display: "flex", gap: "6px" }}>
-                        <Link
-                          to="/session"
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "4px",
-                            padding: "6px 12px",
-                            borderRadius: "6px",
-                            backgroundColor: "#2563eb",
-                            color: "#ffffff",
-                            textDecoration: "none",
-                            fontSize: "0.8rem",
-                            fontWeight: "600",
-                          }}
-                        >
-                          <ExternalLink size={13} /> Mở Session Console (noVNC)
-                        </Link>
                         <button
                           onClick={() => handleResolveCheckpointOrDom(incident.id, "CHECKPOINT")}
                           disabled={actionInProgress === incident.id}
@@ -434,26 +415,27 @@ export const IncidentsPage: React.FC = () => {
 
                     {isOpen && isDom && (
                       <div style={{ display: "flex", gap: "6px" }}>
-                        <Link
-                          to="/session"
+                        <button
+                          onClick={() => handleResolveCheckpointOrDom(incident.id, "DOM")}
+                          disabled={actionInProgress === incident.id}
                           style={{
                             display: "flex",
                             alignItems: "center",
                             gap: "4px",
                             padding: "6px 12px",
                             borderRadius: "6px",
-                            backgroundColor: "#f1f5f9",
-                            color: "#1e293b",
-                            textDecoration: "none",
+                            backgroundColor: "#16a34a",
+                            color: "#ffffff",
+                            border: "none",
                             fontSize: "0.8rem",
                             fontWeight: "600",
+                            cursor: "pointer",
                           }}
                         >
-                          <ExternalLink size={13} /> Kiểm tra trình duyệt
-                        </Link>
-                        <button
-                          onClick={() => handleResolveCheckpointOrDom(incident.id, "DOM")}
-                          disabled={actionInProgress === incident.id}
+                          <Check size={14} /> Đã khắc phục DOM & Tiếp tục
+                        </button>
+                      </div>
+                    )}
                           style={{
                             display: "flex",
                             alignItems: "center",

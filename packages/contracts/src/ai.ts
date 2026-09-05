@@ -18,8 +18,9 @@ export const AiRunSchema = z.object({
   totalTokens: z.number().int().nonnegative().default(0),
   latencyMs: z.number().int().nonnegative().default(0),
   status: z.enum(["SUCCESS", "STALE_ABORTED", "GUARD_REJECTED", "ERROR"]),
-  rawResponse: z.string().nullable().optional(),
-  parsedOutput: AiStructuredOutputSchema.nullable().optional(),
+  promptHash: z.string().nullable().optional(),
+  responseHash: z.string().nullable().optional(),
+  parsedOutput: z.record(z.string(), z.unknown()).nullable().optional(),
   errorMessage: z.string().nullable().optional(),
   createdAt: z.coerce.date(),
 });

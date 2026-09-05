@@ -10,8 +10,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     vi.restoreAllMocks();
   });
   const settings = SystemSettingsSchema.parse({
-    aiBaseUrl: "http://127.0.0.1:8000/v1",
-    aiModel: "test-model",
+    aiModel: "grok-4.5",
   });
 
   const dummyContext = {
@@ -45,9 +44,10 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     // Must NOT throw TypeError: undefined is not an object (evaluating 'completion.choices[0]')
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("AI Proxy returned error: Model 'gemini-3.7-flash-low' not found");
-    expect(result.requestMessages).toBeDefined();
-    expect(result.requestMessages!.length).toBeGreaterThan(0);
-    expect(result.rawResponse).toContain("gemini-3.7-flash-low");
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.responseHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
+    expect((result as Record<string, unknown>).rawResponse).toBeUndefined();
   });
 
   it("handles empty choices array gracefully without throwing", async () => {
@@ -70,7 +70,8 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
 
     expect(result.success).toBe(false);
     expect(result.errorMessage).toContain("AI Proxy returned unexpected format");
-    expect(result.requestMessages).toBeDefined();
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
   });
 
   it("returns request messages and parsed output on successful completion", async () => {
@@ -111,8 +112,9 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(result.data?.messages[0]).toContain("Dạ shop vẫn còn size M");
     expect(result.promptTokens).toBe(150);
     expect(result.totalTokens).toBe(195);
-    expect(result.requestMessages).toBeDefined();
-    expect(result.requestMessages!.length).toBeGreaterThan(0);
+    expect(result.promptHash).toMatch(/^[a-f0-9]{64}$/);
+    expect((result as Record<string, unknown>).requestMessages).toBeUndefined();
+    expect(result.responseHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("accepts plain text customer response starting with 'D' on first attempt without triggering retry", async () => {
@@ -161,13 +163,14 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
         channelAccountId: "personal-messenger",
         conversationId: "conv-1",
         inboundVersion: 1,
-        model: "gemini-3.7-flash-low",
+        model: "grok-4.5",
         promptTokens: 100,
         completionTokens: 30,
         totalTokens: 130,
         latencyMs: 1200,
         status: "SUCCESS",
-        rawResponse: '{"messages":["Chào bạn"]}',
+        promptHash: "a".repeat(64),
+        responseHash: "b".repeat(64),
         parsedOutput: { messages: ["Chào bạn"] },
         errorMessage: null,
         createdAt: new Date(),
@@ -220,6 +223,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.items.length).toBe(1);
-    expect(body.items[0].model).toBe("gemini-3.7-flash-low");
+    expect(body.items[0].model).toBe("grok-4.5");
+    expect(body.items[0].rawResponse).toBeUndefined();
   });
 });

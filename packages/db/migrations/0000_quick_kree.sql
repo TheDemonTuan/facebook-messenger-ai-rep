@@ -19,7 +19,8 @@ CREATE TABLE "ai_runs" (
 	"total_tokens" integer DEFAULT 0 NOT NULL,
 	"latency_ms" integer DEFAULT 0 NOT NULL,
 	"status" varchar(32) NOT NULL,
-	"raw_response" text,
+	"prompt_hash" varchar(64),
+	"response_hash" varchar(64),
 	"parsed_output" jsonb,
 	"error_message" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL

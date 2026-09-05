@@ -23,10 +23,9 @@ export async function seedDatabase(channelAccountId?: string) {
     })
     .onConflictDoNothing();
 
-  // 2. Ensure initial settings exist (without any API key)
+  // 2. Ensure initial settings exist (server-side AI only)
   const defaultSettings = SystemSettingsSchema.parse({
-    aiBaseUrl: env.XAI_BASE_URL || env.OMNIROUTE_BASE_URL,
-    aiModel: env.XAI_MODEL || env.DEFAULT_AI_MODEL,
+    aiModel: env.XAI_MODEL || "grok-4.5",
   });
   const existing = await db.query.settings.findFirst({
     where: (t, { eq }) => eq(t.channelAccountId, accountId),

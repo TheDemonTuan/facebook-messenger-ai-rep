@@ -188,7 +188,7 @@ export const SettingsPage: React.FC = () => {
       )}
 
       <form onSubmit={handleSubmit} style={{ backgroundColor: "#ffffff", padding: "24px", borderRadius: "10px", boxShadow: "0 1px 3px rgba(0,0,0,0.06)", display: "flex", flexDirection: "column", gap: "24px" }}>
-        
+
         {/* 1. AI Model & Non-Secret Health Check */}
         <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "20px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginBottom: "14px" }}>

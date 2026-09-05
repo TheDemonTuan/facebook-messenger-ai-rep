@@ -11,7 +11,6 @@ import {
   channelAccounts,
   conversations,
   messages,
-  conversationQueue,
   incidents,
   aiRuns,
   conversationEvents,
@@ -19,7 +18,7 @@ import {
 } from "@messenger/db";
 import { eq, and, sql, gte, desc } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
-import { SystemSettingsSchema, type SessionUser } from "@messenger/contracts";
+import { SystemSettingsSchema, isValidAiModel, type SessionUser } from "@messenger/contracts";
 import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
 import { requireRole } from "../auth/roles.js";
 
@@ -303,12 +302,20 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       handleUpdateSettings as any
     );
 
-    fastify.post<{ Body: { baseURL?: string; apiKey?: string; model?: string } }>(
+    fastify.post<{ Body: { model?: string } }>(
       "/api/settings/test-ai",
       { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
-        const { baseURL, apiKey, model } = request.body || {};
-        const health = await checkAiHealth({ baseURL, apiKey, model });
+        const { model } = request.body || {};
+        if (model && !isValidAiModel(model)) {
+          return reply.status(400).send({
+            ok: false,
+            healthy: false,
+            status: "unhealthy",
+            message: `Model '${model}' is not in approved allowlist`,
+          });
+        }
+        const health = await checkAiHealth({ model });
         return reply.send({
           ...health,
           healthy: health.healthy ?? health.ok,
@@ -364,8 +371,6 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       Body: {
         message?: string;
         model?: string;
-        aiBaseUrl?: string;
-        aiApiKey?: string;
       };
     }>(
       "/api/ai-runs/test",
@@ -373,8 +378,14 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       async (request, reply) => {
         const current = await settingsRepo.getSettings(channelAccountId);
         const settings = current.settings;
-        const baseURL = request.body?.aiBaseUrl || settings.aiBaseUrl;
-        const model = request.body?.model || settings.aiModel;
+        const requestedModel = request.body?.model;
+        if (requestedModel && !isValidAiModel(requestedModel)) {
+          return reply.status(400).send({
+            success: false,
+            errorMessage: `Model '${requestedModel}' is not in approved allowlist`,
+          });
+        }
+        const model = requestedModel || settings.aiModel;
         const testText = request.body?.message || "Xin chào, shop có bán áo thun không?";
 
         const generator = new AiReplyGenerator();
@@ -384,7 +395,6 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           recentMessages: [{ direction: "INBOUND", text: testText }],
           settings: {
             ...settings,
-            aiBaseUrl: baseURL,
             aiModel: model,
           },
         });
@@ -396,8 +406,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           promptTokens: result.promptTokens,
           completionTokens: result.completionTokens,
           totalTokens: result.totalTokens,
-          requestMessages: result.requestMessages,
-          rawResponse: result.rawResponse,
+          promptHash: result.promptHash,
+          responseHash: result.responseHash,
           data: result.data,
           errorMessage: result.errorMessage,
         });

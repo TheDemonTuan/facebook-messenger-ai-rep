@@ -14,11 +14,7 @@ export const EnvSchema = z
     // Server-side xAI configuration
     XAI_API_KEY: z.string().optional(),
     XAI_BASE_URL: z.string().url().default("https://api.x.ai/v1"),
-    XAI_MODEL: z.string().default("grok-2-latest"),
-    // Fallback/legacy compatibility
-    OMNIROUTE_BASE_URL: z.string().url().default("http://127.0.0.1:8000/v1"),
-    OMNIROUTE_API_KEY: z.string().default("omniroute-default-key"),
-    DEFAULT_AI_MODEL: z.string().default("grok-2-latest"),
+    XAI_MODEL: z.string().default("grok-4.5"),
     CLOUDFLARE_ACCESS_TEAM_NAME: z.string().optional(),
     CLOUDFLARE_ACCESS_AUD: z.string().optional(),
     DEFAULT_CHANNEL_ACCOUNT_ID: z.string().default("personal-messenger"),

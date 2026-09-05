@@ -2,23 +2,27 @@ import OpenAI from "openai";
 import { getEnv } from "@messenger/config";
 
 export interface AiClientConfig {
-  baseURL?: string;
-  apiKey?: string;
   timeoutMs?: number;
 }
 
 let cachedClient: { client: OpenAI; baseURL: string; apiKey: string; timeout: number } | null = null;
 
+export function resetAiClientCache(): void {
+  cachedClient = null;
+}
+
 export function getAiClient(config?: AiClientConfig): OpenAI {
   const env = getEnv();
-  // Server-side xAI configuration takes precedence, fallback to omniroute / config overrides
-  const baseURL = config?.baseURL || env.XAI_BASE_URL || env.OMNIROUTE_BASE_URL;
-  const apiKey = config?.apiKey || env.XAI_API_KEY || env.OMNIROUTE_API_KEY;
+  // Server-side xAI configuration only
+  const baseURL = env.XAI_BASE_URL;
+  const rawApiKey = env.XAI_API_KEY || "";
   const timeout = config?.timeoutMs || 30000;
 
-  if (env.NODE_ENV === "production" && (!apiKey || apiKey.trim() === "")) {
+  if (env.NODE_ENV === "production" && (!rawApiKey || rawApiKey.trim() === "")) {
     throw new Error("Missing XAI_API_KEY: Server-side AI configuration is required in production.");
   }
+
+  const apiKey = rawApiKey || "xai-dummy-dev-key";
 
   if (
     cachedClient &&
@@ -50,14 +54,28 @@ export interface AiHealthCheckResult {
 }
 
 export async function checkAiHealth(config?: {
-  baseURL?: string;
-  apiKey?: string;
   model?: string;
+  timeoutMs?: number;
 }): Promise<AiHealthCheckResult> {
   const env = getEnv();
-  const client = getAiClient(config);
-  const model = config?.model || env.XAI_MODEL || env.DEFAULT_AI_MODEL;
+  const model = config?.model || env.XAI_MODEL;
   const start = Date.now();
+
+  let client: OpenAI;
+  try {
+    client = getAiClient({ timeoutMs: config?.timeoutMs });
+  } catch (err: unknown) {
+    const error = err as Error;
+    return {
+      ok: false,
+      healthy: false,
+      status: "unhealthy",
+      model,
+      latencyMs: Date.now() - start,
+      message: `AI client initialization failed: ${error.message || "Unknown error"}`,
+      error: error.message,
+    };
+  }
 
   try {
     // Attempt smoke call or list models

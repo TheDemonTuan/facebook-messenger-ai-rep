@@ -136,8 +136,8 @@ export interface IncidentItem {
     responseIndex?: number;
     reason?: string;
     error?: string;
-    rawResponse?: string | null;
-    requestMessages?: Array<{ role: string; content: string }>;
+    promptHash?: string | null;
+    responseHash?: string | null;
     model?: string;
     [key: string]: unknown;
   } | null;
@@ -160,18 +160,14 @@ export interface AiRunItem {
   totalTokens: number;
   latencyMs: number;
   status: "SUCCESS" | "GUARD_REJECTED" | "ERROR" | "STALE_ABORTED";
-  rawResponse: string | null;
+  promptHash?: string | null;
+  responseHash?: string | null;
   parsedOutput: {
     messages?: string[];
     needsClarification?: boolean;
-    _request?: {
-      model?: string;
-      baseUrl?: string;
-      messages?: Array<{ role: string; content: string }>;
-    };
+    messageCount?: number;
     [key: string]: unknown;
   } | null;
-  promptMessages?: Array<{ role: string; content: string }> | null;
   errorMessage: string | null;
   createdAt: string;
 }

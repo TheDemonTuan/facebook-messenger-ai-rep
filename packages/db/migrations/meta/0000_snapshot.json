@@ -192,9 +192,15 @@
           "primaryKey": false,
           "notNull": true
         },
-        "raw_response": {
-          "name": "raw_response",
-          "type": "text",
+        "prompt_hash": {
+          "name": "prompt_hash",
+          "type": "varchar(64)",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "response_hash": {
+          "name": "response_hash",
+          "type": "varchar(64)",
           "primaryKey": false,
           "notNull": false
         },

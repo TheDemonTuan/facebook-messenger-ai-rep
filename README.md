@@ -98,7 +98,7 @@ docker compose -f compose.dev.yml up -d
 
 # 3. Tạo file cấu hình môi trường
 cp .env.example .env
-# Chỉnh sửa XAI_API_KEY hoặc OMNIROUTE_API_KEY, mật khẩu DB nếu cần
+# Chỉnh sửa XAI_API_KEY, mật khẩu DB nếu cần
 
 # 4. Chạy migration cơ sở dữ liệu
 bun --filter=@messenger/db run db:generate

@@ -388,7 +388,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
 
       const mockSettingsRepo = {
         getSettings: vi.fn().mockResolvedValue({
-          settings: { aiModel: "grok-2", aiBaseUrl: "https://api.x.ai/v1" },
+          settings: { aiModel: "grok-2" },
         }),
       } as any;
 

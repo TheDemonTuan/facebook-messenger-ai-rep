@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
 import { validateAiOutput } from "./guards.js";
@@ -5,17 +6,29 @@ import { getAiClient } from "./client.js";
 import { getEnv } from "@messenger/config";
 import type { AiStructuredOutput } from "@messenger/contracts";
 
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+export function sanitizeAiError(err?: string | null): string | undefined {
+  if (!err) return undefined;
+  return err
+    .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-\.]{10,}/gi, "[REDACTED]")
+    .replace(/https?:\/\/[^\s]+/gi, "[REDACTED_URL]")
+    .slice(0, 500);
+}
+
 export interface GenerationResult {
   success: boolean;
   data?: AiStructuredOutput;
-  rawResponse?: string;
   model: string;
   latencyMs: number;
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+  promptHash: string;
+  responseHash?: string;
   errorMessage?: string;
-  requestMessages?: Array<{ role: string; content: string }>;
 }
 
 export class AiReplyGenerator {
@@ -23,11 +36,11 @@ export class AiReplyGenerator {
     const env = getEnv();
     const model = context.settings.aiModel || env.XAI_MODEL;
     const client = getAiClient({
-      baseURL: context.settings.aiBaseUrl || env.XAI_BASE_URL,
       timeoutMs: context.settings.aiTimeoutMs,
     });
     const startTime = Date.now();
     const initialMessages = buildChatMessages(context);
+    const promptHash = sha256(JSON.stringify(initialMessages));
 
     console.log(`[AI Proxy] ---> POST chat/completions | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
 
@@ -58,14 +71,14 @@ export class AiReplyGenerator {
         console.error(`[AI Proxy] Bad response:`, errMsg);
         return {
           success: false,
-          errorMessage: errMsg,
-          rawResponse: rawDump,
+          errorMessage: sanitizeAiError(errMsg),
           model,
           latencyMs,
           promptTokens: 0,
           completionTokens: 0,
           totalTokens: 0,
-          requestMessages: initialMessages,
+          promptHash,
+          responseHash: rawDump ? sha256(rawDump) : undefined,
         };
       }
 
@@ -73,6 +86,7 @@ export class AiReplyGenerator {
       const promptTokens = usage?.prompt_tokens || 0;
       const completionTokens = usage?.completion_tokens || 0;
       const totalTokens = usage?.total_tokens || 0;
+      const responseHash = rawResponse ? sha256(rawResponse) : undefined;
 
       console.log(`[AI Proxy] <--- Response in ${latencyMs}ms | prompt_tokens=${promptTokens}, completion_tokens=${completionTokens}`);
 
@@ -86,13 +100,13 @@ export class AiReplyGenerator {
         return {
           success: true,
           data: firstValidation.data,
-          rawResponse,
           model,
           latencyMs,
           promptTokens,
           completionTokens,
           totalTokens,
-          requestMessages: initialMessages,
+          promptHash,
+          responseHash,
         };
       }
 
@@ -103,14 +117,14 @@ export class AiReplyGenerator {
           rawResponse.trim().toLowerCase().startsWith("<html")) {
         return {
           success: false,
-          errorMessage: firstValidation.error || "AI Gateway returned HTML error page",
-          rawResponse,
+          errorMessage: sanitizeAiError(firstValidation.error || "AI Gateway returned HTML error page"),
           model,
           latencyMs,
           promptTokens,
           completionTokens,
           totalTokens,
-          requestMessages: initialMessages,
+          promptHash,
+          responseHash,
         };
       }
 
@@ -157,68 +171,61 @@ export class AiReplyGenerator {
         console.error(`[AI Proxy Retry] Bad response:`, errMsg);
         return {
           success: false,
-          errorMessage: errMsg,
-          rawResponse: "",
+          errorMessage: sanitizeAiError(errMsg),
           model,
           latencyMs: totalLatencyMs,
           promptTokens,
           completionTokens,
           totalTokens,
-          requestMessages: retryMessages,
+          promptHash,
+          responseHash: retryRaw ? sha256(retryRaw) : undefined,
         };
       }
 
-      const retryUsage = retryCompletion.usage;
-      const finalPromptTokens = promptTokens + (retryUsage?.prompt_tokens || 0);
-      const finalCompletionTokens = completionTokens + (retryUsage?.completion_tokens || 0);
-      const finalTotalTokens = totalTokens + (retryUsage?.total_tokens || 0);
-
-      console.log(`[AI Proxy Retry] <--- Response in ${totalLatencyMs}ms | prompt_tokens=${finalPromptTokens}, completion_tokens=${finalCompletionTokens}`);
-
-      const secondValidation = validateAiOutput(retryRaw, {
+      const retryValidation = validateAiOutput(retryRaw, {
         maxResponseCount: context.settings.aiMaxResponseCount,
         totalMaxChars: context.settings.aiTotalMaxChars,
         allowPlainTextFallback: true,
       });
 
-      if (secondValidation.valid && secondValidation.data) {
+      if (retryValidation.valid && retryValidation.data) {
         return {
           success: true,
-          data: secondValidation.data,
-          rawResponse: retryRaw,
+          data: retryValidation.data,
           model,
           latencyMs: totalLatencyMs,
-          promptTokens: finalPromptTokens,
-          completionTokens: finalCompletionTokens,
-          totalTokens: finalTotalTokens,
-          requestMessages: retryMessages,
+          promptTokens,
+          completionTokens,
+          totalTokens,
+          promptHash,
+          responseHash: sha256(retryRaw),
         };
       }
 
       return {
         success: false,
-        errorMessage: `Validation failed after retry: ${secondValidation.error}`,
-        rawResponse: retryRaw,
+        errorMessage: sanitizeAiError(retryValidation.error || "Retry output validation failed"),
         model,
         latencyMs: totalLatencyMs,
-        promptTokens: finalPromptTokens,
-        completionTokens: finalCompletionTokens,
-        totalTokens: finalTotalTokens,
-        requestMessages: retryMessages,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        promptHash,
+        responseHash: retryRaw ? sha256(retryRaw) : undefined,
       };
     } catch (err: unknown) {
       const error = err as Error;
-      const totalLatencyMs = Date.now() - startTime;
-      console.error(`[AI Generator] Error calling AI Gateway (${error.name}):`, error.message);
+      const latencyMs = Date.now() - startTime;
+      console.error("[AI Generator] Exception during reply generation:", error);
       return {
         success: false,
-        errorMessage: error.message || "Failed to generate reply",
+        errorMessage: sanitizeAiError(error.message || "Failed to generate reply"),
         model,
-        latencyMs: totalLatencyMs,
+        latencyMs,
         promptTokens: 0,
         completionTokens: 0,
         totalTokens: 0,
-        requestMessages: initialMessages,
+        promptHash,
       };
     }
   }

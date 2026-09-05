@@ -1,4 +1,3 @@
-import type { JobExecutionContext } from "@messenger/db";
 import type {
   Database,
   ConversationRepository,
@@ -149,14 +148,11 @@ export function createAiHandler(deps: AiHandlerDeps) {
         totalTokens: result.totalTokens,
         latencyMs: result.latencyMs,
         status: runStatus,
-        rawResponse: result.rawResponse || null,
+        promptHash: result.promptHash,
+        responseHash: result.responseHash || null,
         parsedOutput: {
-          _request: {
-            model: result.model,
-            baseUrl: settings.aiBaseUrl,
-            messages: result.requestMessages || [],
-          },
           data: result.data || null,
+          messageCount: result.data?.messages?.length || 0,
         },
         errorMessage: result.errorMessage || null,
       })
@@ -172,7 +168,11 @@ export function createAiHandler(deps: AiHandlerDeps) {
         type: "ERROR",
         inboundVersion,
         actor: "AI_WORKER",
-        payload: { error: result.errorMessage, rawResponse: result.rawResponse },
+        payload: {
+          error: result.errorMessage,
+          promptHash: result.promptHash,
+          responseHash: result.responseHash || null,
+        },
       });
 
       await incidentRepo.createIncident({
@@ -182,7 +182,8 @@ export function createAiHandler(deps: AiHandlerDeps) {
         title: isGuardRejected ? "AI Draft Guard Rejection" : "AI Gateway Error",
         description: result.errorMessage || "Unknown generation failure",
         metadata: {
-          rawResponse: result.rawResponse,
+          promptHash: result.promptHash,
+          responseHash: result.responseHash || null,
           inboundVersion,
           model: result.model,
         },

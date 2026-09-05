@@ -7,7 +7,6 @@ import {
   AlertTriangle,
   Settings,
   FileText,
-  Monitor,
   LogOut,
   Pause,
   Play,
@@ -90,7 +89,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { label: "AI Logs", path: "/ai-logs", icon: FileText },
     { label: "Cài đặt", path: "/settings", icon: Settings },
     { label: "Audit Trail", path: "/audit", icon: Shield },
-    { label: "Session noVNC", path: "/session", icon: Monitor },
   ];
 
   const getStatusColor = (status?: string) => {

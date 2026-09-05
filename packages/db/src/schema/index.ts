@@ -285,7 +285,8 @@ export const aiRuns = pgTable(
     totalTokens: integer("total_tokens").notNull().default(0),
     latencyMs: integer("latency_ms").notNull().default(0),
     status: varchar("status", { length: 32 }).notNull(), // SUCCESS | STALE_ABORTED | GUARD_REJECTED | ERROR
-    rawResponse: text("raw_response"),
+    promptHash: varchar("prompt_hash", { length: 64 }),
+    responseHash: varchar("response_hash", { length: 64 }),
     parsedOutput: jsonb("parsed_output").$type<Record<string, unknown>>(),
     errorMessage: text("error_message"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
