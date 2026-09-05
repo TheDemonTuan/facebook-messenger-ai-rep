@@ -37,6 +37,8 @@ describe("Settings API & Server-Side xAI Configuration", () => {
     const prodWithKey = EnvSchema.safeParse({
       NODE_ENV: "production",
       XAI_API_KEY: "xai-test-secret-key-12345",
+      CLOUDFLARE_ACCESS_TEAM_NAME: "test-team",
+      CLOUDFLARE_ACCESS_AUD: "test-aud-12345",
       SESSION_SECRET: "super-secret-session-key-must-be-at-least-32-chars-long!",
       INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
     });

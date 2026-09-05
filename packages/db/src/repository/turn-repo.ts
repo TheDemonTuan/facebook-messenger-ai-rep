@@ -55,6 +55,7 @@ export class TurnRepository {
 
   /**
    * Atomic claim of a turn: Sets active_turn_id in channel_accounts and updates turn to THINKING with fencing epoch CAS.
+   * Employs PostgreSQL row-level locks (FOR UPDATE) to serialize concurrent claims.
    */
   async claimTurn(
     turnId: string,
@@ -69,18 +70,20 @@ export class TurnRepository {
         .select()
         .from(turns)
         .where(eq(turns.id, turnId))
+        .for("update")
         .limit(1);
 
       if (!turn || turn.status !== "PENDING") {
         return null;
       }
 
-      // Check channel active_turn_id and lease
+      // Check channel active_turn_id and lease with row lock
       const now = new Date();
       const [channel] = await innerTx
         .select()
         .from(channelAccounts)
         .where(eq(channelAccounts.id, turn.channelAccountId))
+        .for("update")
         .limit(1);
 
       if (
@@ -109,7 +112,7 @@ export class TurnRepository {
         })
         .where(eq(channelAccounts.id, turn.channelAccountId));
 
-      // Update turn
+      // Update turn with atomic CAS guard
       const [updatedTurn] = await innerTx
         .update(turns)
         .set({
@@ -119,7 +122,7 @@ export class TurnRepository {
           startedAt: now,
           updatedAt: now,
         })
-        .where(eq(turns.id, turn.id))
+        .where(and(eq(turns.id, turn.id), eq(turns.status, "PENDING")))
         .returning();
 
       return updatedTurn || null;

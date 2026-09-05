@@ -241,10 +241,14 @@ export class SenderWorkerService {
     }
 
     // 5. Transition action state PENDING -> TYPING
-    if (this.outboundRepo.transitionStatus) {
-      await this.outboundRepo.transitionStatus(actionId, "PENDING", "TYPING", { ownerToken, fencingEpoch }).catch(() => {});
+    const typingAction = this.outboundRepo.transitionStatus
+      ? await this.outboundRepo.transitionStatus(actionId, "PENDING", "TYPING", { ownerToken, fencingEpoch })
+      : await this.outboundRepo.updateStatus(actionId, "TYPING", { ownerToken, fencingEpoch });
+
+    if (!typingAction) {
+      console.warn(`[Sender Worker] Failed to transition action ${actionId} to TYPING (may have been cancelled or superseded).`);
+      return;
     }
-    await this.outboundRepo.updateStatus(actionId, "TYPING", { ownerToken, fencingEpoch });
 
     await this.eventRepo.recordEvent({
       channelAccountId,

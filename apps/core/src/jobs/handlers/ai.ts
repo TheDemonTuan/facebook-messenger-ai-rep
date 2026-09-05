@@ -98,9 +98,17 @@ export function createAiHandler(deps: AiHandlerDeps) {
     }
 
     // 2. Claim turn if present
+    let claimedTurn = null;
     if (turnId) {
-      await turnRepo.claimTurn(turnId, context.ownerToken);
+      claimedTurn = await turnRepo.claimTurn(turnId, context.ownerToken);
+      if (!claimedTurn) {
+        console.warn(
+          `[AiHandler] Failed to claim turn ${turnId} for conversation ${conversationId}. Skipping job.`
+        );
+        return;
+      }
     }
+    const currentFencingEpoch = claimedTurn?.fencingEpoch ?? context.fencingEpoch;
 
     await convRepo.updateStatus(conversationId, "THINKING");
     await eventRepo.recordEvent({
@@ -184,7 +192,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
         await turnRepo.failTurn(
           turnId,
           context.ownerToken,
-          context.fencingEpoch,
+          currentFencingEpoch,
           result.errorMessage || "AI generation failed"
         );
       }
@@ -252,8 +260,8 @@ export function createAiHandler(deps: AiHandlerDeps) {
             actor: "AI",
             claimToken: context.ownerToken,
             ownerToken: context.ownerToken,
-            fencingToken: context.fencingEpoch,
-            fencingEpoch: context.fencingEpoch,
+            fencingToken: currentFencingEpoch,
+            fencingEpoch: currentFencingEpoch,
           },
           idempotencyKey: `browser-send:${action.actionId}`,
         });
@@ -267,7 +275,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
         "THINKING",
         "DRAFT_READY",
         context.ownerToken,
-        context.fencingEpoch
+        currentFencingEpoch
       );
     }
 

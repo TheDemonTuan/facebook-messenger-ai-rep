@@ -315,13 +315,17 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           if (!rawText) continue;
 
           // Stable ID extraction (mid.$..., data-message-id, data-mid, id, data-id)
+          const midMatch = row.querySelector('[id^="mid."]')?.getAttribute("id");
+          const rowId = row.getAttribute("id");
           const idAttr =
-            row.getAttribute("id") ||
+            midMatch ||
+            (rowId && rowId.startsWith("mid.") ? rowId : null) ||
             row.getAttribute("data-message-id") ||
+            row.querySelector('[data-message-id]')?.getAttribute("data-message-id") ||
             row.getAttribute("data-mid") ||
+            row.querySelector('[data-mid]')?.getAttribute("data-mid") ||
             row.getAttribute("data-id") ||
-            row.querySelector('[id^="mid."]')?.getAttribute("id") ||
-            row.querySelector('[data-message-id]')?.getAttribute("data-message-id");
+            (rowId && !rowId.startsWith(":") && !rowId.startsWith("js_") ? rowId : null);
 
           if (!idAttr) {
             isDegraded = true;
@@ -434,14 +438,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     }
 
     const { bubbles } = await this.readBubblesFromPage(this.senderPage);
+    const allIds = bubbles.map((b) => b.id);
     const outgoingIds = bubbles.filter((b) => b.isOutgoing).map((b) => b.id);
     const lastId = outgoingIds.length > 0 ? outgoingIds[outgoingIds.length - 1]! : null;
 
     return {
       threadRef: ref,
-      knownMessageIds: outgoingIds,
+      knownMessageIds: allIds,
       lastMessageId: lastId,
-      messageCount: outgoingIds.length,
+      messageCount: bubbles.length,
       capturedAt: new Date(),
     };
   }
@@ -532,7 +537,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         if (!b.isOutgoing) continue;
         if (knownIds.has(b.id)) continue; // Pre-existing historical bubble
 
-        if (b.text.includes(normalizedExpected) || normalizedExpected.includes(b.text)) {
+        const bubbleText = b.text.trim();
+        if (bubbleText === normalizedExpected || bubbleText.includes(normalizedExpected)) {
           // Confirmed with real Facebook message ID!
           return { verified: true, messageRef: b.id };
         }

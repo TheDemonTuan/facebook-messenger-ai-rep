@@ -117,8 +117,8 @@ export class ConversationRepository {
         customerId = newCustomer.id;
       }
 
-      // 3. Upsert conversation
-      const existingConv = await tx
+      // 3. Upsert conversation (row-locked to serialize concurrent inbounds for the same thread)
+      const convQuery = tx
         .select({
           id: conversations.id,
           inboundVersion: conversations.inboundVersion,
@@ -131,8 +131,14 @@ export class ConversationRepository {
             eq(conversations.channelAccountId, payload.channelAccountId),
             eq(conversations.externalThreadId, payload.externalThreadId)
           )
-        )
-        .limit(1);
+        );
+
+      const lockedConvQuery =
+        typeof (convQuery as any).for === "function"
+          ? (convQuery as any).for("update")
+          : convQuery;
+
+      const existingConv = await lockedConvQuery.limit(1);
 
       let conversationId: string;
       let newInboundVersion: number;

@@ -28,12 +28,28 @@ export const EnvSchema = z
     LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
   })
   .superRefine((data, ctx) => {
-    if (data.NODE_ENV === "production" && (!data.XAI_API_KEY || data.XAI_API_KEY.trim() === "")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["XAI_API_KEY"],
-        message: "XAI_API_KEY is required and must not be empty in production environment.",
-      });
+    if (data.NODE_ENV === "production") {
+      if (!data.XAI_API_KEY || data.XAI_API_KEY.trim() === "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["XAI_API_KEY"],
+          message: "XAI_API_KEY is required and must not be empty in production environment.",
+        });
+      }
+      if (!data.CLOUDFLARE_ACCESS_TEAM_NAME || data.CLOUDFLARE_ACCESS_TEAM_NAME.trim() === "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["CLOUDFLARE_ACCESS_TEAM_NAME"],
+          message: "CLOUDFLARE_ACCESS_TEAM_NAME is required in production environment.",
+        });
+      }
+      if (!data.CLOUDFLARE_ACCESS_AUD || data.CLOUDFLARE_ACCESS_AUD.trim() === "") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["CLOUDFLARE_ACCESS_AUD"],
+          message: "CLOUDFLARE_ACCESS_AUD is required in production environment.",
+        });
+      }
     }
   });
 

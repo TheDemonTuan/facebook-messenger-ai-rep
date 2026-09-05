@@ -7,16 +7,21 @@ export function createAuthMiddleware(userRepo: UserRepository) {
   return async function requireAuth(request: FastifyRequest, reply: FastifyReply): Promise<SessionUser | null> {
     const env = getEnv();
 
-    // 1. Resolve identity email from header (populated by verifyCloudflareAccess or direct CF header)
-    let email = (
-      request.headers["x-cf-access-user"] ||
-      request.headers["cf-access-authenticated-user-email"]
-    ) as string | undefined;
-
-    // Local dev fallback if not in production
+    // 1. Resolve identity email from header
     const isProduction = process.env.NODE_ENV === "production" || env.NODE_ENV === "production";
-    if (!email && !isProduction) {
-      email = (request.headers["x-dev-user-email"] as string) || "admin@example.com";
+    let email: string | undefined;
+
+    if (isProduction) {
+      // In production, strictly trust identity verified cryptographically via Cloudflare Access JWT
+      email = request.headers["x-cf-access-user"] as string | undefined;
+    } else {
+      // Local dev / test fallback
+      email = (
+        request.headers["x-cf-access-user"] ||
+        request.headers["cf-access-authenticated-user-email"] ||
+        request.headers["x-dev-user-email"] ||
+        "admin@example.com"
+      ) as string | undefined;
     }
 
     if (!email) {

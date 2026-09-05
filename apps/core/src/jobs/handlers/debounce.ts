@@ -1,7 +1,7 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { Database, TurnRepository, JobRepository, OutboxRepository, EventRepository } from "@messenger/db";
 import { conversations, channelAccounts } from "@messenger/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
 export interface DebounceJobPayload {
@@ -89,11 +89,28 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
       return;
     }
 
-    // 5. Transition conversation to THINKING
-    await db
+    // 5. Transition conversation to THINKING with CAS version check
+    const updateBuilder = db
       .update(conversations)
       .set({ status: "THINKING", updatedAt: new Date() })
-      .where(eq(conversations.id, conversationId));
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.inboundVersion, inboundVersion)
+        )
+      );
+
+    if (typeof (updateBuilder as any)?.returning === "function") {
+      const [updatedConv] = await (updateBuilder as any).returning();
+      if (!updatedConv) {
+        console.log(
+          `[DebounceHandler] Inbound version moved during debounce processing for ${conversationId}. Skipping.`
+        );
+        return;
+      }
+    } else {
+      await updateBuilder;
+    }
 
     // 6. Create or get turn record
     const turn = await turnRepo.createOrGetTurn({
