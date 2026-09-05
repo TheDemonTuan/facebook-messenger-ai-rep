@@ -21,17 +21,24 @@
     "build:core": "bun run --filter=@messenger/core build",
     "start:core": "bun run --filter=@messenger/core start",
     "dev:core": "bun run --filter=@messenger/core dev",
-    "dev:control-plane": "bun run --filter=@messenger/control-plane dev",
-    "dev:scheduler": "bun run --filter=@messenger/scheduler dev",
-    "dev:ai-worker": "bun run --filter=@messenger/ai-worker dev",
     "dev:browser-agent": "bun run --filter=@messenger/browser-agent dev",
     "dev:dashboard": "bun run --filter=@messenger/dashboard dev"
   },
+  "overrides": {
+    "esbuild": "^0.25.0"
+  },
   "devDependencies": {
+    "@babel/eslint-parser": "^8.0.1",
+    "@babel/preset-react": "^8.0.1",
+    "@babel/preset-typescript": "^8.0.1",
+    "@eslint/js": "^9.20.0",
     "@types/node": "^26.4.1",
     "drizzle-orm": "^0.45.2",
+    "eslint": "^9.20.0",
+    "fastify": "^5.12.3",
     "tsx": "^4.23.13",
     "typescript": "^7.0.2",
+    "typescript-eslint": "^8.24.0",
     "vitest": "^5.0.0"
   },
   "packageManager": "bun@1.4.1"

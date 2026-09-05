@@ -1,48 +1,79 @@
-FROM mcr.microsoft.com/playwright:v1.62.1-noble AS base
+# ==============================================================================
+# Multi-stage Dockerfile for @messenger/browser-agent
+# ==============================================================================
+
+# 1. Builder stage
+FROM mcr.microsoft.com/playwright:v1.50.1-noble AS builder
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb \
-    x11vnc \
-    novnc \
-    websockify \
-    net-tools \
-    curl \
-    unzip \
+# Install Bun for compilation
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip \
+    && curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1" \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Bun 1.4
-RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1"
 ENV PATH="/root/.bun/bin:${PATH}"
 
 COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
 COPY packages/contracts/package.json ./packages/contracts/
 COPY packages/config/package.json ./packages/config/
-COPY packages/db/package.json ./packages/db/
-COPY packages/queue/package.json ./packages/queue/
 COPY packages/channel/package.json ./packages/channel/
+COPY packages/db/package.json ./packages/db/
 COPY apps/browser-agent/package.json ./apps/browser-agent/
 
 RUN bun install --frozen-lockfile
 
 COPY packages/contracts/ ./packages/contracts/
 COPY packages/config/ ./packages/config/
-COPY packages/db/src/ ./packages/db/src/
-COPY packages/db/tsconfig.json ./packages/db/
-COPY packages/queue/ ./packages/queue/
 COPY packages/channel/ ./packages/channel/
+COPY packages/db/ ./packages/db/
 COPY apps/browser-agent/ ./apps/browser-agent/
 
 RUN bun run --filter='@messenger/*' build
 
-COPY docker/entrypoint-browser.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+# 2. Production runtime stage
+FROM mcr.microsoft.com/playwright:v1.50.1-noble AS runner
+WORKDIR /app
 
+# Install Xvfb, VNC, noVNC, and Bun runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb \
+    x11vnc \
+    novnc \
+    websockify \
+    curl \
+    unzip \
+    && curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1" \
+    && mv /root/.bun/bin/bun /usr/local/bin/bun \
+    && rm -rf /var/lib/apt/lists/* /root/.bun
+
+ENV PATH="/usr/local/bin:${PATH}"
 ENV NODE_ENV=production
 ENV BROWSER_HEADLESS=false
 ENV BROWSER_PROFILE_DIR=/app/browser_profile
 ENV DISPLAY=:99
+ENV ENABLE_NOVNC=false
 
-EXPOSE 6080
+# Install production dependencies
+COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/config/package.json ./packages/config/
+COPY packages/channel/package.json ./packages/channel/
+COPY packages/db/package.json ./packages/db/
+COPY apps/browser-agent/package.json ./apps/browser-agent/
+
+RUN bun install --production --frozen-lockfile
+
+# Copy compiled dist artifacts
+COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=builder /app/packages/config/dist ./packages/config/dist
+COPY --from=builder /app/packages/channel/dist ./packages/channel/dist
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/apps/browser-agent/dist ./apps/browser-agent/dist
+
+COPY docker/entrypoint-browser.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh \
+    && mkdir -p /app/browser_profile /home/pwuser/.vnc \
+    && chown -R pwuser:pwuser /app /home/pwuser
+
+USER pwuser
 
 ENTRYPOINT ["/entrypoint.sh"]

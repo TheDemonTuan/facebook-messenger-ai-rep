@@ -257,33 +257,45 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       return reply.send(data);
     });
 
+    const handleUpdateSettings = async (
+      request: unknown,
+      reply: { status: (code: number) => { send: (data: unknown) => unknown }; send: (data: unknown) => unknown }
+    ) => {
+      const user = (request as unknown as { user: SessionUser }).user;
+      const body = (request as unknown as { body: Record<string, unknown> }).body;
+      const parsed = SystemSettingsSchema.partial().safeParse(body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: "Invalid settings format", details: parsed.error.issues });
+      }
+
+      const updated = await settingsRepo.updateSettings(
+        channelAccountId,
+        parsed.data,
+        user.email,
+        "Updated settings from core control plane"
+      );
+
+      await eventRepo.recordEvent({
+        channelAccountId,
+        type: "SETTING_CHANGED",
+        actor: user.email,
+        payload: { revision: updated.revision },
+      });
+
+      await broadcaster.broadcast("settings:updated", { revision: updated.revision });
+      return reply.send(updated);
+    };
+
     fastify.post<{ Body: Record<string, unknown> }>(
       "/api/settings",
       { preHandler: [requireRole("OWNER")] },
-      async (request, reply) => {
-        const user = (request as unknown as { user: SessionUser }).user;
-        const parsed = SystemSettingsSchema.partial().safeParse(request.body);
-        if (!parsed.success) {
-          return reply.status(400).send({ error: "Invalid settings format", details: parsed.error.issues });
-        }
+      handleUpdateSettings as any
+    );
 
-        const updated = await settingsRepo.updateSettings(
-          channelAccountId,
-          parsed.data,
-          user.email,
-          "Updated settings from core control plane"
-        );
-
-        await eventRepo.recordEvent({
-          channelAccountId,
-          type: "SETTING_CHANGED",
-          actor: user.email,
-          payload: { revision: updated.revision },
-        });
-
-        await broadcaster.broadcast("settings:updated", { revision: updated.revision });
-        return reply.send(updated);
-      }
+    fastify.put<{ Body: Record<string, unknown> }>(
+      "/api/settings",
+      { preHandler: [requireRole("OWNER")] },
+      handleUpdateSettings as any
     );
 
     fastify.post<{ Body: { baseURL?: string; apiKey?: string; model?: string } }>(

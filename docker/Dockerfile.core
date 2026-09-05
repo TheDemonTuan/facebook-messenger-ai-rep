@@ -1,0 +1,62 @@
+# ==============================================================================
+# Multi-stage Dockerfile for @messenger/core & migrate
+# ==============================================================================
+
+FROM oven/bun:1.4.1 AS builder
+WORKDIR /app
+
+# 1. Install all dependencies for build
+COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/config/package.json ./packages/config/
+COPY packages/channel/package.json ./packages/channel/
+COPY packages/db/package.json ./packages/db/
+COPY packages/ai/package.json ./packages/ai/
+COPY apps/dashboard/package.json ./apps/dashboard/
+COPY apps/core/package.json ./apps/core/
+
+RUN bun install --frozen-lockfile
+
+# 2. Copy source code and build shared packages, dashboard SPA, and core service
+COPY packages/contracts/ ./packages/contracts/
+COPY packages/config/ ./packages/config/
+COPY packages/channel/ ./packages/channel/
+COPY packages/db/ ./packages/db/
+COPY packages/ai/ ./packages/ai/
+COPY apps/dashboard/ ./apps/dashboard/
+COPY apps/core/ ./apps/core/
+
+RUN bun run --filter='@messenger/*' build
+
+# 3. Production runner image
+FROM oven/bun:1.4.1-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
+
+# Copy root manifest and dependencies
+COPY package.json bun.lock tsconfig.base.json tsconfig.json ./
+COPY packages/contracts/package.json ./packages/contracts/
+COPY packages/config/package.json ./packages/config/
+COPY packages/channel/package.json ./packages/channel/
+COPY packages/db/package.json ./packages/db/
+COPY packages/ai/package.json ./packages/ai/
+COPY apps/core/package.json ./apps/core/
+
+# Install production dependencies only
+RUN bun install --production --frozen-lockfile
+
+# Copy compiled dist artifacts & migrations
+COPY --from=builder /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=builder /app/packages/config/dist ./packages/config/dist
+COPY --from=builder /app/packages/channel/dist ./packages/channel/dist
+COPY --from=builder /app/packages/db/dist ./packages/db/dist
+COPY --from=builder /app/packages/db/migrations ./packages/db/migrations
+COPY --from=builder /app/packages/ai/dist ./packages/ai/dist
+COPY --from=builder /app/apps/core/dist ./apps/core/dist
+COPY --from=builder /app/apps/dashboard/dist ./apps/dashboard/dist
+
+# Security: non-root execution
+USER bun
+EXPOSE 3000
+
+CMD ["bun", "apps/core/dist/index.js"]

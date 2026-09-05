@@ -9,7 +9,6 @@ export const EnvSchema = z
     PORT: z.coerce.number().int().default(3000),
     HOST: z.string().default("0.0.0.0"),
     DATABASE_URL: z.string().url().default("postgresql://postgres:postgres@localhost:5432/messenger_ai"),
-    REDIS_URL: z.string().url().default("redis://localhost:6379"),
     SESSION_SECRET: z.string().min(32).default("super-secret-session-key-must-be-at-least-32-chars-long!"),
     INTERNAL_HMAC_SECRET: z.string().min(32).default("internal-hmac-secret-must-be-at-least-32-chars-long!"),
     // Server-side xAI configuration

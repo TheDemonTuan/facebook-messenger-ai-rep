@@ -2,8 +2,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { AiReplyGenerator } from "../packages/ai/src/generator.js";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import * as clientModule from "../packages/ai/src/client.js";
-import Fastify from "../apps/control-plane/node_modules/fastify";
-import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
+import Fastify from "fastify";
+import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
 
 describe("AI Generator & Proxy Error Handling & Logs", () => {
   afterEach(() => {
@@ -175,13 +175,20 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     ];
 
     const mockDb = {
-      select: vi.fn(() => ({
+      select: vi.fn((fields?: any) => ({
         from: vi.fn(() => ({
-          where: vi.fn(() => ({
-            orderBy: vi.fn(() => ({
-              limit: vi.fn(async () => mockRuns),
-            })),
-          })),
+          where: vi.fn(() => {
+            if (fields && typeof fields === "object" && "count" in fields) {
+              return Promise.resolve([{ count: 1 }]);
+            }
+            return {
+              orderBy: vi.fn(() => ({
+                limit: vi.fn(() => ({
+                  offset: vi.fn(async () => mockRuns),
+                })),
+              })),
+            };
+          }),
         })),
       })),
     };

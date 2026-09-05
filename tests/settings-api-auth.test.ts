@@ -2,8 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import { getAiClient } from "../packages/ai/src/client.js";
 import { EnvSchema } from "../packages/config/src/index.js";
-import Fastify from "../apps/control-plane/node_modules/fastify";
-import { createAdminRoutes } from "../apps/control-plane/src/routes/admin.js";
+import Fastify from "fastify";
+import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
 
 describe("Settings API & Server-Side xAI Configuration", () => {
   it("SystemSettingsSchema does not store aiApiKey and sets safe defaults", () => {

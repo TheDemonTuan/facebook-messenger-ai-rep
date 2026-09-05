@@ -37,46 +37,24 @@ jobs:
       compose_config: ${{ steps.filter.outputs.compose_config }}
       deploy_scripts: ${{ steps.filter.outputs.deploy_scripts }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Detect changed paths
         id: filter
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
         with:
           filters: |
-            control_plane:
-              - 'apps/control-plane/**'
+            core:
+              - 'apps/core/**'
               - 'apps/dashboard/**'
-              - 'packages/contracts/**'
-              - 'packages/config/**'
-              - 'packages/db/**'
-              - 'packages/queue/**'
-              - 'docker/Dockerfile.control-plane'
-              - 'package.json'
-              - 'bun.lock'
-            scheduler:
-              - 'apps/scheduler/**'
-              - 'packages/contracts/**'
-              - 'packages/config/**'
-              - 'packages/db/src/**'
-              - 'packages/db/package.json'
-              - 'packages/db/tsconfig.json'
-              - 'packages/queue/**'
-              - 'docker/Dockerfile.scheduler'
-              - 'package.json'
-              - 'bun.lock'
-            ai_worker:
-              - 'apps/ai-worker/**'
               - 'packages/ai/**'
               - 'packages/contracts/**'
               - 'packages/config/**'
-              - 'packages/db/src/**'
-              - 'packages/db/package.json'
-              - 'packages/db/tsconfig.json'
-              - 'packages/queue/**'
-              - 'docker/Dockerfile.ai-worker'
+              - 'packages/db/**'
+              - 'packages/channel/**'
+              - 'docker/Dockerfile.core'
               - 'package.json'
               - 'bun.lock'
             browser_agent:
@@ -87,7 +65,6 @@ jobs:
               - 'packages/db/src/**'
               - 'packages/db/package.json'
               - 'packages/db/tsconfig.json'
-              - 'packages/queue/**'
               - 'docker/Dockerfile.browser-agent'
               - 'docker/entrypoint-browser.sh'
               - 'package.json'
@@ -101,11 +78,12 @@ jobs:
               - 'scripts/deploy.sh'
               - 'scripts/image-retention.sh'
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2.0.1
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - run: bun install --frozen-lockfile
+      - run: bun run lint
       - run: bun run typecheck
       - run: bun run build
       - run: bun run test
@@ -125,23 +103,15 @@ jobs:
       - name: Determine image build matrix
         id: set-matrix
         env:
-          CP: ${{ steps.filter.outputs.control_plane }}
-          SCHED: ${{ steps.filter.outputs.scheduler }}
-          AI: ${{ steps.filter.outputs.ai_worker }}
+          CORE: ${{ steps.filter.outputs.core }}
           BA: ${{ steps.filter.outputs.browser_agent }}
           FORCE: ${{ inputs.force_all }}
         run: |
           bun -e '
             const list = [];
             const force = process.env.FORCE === "true";
-            if (force || process.env.CP === "true") {
-              list.push({ name: "control-plane", dockerfile: "docker/Dockerfile.control-plane" });
-            }
-            if (force || process.env.SCHED === "true") {
-              list.push({ name: "scheduler", dockerfile: "docker/Dockerfile.scheduler" });
-            }
-            if (force || process.env.AI === "true") {
-              list.push({ name: "ai-worker", dockerfile: "docker/Dockerfile.ai-worker" });
+            if (force || process.env.CORE === "true") {
+              list.push({ name: "core", dockerfile: "docker/Dockerfile.core" });
             }
             if (force || process.env.BA === "true") {
               list.push({ name: "browser-agent", dockerfile: "docker/Dockerfile.browser-agent" });
@@ -167,11 +137,11 @@ jobs:
       fail-fast: true
       matrix: ${{ fromJson(needs.verify.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.10.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.3.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -187,7 +157,7 @@ jobs:
           echo "image=ghcr.io/${owner_lc}/facebook-messenger-ai-${SERVICE}" >> "$GITHUB_OUTPUT"
       - name: Build and publish image
         id: build
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.15.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
@@ -206,7 +176,7 @@ jobs:
         run: |
           mkdir -p digests
           echo "${IMAGE}@${DIGEST}" > "digests/${SERVICE}"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.1
         with:
           name: digests-${{ matrix.name }}
           path: digests/
@@ -230,13 +200,13 @@ jobs:
     environment:
       name: production
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Download image digests
         if: ${{ needs.verify.outputs.has_images == 'true' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.1.9
         with:
           pattern: digests-*
           path: all-digests
@@ -298,14 +268,8 @@ jobs:
             deploy_args+=(--reconcile)
           fi
           if [ -d all-digests ]; then
-            if [ -f all-digests/control-plane ]; then
-              deploy_args+=(--control-plane "$(cat all-digests/control-plane)")
-            fi
-            if [ -f all-digests/scheduler ]; then
-              deploy_args+=(--scheduler "$(cat all-digests/scheduler)")
-            fi
-            if [ -f all-digests/ai-worker ]; then
-              deploy_args+=(--ai-worker "$(cat all-digests/ai-worker)")
+            if [ -f all-digests/core ]; then
+              deploy_args+=(--core "$(cat all-digests/core)")
             fi
             if [ -f all-digests/browser-agent ]; then
               deploy_args+=(--browser-agent "$(cat all-digests/browser-agent)")

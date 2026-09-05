@@ -1,74 +1,208 @@
 import { describe, it, expect, vi } from "vitest";
-import { DebounceManager } from "../packages/queue/src/debounce.js";
-import type { Redis } from "ioredis";
-import type { AppQueues } from "../packages/queue/src/queues.js";
+import { createDebounceHandler } from "../apps/core/src/jobs/handlers/debounce.js";
 
 describe("Deduplication and Debounce Invariants", () => {
-  it("detects expired debounce when version matches and pttl is zero or key expired", async () => {
-    // Mock Redis
-    const mockRedis = {
-      get: vi.fn().mockResolvedValue("3"),
-      pttl: vi.fn().mockResolvedValue(0),
-      set: vi.fn().mockResolvedValue("OK"),
-    } as unknown as Redis;
+  it("detects stale debounce job when conversation inboundVersion has advanced", async () => {
+    const conversationRow = {
+      id: "conv-123",
+      inboundVersion: 4, // conversation has moved to version 4
+      status: "DEBOUNCING",
+      manualMode: false,
+      isBlocked: false,
+    };
 
-    const mockQueues = {
-      inboundDebounce: {
-        getJob: vi.fn().mockResolvedValue(null),
-        add: vi.fn().mockResolvedValue({}),
+    const mockDb = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => [conversationRow]),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+      })),
+    } as any;
+
+    const mockTurnRepo = {
+      createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
+    } as any;
+
+    const mockJobRepo = {
+      enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
+    } as any;
+
+    const mockOutboxRepo = {
+      enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
+    } as any;
+
+    const mockEventRepo = {
+      recordEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
+    } as any;
+
+    const mockBroadcaster = {
+      broadcast: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const debounceHandler = createDebounceHandler({
+      db: mockDb,
+      turnRepo: mockTurnRepo,
+      jobRepo: mockJobRepo,
+      outboxRepo: mockOutboxRepo,
+      eventRepo: mockEventRepo,
+      broadcaster: mockBroadcaster,
+    });
+
+    // Job with stale version 3
+    await debounceHandler({
+      job: {
+        id: "job-debounce-stale",
+        channelAccountId: "personal-messenger",
+        queue: "default",
+        jobType: "inbound_debounce",
+        payload: {
+          channelAccountId: "personal-messenger",
+          conversationId: "conv-123",
+          inboundVersion: 3, // Stale!
+        },
+        status: "RUNNING",
+        priority: 0,
+        attempts: 1,
+        maxAttempts: 3,
+        availableAt: new Date(),
+        lockedUntil: null,
+        ownerToken: null,
+        fencingEpoch: 0,
+        idempotencyKey: null,
+        lastError: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-    } as unknown as AppQueues;
-
-    const debounceManager = new DebounceManager(mockRedis, mockQueues);
-
-    // Scenario 1: Version matches and TTL expired -> should be expired (ready to dispatch)
-    const isExpired = await debounceManager.isDebounceExpired({
-      channelAccountId: "personal-messenger",
-      conversationId: "conv-123",
-      inboundVersion: 3,
+      ownerToken: "test-owner",
+      fencingEpoch: 1,
+      signal: new AbortController().signal,
     });
-    expect(isExpired).toBe(true);
 
-    // Scenario 2: A newer inbound version (4) arrived in the meantime -> this job (version 3) is stale
-    (mockRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue("4");
-    const isStale = await debounceManager.isDebounceExpired({
-      channelAccountId: "personal-messenger",
-      conversationId: "conv-123",
-      inboundVersion: 3,
-    });
-    expect(isStale).toBe(false);
-
-    // Scenario 3: Key already disappeared from Redis (natural TTL expiry)
-    (mockRedis.get as ReturnType<typeof vi.fn>).mockResolvedValue(null);
-    const naturallyExpired = await debounceManager.isDebounceExpired({
-      channelAccountId: "personal-messenger",
-      conversationId: "conv-123",
-      inboundVersion: 4,
-    });
-    expect(naturallyExpired).toBe(true);
+    // Turn should NOT be created and AI job should NOT be enqueued
+    expect(mockTurnRepo.createOrGetTurn).not.toHaveBeenCalled();
+    expect(mockJobRepo.enqueue).not.toHaveBeenCalled();
+    // Stale cancellation event must be recorded
+    expect(mockEventRepo.recordEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "AI_CANCELLED_STALE",
+        conversationId: "conv-123",
+      })
+    );
   });
 
-  it("registers delayed job and resets TTL on consecutive inbounds", async () => {
-    const mockRedis = {
-      set: vi.fn().mockResolvedValue("OK"),
-    } as unknown as Redis;
+  it("processes fresh debounce job, creates turn and enqueues AI job when versions match", async () => {
+    const conversationRow = {
+      id: "conv-123",
+      inboundVersion: 3,
+      status: "DEBOUNCING",
+      manualMode: false,
+      isBlocked: false,
+    };
 
-    const mockJob = { remove: vi.fn().mockResolvedValue(true) };
-    const mockQueues = {
-      inboundDebounce: {
-        getJob: vi.fn().mockResolvedValue(mockJob),
-        add: vi.fn().mockResolvedValue({}),
+    const channelRow = {
+      id: "personal-messenger",
+      status: "RUNNING",
+      isPaused: false,
+      isSuspended: false,
+    };
+
+    const mockDb = {
+      select: vi.fn(() => ({
+        from: vi.fn((tbl) => ({
+          where: vi.fn(() => ({
+            limit: vi.fn(() => {
+              const tableName = (tbl as any)?._?.name || (tbl as any)?.[Symbol.for("drizzle:Name")];
+              if (tableName === "channel_accounts") return [channelRow];
+              return [conversationRow];
+            }),
+          })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+      })),
+    } as any;
+
+    const mockTurnRepo = {
+      createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
+    } as any;
+
+    const mockJobRepo = {
+      enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
+    } as any;
+
+    const mockOutboxRepo = {
+      enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
+    } as any;
+
+    const mockEventRepo = {
+      recordEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
+    } as any;
+
+    const mockBroadcaster = {
+      broadcast: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const debounceHandler = createDebounceHandler({
+      db: mockDb,
+      turnRepo: mockTurnRepo,
+      jobRepo: mockJobRepo,
+      outboxRepo: mockOutboxRepo,
+      eventRepo: mockEventRepo,
+      broadcaster: mockBroadcaster,
+    });
+
+    // Job with matching version 3
+    await debounceHandler({
+      job: {
+        id: "job-debounce-fresh",
+        channelAccountId: "personal-messenger",
+        queue: "default",
+        jobType: "inbound_debounce",
+        payload: {
+          channelAccountId: "personal-messenger",
+          conversationId: "conv-123",
+          inboundVersion: 3,
+        },
+        status: "RUNNING",
+        priority: 0,
+        attempts: 1,
+        maxAttempts: 3,
+        availableAt: new Date(),
+        lockedUntil: null,
+        ownerToken: null,
+        fencingEpoch: 0,
+        idempotencyKey: null,
+        lastError: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
-    } as unknown as AppQueues;
+      ownerToken: "test-owner",
+      fencingEpoch: 1,
+      signal: new AbortController().signal,
+    });
 
-    const debounceManager = new DebounceManager(mockRedis, mockQueues);
-
-    await debounceManager.registerInbound("personal-messenger", "conv-1", 1, 3000);
-    expect(mockRedis.set).toHaveBeenCalledWith("debounce:personal-messenger:conv-1", "1", "PX", 3000);
-    expect(mockQueues.inboundDebounce.add).toHaveBeenCalled();
-
-    // Second message arrives 1s later (version 2) -> resets timer
-    await debounceManager.registerInbound("personal-messenger", "conv-1", 2, 3000);
-    expect(mockRedis.set).toHaveBeenCalledWith("debounce:personal-messenger:conv-1", "2", "PX", 3000);
+    // Turn should be created and AI job should be enqueued
+    expect(mockTurnRepo.createOrGetTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelAccountId: "personal-messenger",
+        conversationId: "conv-123",
+        inboundVersion: 3,
+      })
+    );
+    expect(mockJobRepo.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobType: "ai",
+      })
+    );
   });
 });

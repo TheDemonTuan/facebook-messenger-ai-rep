@@ -13,9 +13,9 @@ if [[ "$1 $2" == "image inspect" ]]; then
   printf 'sha256:%s\n' "${3##*@sha256:}"
 elif [[ "$1 $2" == "image ls" ]]; then
   cat <<'IMAGES'
-ghcr.io/thedemontuan/facebook-messenger-ai-control-plane|sha256:new
-ghcr.io/thedemontuan/facebook-messenger-ai-control-plane|sha256:previous
-ghcr.io/thedemontuan/facebook-messenger-ai-control-plane|sha256:old
+ghcr.io/thedemontuan/facebook-messenger-ai-core|sha256:new
+ghcr.io/thedemontuan/facebook-messenger-ai-core|sha256:previous
+ghcr.io/thedemontuan/facebook-messenger-ai-core|sha256:old
 ghcr.io/thedemontuan/other|sha256:foreign
 IMAGES
 elif [[ "$1 $2" == "image rm" ]]; then
@@ -33,17 +33,17 @@ log() { :; }
 # shellcheck source=scripts/image-retention.sh
 source "$helper"
 prune_repository_images \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane" \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane@sha256:new" \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane@sha256:previous"
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core" \
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core@sha256:new" \
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core@sha256:previous"
 
-diff -u <(printf '%s\n' 'ghcr.io/thedemontuan/facebook-messenger-ai-control-plane@sha256:old') "$REMOVED"
+diff -u <(printf '%s\n' 'ghcr.io/thedemontuan/facebook-messenger-ai-core@sha256:old') "$REMOVED"
 
 : > "$REMOVED"
 prune_repository_images \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane" \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane@sha256:new" \
-  "ghcr.io/thedemontuan/facebook-messenger-ai-control-plane@sha256:missing"
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core" \
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core@sha256:new" \
+  "ghcr.io/thedemontuan/facebook-messenger-ai-core@sha256:missing"
 [[ ! -s "$REMOVED" ]]
 
 grep -q 'source "$APP_DIR/image-retention.sh"' scripts/deploy.sh
