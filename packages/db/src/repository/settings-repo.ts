@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { settings, settingRevisions } from "../schema/index.js";
-import { SystemSettingsSchema, type SystemSettings } from "@messenger/contracts";
+import { SystemSettingsSchema, type SystemSettings, type ReplyMode } from "@messenger/contracts";
 import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 
 export class SettingsRepository {
@@ -115,5 +115,42 @@ export class SettingsRepository {
       .where(eq(settingRevisions.channelAccountId, channelAccountId))
       .orderBy(settingRevisions.revision)
       .limit(limit);
+  }
+
+  async getReplyPolicySettings(channelAccountId: string) {
+    const { settings, revision } = await this.getSettings(channelAccountId);
+    return {
+      revision,
+      autoReplyEnabled: settings.autoReplyEnabled,
+      pauseIntakeProcessing: settings.pauseIntakeProcessing,
+      replyMode: settings.replyMode,
+      directRepliesEnabled: settings.directRepliesEnabled,
+      groupRepliesEnabled: settings.groupRepliesEnabled,
+      pageRepliesEnabled: settings.pageRepliesEnabled,
+      nonPersonRepliesEnabled: settings.nonPersonRepliesEnabled,
+      requireGroupMention: settings.requireGroupMention,
+      selectedParticipantIds: settings.selectedParticipantIds,
+      excludedParticipantIds: settings.excludedParticipantIds,
+    };
+  }
+
+  async updateReplyPolicySettings(
+    channelAccountId: string,
+    replySettings: Partial<{
+      replyMode: ReplyMode;
+      directRepliesEnabled: boolean;
+      groupRepliesEnabled: boolean;
+      pageRepliesEnabled: boolean;
+      nonPersonRepliesEnabled: boolean;
+      requireGroupMention: boolean;
+      selectedParticipantIds: string[];
+      excludedParticipantIds: string[];
+      autoReplyEnabled: boolean;
+      pauseIntakeProcessing: boolean;
+    }>,
+    changedBy: string,
+    reason?: string
+  ) {
+    return await this.updateSettings(channelAccountId, replySettings, changedBy, reason);
   }
 }

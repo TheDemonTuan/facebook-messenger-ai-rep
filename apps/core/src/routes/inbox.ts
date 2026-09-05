@@ -88,7 +88,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               customer: customers,
             })
             .from(conversations)
-            .innerJoin(customers, eq(conversations.customerId, customers.id))
+            .leftJoin(customers, eq(conversations.customerId, customers.id))
             .where(and(...conditions))
             .orderBy(desc(conversations.lastInboundAt))
             .limit(limit)
@@ -108,8 +108,27 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
 
         const hasMore = Boolean(nextCursor) || offset + rows.length < total;
 
+        const safeRows = rows.map((r) => {
+          const isGroup = r.conversation.threadKind === "GROUP";
+          const defaultName = isGroup ? "Nhóm Messenger" : "Khách hàng Messenger";
+          const fallbackCustomer = {
+            id: r.conversation.customerId ?? "00000000-0000-0000-0000-000000000000",
+            channelAccountId: r.conversation.channelAccountId,
+            externalCustomerId: r.conversation.externalThreadId,
+            name: r.conversation.title || defaultName,
+            avatarUrl: null,
+            notes: null,
+            createdAt: r.conversation.createdAt,
+            updatedAt: r.conversation.updatedAt,
+          };
+          return {
+            conversation: r.conversation,
+            customer: r.customer ?? fallbackCustomer,
+          };
+        });
+
         return reply.send({
-          conversations: rows,
+          conversations: safeRows,
           total,
           limit,
           offset,
