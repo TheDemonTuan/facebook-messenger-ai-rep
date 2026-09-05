@@ -54,34 +54,39 @@ export const ReplyEligibilityDecisionRecordSchema = z.object({
 });
 export type ReplyEligibilityDecisionRecord = z.infer<typeof ReplyEligibilityDecisionRecordSchema>;
 
+const UUID_REGEX = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const STRIPPED_KEYS = new Set(["id", "conversationId", "inboundMessageId", "channelAccountId"]);
+
+function sanitizeValue(val: unknown): unknown {
+  if (typeof val === "string") {
+    return val.replace(UUID_REGEX, "[id]");
+  }
+  if (Array.isArray(val)) {
+    return val.map((item) => sanitizeValue(item));
+  }
+  if (val !== null && typeof val === "object") {
+    const sanitizedObj: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+      if (STRIPPED_KEYS.has(k)) {
+        continue;
+      }
+      sanitizedObj[k] = sanitizeValue(v);
+    }
+    return sanitizedObj;
+  }
+  return val;
+}
+
 /**
  * Sanitizes reason text and detail dictionaries to strip raw UUIDs or internal IDs
  * for safe consumption in normal/dashboard read models.
+ * Recursively sanitizes arrays/nested objects and globally redacts embedded UUIDs.
  */
 export function sanitizeReadableSnapshot(
   reason: string,
   details?: Record<string, unknown>
 ): { readableReason: string; sanitizedDetails: Record<string, unknown> } {
-  const readableReason = reason.replace(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi,
-    "[id]"
-  );
-
-  const sanitizedDetails: Record<string, unknown> = {};
-  if (details) {
-    for (const [k, v] of Object.entries(details)) {
-      if (["id", "conversationId", "inboundMessageId", "channelAccountId"].includes(k)) {
-        continue;
-      }
-      if (typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v)) {
-        sanitizedDetails[k] = "[id]";
-      } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-        sanitizedDetails[k] = sanitizeReadableSnapshot("", v as Record<string, unknown>).sanitizedDetails;
-      } else {
-        sanitizedDetails[k] = v;
-      }
-    }
-  }
-
+  const readableReason = typeof reason === "string" ? reason.replace(UUID_REGEX, "[id]") : "";
+  const sanitizedDetails = (details ? (sanitizeValue(details) as Record<string, unknown>) : {}) || {};
   return { readableReason, sanitizedDetails };
 }

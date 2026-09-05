@@ -1,7 +1,7 @@
 import { eq } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { settings, settingRevisions } from "../schema/index.js";
-import { SystemSettingsSchema, type SystemSettings, type ReplyMode } from "@messenger/contracts";
+import { SystemSettingsSchema, type SystemSettings, type ReplyMode, mergeSystemSettings } from "@messenger/contracts";
 import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 
 export class SettingsRepository {
@@ -68,11 +68,8 @@ export class SettingsRepository {
         });
       }
 
-      // Merge and validate
-      const mergedSettings = SystemSettingsSchema.parse({
-        ...existingSettings,
-        ...newSettings,
-      });
+      // Merge and validate using mergeSystemSettings to preserve existing customized settings
+      const mergedSettings = mergeSystemSettings(existingSettings, newSettings);
 
       // Upsert settings
       await tx

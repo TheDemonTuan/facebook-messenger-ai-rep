@@ -504,4 +504,257 @@ describe("PR 2: Messenger Identities & Reply Policy Persistence", () => {
       expect(duplicate?.id).toBe("msg-duplicate-1");
     });
   });
+
+  describe("8. Regression Tests: PR 2 Review Findings", () => {
+    it("finding 1: cross-thread same text does not falsely mark new thread message as duplicate", async () => {
+      let insertedConv = false;
+      let insertedMsg = false;
+
+      const mockTx = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(() => Promise.resolve([])), // No existing conversation for thread B
+            })),
+          })),
+        })),
+        insert: vi.fn((table: unknown) => ({
+          values: vi.fn(() => {
+            if (table === conversations) insertedConv = true;
+            if (table === messages) insertedMsg = true;
+            return {
+              returning: vi.fn().mockResolvedValue([{ id: randomUUID() }]),
+              onConflictDoUpdate: vi.fn().mockResolvedValue([{ id: randomUUID() }]),
+            };
+          }),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([]),
+          })),
+        })),
+      };
+
+      const mockDb = {
+        transaction: vi.fn(async <T>(cb: (tx: unknown) => Promise<T>) => cb(mockTx)),
+      } as unknown as Database;
+
+      const repo = new ConversationRepository(mockDb);
+
+      const payload = InboundMessagePayloadSchema.parse({
+        channelAccountId: "personal-messenger",
+        externalThreadId: "thread-B-999",
+        externalThreadRef: "https://facebook.com/messages/t/thread-B-999",
+        externalCustomerId: "cust-B-999",
+        customerName: "New Thread User",
+        externalMessageId: "mid.new.thread.b.001",
+        text: "Same hello text as another thread",
+        timestamp: new Date(),
+        threadKind: "DIRECT",
+        threadReliability: "VERIFIED",
+      });
+
+      const result = await repo.ingestInboundMessage(payload);
+
+      expect(result.isDuplicate).toBe(false);
+      expect(insertedConv).toBe(true);
+      expect(insertedMsg).toBe(true);
+    });
+
+    it("finding 2: null sender isolation uses explicit isNull(senderParticipantId) and matches timestamp", async () => {
+      let capturedClause: unknown = null;
+
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn((clause: unknown) => {
+              capturedClause = clause;
+              return {
+                limit: vi.fn(() => []),
+              };
+            }),
+          })),
+        })),
+      } as unknown as Database;
+
+      const repo = new ConversationRepository(mockDb);
+      const convId = randomUUID();
+
+      function extractSqlChunks(sqlObj: unknown): string[] {
+        if (!sqlObj || typeof sqlObj !== "object") return [];
+        const chunks = (sqlObj as { queryChunks?: unknown[] }).queryChunks || [];
+        return chunks.flatMap((ch: unknown) => {
+          if (!ch || typeof ch !== "object") return [];
+          if ("value" in ch) {
+            const v = (ch as { value: unknown }).value;
+            return Array.isArray(v) ? v.map(String) : [String(v)];
+          }
+          if ("name" in ch) return [String((ch as { name: unknown }).name)];
+          if ("queryChunks" in ch) return extractSqlChunks(ch);
+          return [];
+        });
+      }
+
+      // Query with null/undefined senderParticipantId
+      await repo.findScopedDuplicateMessage({
+        channelAccountId: "personal-messenger",
+        conversationId: convId,
+        senderParticipantId: null,
+        textHash: "hash123",
+        since: new Date(Date.now() - 5000),
+      });
+
+      expect(capturedClause).not.toBeNull();
+      const chunksNull = extractSqlChunks(capturedClause).join(" ");
+      expect(chunksNull).toContain("sender_participant_id");
+      expect(chunksNull).toContain("is null");
+      expect(chunksNull).toContain("timestamp");
+
+      // Query with explicit senderParticipantId
+      await repo.findScopedDuplicateMessage({
+        channelAccountId: "personal-messenger",
+        conversationId: convId,
+        senderParticipantId: "sender-known-456",
+        textHash: "hash123",
+        since: new Date(Date.now() - 5000),
+      });
+
+      const chunksSender = extractSqlChunks(capturedClause).join(" ");
+      expect(chunksSender).toContain("sender_participant_id");
+      expect(chunksSender).not.toContain("is null");
+      expect(chunksSender).toContain("sender-known-456");
+    });
+
+    it("finding 3: recursively sanitizes nested arrays/objects and globally redacts embedded UUIDs", () => {
+      const uuid1 = "550e8400-e29b-41d4-a716-446655440000";
+      const uuid2 = "123e4567-e89b-12d3-a456-426614174000";
+
+      const rawReason = `Execution for conversation ${uuid1} failed on inbound ${uuid2} with timeout`;
+      const rawDetails = {
+        id: uuid1,
+        conversationId: uuid1,
+        inboundMessageId: uuid2,
+        channelAccountId: "chan-1",
+        label: `prefix-${uuid1}-suffix`,
+        nestedArray: [
+          `item-${uuid2}`,
+          [
+            `deep-${uuid1}`,
+            {
+              id: uuid2,
+              token: `tok-${uuid2}`,
+              safeValue: 42,
+            },
+          ],
+        ],
+        nestedObject: {
+          id: uuid1,
+          desc: `Check ${uuid1}`,
+          participants: [uuid1, uuid2],
+        },
+      };
+
+      const { readableReason, sanitizedDetails } = sanitizeReadableSnapshot(rawReason, rawDetails);
+
+      // Verify reason globally redacts embedded UUIDs
+      expect(readableReason).toBe("Execution for conversation [id] failed on inbound [id] with timeout");
+      expect(readableReason).not.toContain(uuid1);
+      expect(readableReason).not.toContain(uuid2);
+
+      // Verify stripped root keys
+      expect(sanitizedDetails.id).toBeUndefined();
+      expect(sanitizedDetails.conversationId).toBeUndefined();
+      expect(sanitizedDetails.inboundMessageId).toBeUndefined();
+      expect(sanitizedDetails.channelAccountId).toBeUndefined();
+
+      // Verify embedded UUID in string
+      expect(sanitizedDetails.label).toBe("prefix-[id]-suffix");
+
+      // Verify nested arrays
+      const arr = sanitizedDetails.nestedArray as unknown[];
+      expect(arr[0]).toBe("item-[id]");
+      const deepArr = arr[1] as unknown[];
+      expect(deepArr[0]).toBe("deep-[id]");
+      const deepObj = deepArr[1] as Record<string, unknown>;
+      expect(deepObj.id).toBeUndefined();
+      expect(deepObj.token).toBe("tok-[id]");
+      expect(deepObj.safeValue).toBe(42);
+
+      // Verify nested object and array inside it
+      const nestedObj = sanitizedDetails.nestedObject as Record<string, unknown>;
+      expect(nestedObj.id).toBeUndefined();
+      expect(nestedObj.desc).toBe("Check [id]");
+      expect(nestedObj.participants).toEqual(["[id]", "[id]"]);
+    });
+
+    it("finding 4: partial settings updates preserve existing customized settings using mergeSystemSettings", async () => {
+      let savedSettings: Record<string, unknown> | null = null;
+
+      const existingFullSettings = {
+        autoReplyEnabled: true,
+        pauseIntakeProcessing: false,
+        replyMode: "ONLY_SELECTED" as const,
+        directRepliesEnabled: false,
+        groupRepliesEnabled: true,
+        pageRepliesEnabled: false,
+        nonPersonRepliesEnabled: false,
+        requireGroupMention: true,
+        selectedParticipantIds: ["vip-participant-1", "vip-participant-2"],
+        excludedParticipantIds: ["blocked-1"],
+        aiModel: "grok-2",
+        debounceMs: 5500,
+      };
+
+      const mockDb = {
+        transaction: vi.fn(async (cb: (tx: unknown) => Promise<unknown>) => {
+          const mockTx = {
+            select: vi.fn(() => ({
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn(() => [
+                    {
+                      channelAccountId: "personal-messenger",
+                      currentRevision: 4,
+                      settings: existingFullSettings,
+                    },
+                  ]),
+                })),
+              })),
+            })),
+            insert: vi.fn(() => ({
+              values: vi.fn((vals: Record<string, unknown>) => {
+                savedSettings = (vals.settings as Record<string, unknown>) ?? null;
+                return {
+                  onConflictDoUpdate: vi.fn().mockResolvedValue([]),
+                };
+              }),
+            })),
+          };
+          return cb(mockTx);
+        }),
+      } as unknown as Database;
+
+      const repo = new SettingsRepository(mockDb);
+
+      // Apply partial update changing only replyMode to "EVERYONE_EXCEPT"
+      const result = await repo.updateReplyPolicySettings(
+        "personal-messenger",
+        { replyMode: "EVERYONE_EXCEPT" },
+        "admin-tester",
+        "Switch to EVERYONE_EXCEPT mode"
+      );
+
+      expect(result.settings.replyMode).toBe("EVERYONE_EXCEPT");
+      // Verify customized settings are completely preserved and not reset or clobbered
+      expect(result.settings.directRepliesEnabled).toBe(false);
+      expect(result.settings.groupRepliesEnabled).toBe(true);
+      expect(result.settings.selectedParticipantIds).toEqual(["vip-participant-1", "vip-participant-2"]);
+      expect(result.settings.excludedParticipantIds).toEqual(["blocked-1"]);
+      expect(result.settings.debounceMs).toBe(5500);
+      expect(savedSettings).toBeDefined();
+      expect((savedSettings as Record<string, unknown> | null)?.replyMode).toBe("EVERYONE_EXCEPT");
+      expect((savedSettings as Record<string, unknown> | null)?.directRepliesEnabled).toBe(false);
+      expect((savedSettings as Record<string, unknown> | null)?.selectedParticipantIds).toEqual(["vip-participant-1", "vip-participant-2"]);
+    });
+  });
 });

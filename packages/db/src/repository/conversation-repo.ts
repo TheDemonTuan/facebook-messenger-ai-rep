@@ -88,11 +88,13 @@ export class ConversationRepository {
           eq(messages.conversationId, convId),
           eq(messages.textHash, textHash),
           eq(messages.direction, "INBOUND"),
-          gte(messages.createdAt, windowStart),
+          gte(messages.timestamp, windowStart),
         ];
 
         if (senderParticipantId) {
           scopedConditions.push(eq(messages.senderParticipantId, senderParticipantId));
+        } else {
+          scopedConditions.push(isNull(messages.senderParticipantId));
         }
 
         const recentDuplicate = await tx
@@ -107,29 +109,6 @@ export class ConversationRepository {
             conversationId: recentDuplicate[0].conversationId,
             inboundVersion: recentDuplicate[0].inboundVersion,
             messageId: recentDuplicate[0].id,
-          };
-        }
-      } else {
-        // Channel-level identical text fallback check within dedupe window
-        const recentChannelIdentical = await tx
-          .select({ id: messages.id, conversationId: messages.conversationId, inboundVersion: messages.inboundVersion })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.channelAccountId, payload.channelAccountId),
-              eq(messages.textHash, textHash),
-              eq(messages.direction, "INBOUND"),
-              gte(messages.createdAt, windowStart)
-            )
-          )
-          .limit(1);
-
-        if (recentChannelIdentical.length > 0 && recentChannelIdentical[0]) {
-          return {
-            isDuplicate: true,
-            conversationId: recentChannelIdentical[0].conversationId,
-            inboundVersion: recentChannelIdentical[0].inboundVersion,
-            messageId: recentChannelIdentical[0].id,
           };
         }
       }
