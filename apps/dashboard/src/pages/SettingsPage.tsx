@@ -263,7 +263,7 @@ export const SettingsPage: React.FC = () => {
               type="text"
               value={formData.aiModel || ""}
               onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
-              placeholder="grok-beta / gpt-4o-mini / claude-3-5-sonnet"
+              placeholder="grok-4.5"
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
