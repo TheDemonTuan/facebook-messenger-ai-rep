@@ -150,6 +150,8 @@ export const IncidentsPage: React.FC = () => {
         return "Giới hạn gửi tin";
       case "SESSION_EXPIRED":
         return "Hết hạn phiên đăng nhập";
+      case "INBOX_UNAVAILABLE":
+        return "Không thấy hộp thư Messenger";
       default:
         return type.replace(/_/g, " ").toLowerCase();
     }

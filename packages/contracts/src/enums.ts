@@ -102,6 +102,8 @@ export type EventType = z.infer<typeof EventTypeSchema>;
 export const IncidentTypeSchema = z.enum([
   "DOM_CHANGED",
   "CHECKPOINT",
+  "SESSION_EXPIRED",
+  "INBOX_UNAVAILABLE",
   "UNCONFIRMED_SEND",
   "SEND_UNCERTAIN",
   "RATE_LIMITED",

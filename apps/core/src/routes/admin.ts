@@ -159,8 +159,11 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       return reply.send(
         sanitizeApiOutput({
           channelStatus: channel?.status || "RUNNING",
+          channelStatusReason: channel?.statusReason || null,
           channelIsSuspended: channel?.isSuspended || false,
           channelIsPaused: channel?.isPaused || false,
+          channelLastHealthCheckAt: channel?.lastHealthCheckAt || null,
+          channelLastSeenActiveAt: channel?.lastSeenActiveAt || null,
           activeConversation: activeConv[0] || null,
           queueLength: queueList.length,
           oldestWaitSeconds,

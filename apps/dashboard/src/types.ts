@@ -9,8 +9,11 @@ export interface SessionUser {
 
 export interface ChannelOverview {
   channelStatus: "RUNNING" | "PAUSED" | "SUSPENDED" | "DEGRADED" | "ERROR";
+  channelStatusReason?: string | null;
   channelIsSuspended: boolean;
   channelIsPaused: boolean;
+  channelLastHealthCheckAt?: string | null;
+  channelLastSeenActiveAt?: string | null;
   activeConversation: {
     id: string;
     status: string;

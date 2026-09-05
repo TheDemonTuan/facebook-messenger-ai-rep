@@ -18,7 +18,16 @@ export function isSendUncertain(incident: IncidentItem): boolean {
 }
 
 export function isCheckpoint(incident: IncidentItem): boolean {
-  return incident.type === "CHECKPOINT" || incident.title?.toLowerCase().includes("checkpoint");
+  const title = incident.title?.toLowerCase() || "";
+  return (
+    incident.type === "CHECKPOINT" ||
+    incident.type === "SESSION_EXPIRED" ||
+    incident.metadata?.kind === "CHECKPOINT" ||
+    incident.metadata?.kind === "LOGIN_REQUIRED" ||
+    title.includes("checkpoint") ||
+    title.includes("xác minh tài khoản") ||
+    title.includes("hết hạn")
+  );
 }
 
 export function isDomDegraded(incident: IncidentItem): boolean {
@@ -51,7 +60,7 @@ export function getIncidentSafetyPolicy(incident: IncidentItem): IncidentResolut
       canBlindRetry: false,
       allowedActions: ["OPEN_CONSOLE", "RESUME_CHANNEL", "RESOLVE"],
       warningMessage:
-        "CẢNH BÁO BẢO MẬT: Facebook yêu cầu xác thực bảo mật (Checkpoint/CAPTCHA). Tuyệt đối không retry tự động. Cần mở noVNC Console để đăng nhập/xác minh trước khi khôi phục kênh.",
+        "Facebook cần đăng nhập hoặc xác minh lại. Tuyệt đối không retry tự động. Hãy mở phiên Messenger, hoàn tất yêu cầu của Facebook rồi chờ hệ thống tự kết nối lại. Không cần giữ tab Messenger ở trạng thái đang được chọn, nhưng không dùng phiên này để duyệt trang khác.",
     };
   }
 

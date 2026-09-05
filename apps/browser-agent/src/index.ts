@@ -13,7 +13,7 @@ import {
 } from "@messenger/db";
 import { eq } from "drizzle-orm";
 import { getEnv } from "@messenger/config";
-import { PlaywrightMessengerAdapter } from "./messenger-adapter.js";
+import { PlaywrightMessengerAdapter, type BrowserSessionIssue } from "./messenger-adapter.js";
 import { SenderWorkerService } from "./sender-worker.js";
 
 async function main() {
@@ -75,6 +75,7 @@ async function main() {
           status: "DEGRADED",
           isSuspended: true,
           statusReason: `DOM_DEGRADED: ${reason}`,
+          lastHealthCheckAt: new Date(),
           updatedAt: new Date(),
         })
         .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
@@ -89,6 +90,73 @@ async function main() {
       });
     });
   }
+
+  const sessionIncidentTypes = ["CHECKPOINT", "SESSION_EXPIRED", "INBOX_UNAVAILABLE"] as const;
+
+  adapter.onSessionIssue(async (issue: BrowserSessionIssue) => {
+    const incidentType =
+      issue.kind === "CHECKPOINT"
+        ? "CHECKPOINT"
+        : issue.kind === "LOGIN_REQUIRED"
+          ? "SESSION_EXPIRED"
+          : "INBOX_UNAVAILABLE";
+    const statusReason = `${issue.kind}: ${issue.message}`;
+    console.error(`[Browser Agent] Suspending Messenger channel: ${statusReason}`);
+
+    await db
+      .update(channelAccounts)
+      .set({
+        status: "DEGRADED",
+        isSuspended: true,
+        statusReason,
+        lastHealthCheckAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
+
+    if (!(await incidentRepo.hasOpenIncident(env.DEFAULT_CHANNEL_ACCOUNT_ID, [incidentType]))) {
+      await incidentRepo.createIncident({
+        channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+        type: incidentType,
+        title:
+          issue.kind === "LOGIN_REQUIRED"
+            ? "Phiên Facebook đã hết hạn"
+            : issue.kind === "CHECKPOINT"
+              ? "Facebook yêu cầu xác minh tài khoản"
+              : "Không thể quan sát hộp thư Messenger",
+        description: issue.message,
+        metadata: { kind: issue.kind },
+      });
+    }
+  });
+
+  adapter.onSessionRecovered(async () => {
+    console.log("[Browser Agent] Messenger observer recovered.");
+    await db
+      .update(channelAccounts)
+      .set({
+        status: "RUNNING",
+        isSuspended: false,
+        statusReason: null,
+        lastHealthCheckAt: new Date(),
+        lastSeenActiveAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
+    const resolvedCount = await incidentRepo.resolveOpenIncidentsByType(
+      env.DEFAULT_CHANNEL_ACCOUNT_ID,
+      [...sessionIncidentTypes],
+      "SYSTEM",
+      "Messenger đã tự kết nối và quan sát hộp thư trở lại"
+    );
+    if (resolvedCount > 0) {
+      await eventRepo.recordEvent({
+        channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+        type: "SESSION_RESUMED",
+        payload: { source: "browser_observer" },
+      });
+    }
+  });
 
   // Wire inbound observer (runs continuously, independent of sender typing)
   await adapter.observeInbound(async (inbound) => {
@@ -149,6 +217,14 @@ async function main() {
   const heartbeatInterval = setInterval(async () => {
     try {
       const health = await adapter.health();
+      await db
+        .update(channelAccounts)
+        .set({
+          lastHealthCheckAt: health.timestamp,
+          ...(health.healthy ? { lastSeenActiveAt: health.timestamp } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
       if (!health.healthy) return;
       await sql.unsafe("SELECT 1");
       fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());

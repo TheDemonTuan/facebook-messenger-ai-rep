@@ -1,4 +1,4 @@
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { incidents, channelAccounts, outboxEvents } from "../schema/index.js";
 import type { IncidentType } from "@messenger/contracts";
@@ -85,5 +85,46 @@ export class IncidentRepository {
       .from(incidents)
       .where(eq(incidents.channelAccountId, channelAccountId))
       .orderBy(desc(incidents.createdAt));
+  }
+
+  async hasOpenIncident(channelAccountId: string, types: IncidentType[]): Promise<boolean> {
+    const rows = await this.db
+      .select({ id: incidents.id })
+      .from(incidents)
+      .where(
+        and(
+          eq(incidents.channelAccountId, channelAccountId),
+          eq(incidents.status, "OPEN"),
+          inArray(incidents.type, types)
+        )
+      )
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  async resolveOpenIncidentsByType(
+    channelAccountId: string,
+    types: IncidentType[],
+    resolvedBy: string,
+    resolutionNote: string
+  ): Promise<number> {
+    const resolved = await this.db
+      .update(incidents)
+      .set({
+        status: "RESOLVED",
+        resolvedAt: new Date(),
+        resolvedBy,
+        resolutionNote,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(incidents.channelAccountId, channelAccountId),
+          eq(incidents.status, "OPEN"),
+          inArray(incidents.type, types)
+        )
+      )
+      .returning({ id: incidents.id });
+    return resolved.length;
   }
 }

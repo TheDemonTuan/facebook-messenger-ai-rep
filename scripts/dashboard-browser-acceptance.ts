@@ -24,9 +24,12 @@ async function mockApi(page: Page): Promise<void> {
     if (path === "/api/events") return route.abort();
     if (path === "/api/overview") {
       return json({
-        channelStatus: "RUNNING",
+        channelStatus: "DEGRADED",
+        channelStatusReason: "LOGIN_REQUIRED: Phiên Facebook đã hết hạn",
         channelIsPaused: false,
-        channelIsSuspended: false,
+        channelIsSuspended: true,
+        channelLastHealthCheckAt: now,
+        channelLastSeenActiveAt: now,
         queueLength: 1,
         openIncidentsCount: 1,
         messagesToday: 3,
@@ -125,6 +128,8 @@ async function waitForRoute(page: Page, route: string): Promise<void> {
     case "overview":
       await page.getByRole("heading", { name: "Tổng quan hệ thống" }).waitFor();
       await page.getByText("Hội thoại hôm nay").waitFor();
+      await page.getByRole("alert").getByText("Messenger đang không nhận tin nhắn").waitFor();
+      await page.getByRole("link", { name: "Xem cách xử lý" }).waitFor();
       break;
     case "inbox":
       await page.getByRole("heading", { name: "Hộp thư khách hàng" }).waitFor();

@@ -72,6 +72,22 @@ export const OverviewPage: React.FC = () => {
 
   if (!data) return null;
 
+  const channelNeedsAttention =
+    data.channelIsSuspended || data.channelStatus === "DEGRADED" || data.channelStatus === "ERROR";
+  const channelWarning = (() => {
+    const reason = data.channelStatusReason || "";
+    if (reason.startsWith("LOGIN_REQUIRED:")) {
+      return "Phiên Facebook đã hết hạn. Hãy mở phiên Messenger, đăng nhập lại và giữ nguyên tab Messenger của hệ thống.";
+    }
+    if (reason.startsWith("CHECKPOINT:")) {
+      return "Facebook đang yêu cầu xác minh tài khoản. Hãy mở phiên Messenger và hoàn tất bước xác minh.";
+    }
+    if (reason.startsWith("INBOX_UNAVAILABLE:")) {
+      return "Hệ thống không nhìn thấy danh sách hội thoại Messenger nên đã tạm dừng để tránh bỏ sót tin nhắn.";
+    }
+    return "Kênh Messenger đang tạm dừng để đảm bảo an toàn. Xem sự cố để biết cách xử lý.";
+  })();
+
   const cardStyle: React.CSSProperties = {
     backgroundColor: "#ffffff",
     padding: "20px",
@@ -130,6 +146,51 @@ export const OverviewPage: React.FC = () => {
           <RefreshCw size={14} /> Làm mới
         </button>
       </div>
+
+      {channelNeedsAttention && (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "12px",
+            padding: "16px 18px",
+            borderRadius: "10px",
+            border: "1px solid #fca5a5",
+            backgroundColor: "#fef2f2",
+            color: "#991b1b",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "10px", maxWidth: "760px" }}>
+            <AlertCircle size={21} style={{ flexShrink: 0, marginTop: "1px" }} />
+            <div>
+              <div style={{ fontWeight: "700", marginBottom: "4px" }}>Messenger đang không nhận tin nhắn</div>
+              <div style={{ fontSize: "0.88rem", lineHeight: 1.5 }}>{channelWarning}</div>
+              {data.channelLastSeenActiveAt && (
+                <div style={{ fontSize: "0.78rem", marginTop: "6px", color: "#b91c1c" }}>
+                  Hoạt động bình thường gần nhất: {formatTime(data.channelLastSeenActiveAt)}
+                </div>
+              )}
+            </div>
+          </div>
+          <Link
+            to="/incidents"
+            style={{
+              padding: "8px 12px",
+              borderRadius: "6px",
+              backgroundColor: "#991b1b",
+              color: "#ffffff",
+              textDecoration: "none",
+              fontSize: "0.84rem",
+              fontWeight: "700",
+            }}
+          >
+            Xem cách xử lý
+          </Link>
+        </div>
+      )}
 
       {/* Active serving conversation highlight (Single Agent) */}
       <div
