@@ -18,6 +18,7 @@ import {
 } from "../helpers/takeover-machine";
 import { shouldRefetchConversationDetail } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { formatTime } from "../helpers/date-helpers";
 import {
   ArrowLeft,
   UserCheck,
@@ -608,7 +609,7 @@ export const ConversationDetailPage: React.FC = () => {
                     <div style={{ fontSize: "0.7rem", color: "#94a3b8", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}>
                       <span>{msg.actor === "AI" ? "Trợ lý AI" : msg.actor === "MANUAL_OWNER" ? "Nhân viên" : isInbound ? "Khách hàng" : "Hệ thống"}</span>
                       <span>•</span>
-                      <span>{new Date(msg.timestamp).toLocaleTimeString("vi-VN")}</span>
+                      <span>{formatTime(msg.timestamp)}</span>
                     </div>
                   </div>
                 );
@@ -731,7 +732,7 @@ export const ConversationDetailPage: React.FC = () => {
                 {events.slice(0, 15).map((ev) => (
                   <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", borderBottom: "1px solid #f1f5f9", paddingBottom: "4px" }}>
                     <span style={{ fontWeight: "600", color: "#334155" }}>{formatEventType(ev.type)}</span>
-                    <span style={{ color: "#94a3b8" }}>{new Date(ev.createdAt).toLocaleTimeString("vi-VN")}</span>
+                    <span style={{ color: "#94a3b8" }}>{formatTime(ev.createdAt)}</span>
                   </div>
                 ))}
               </div>

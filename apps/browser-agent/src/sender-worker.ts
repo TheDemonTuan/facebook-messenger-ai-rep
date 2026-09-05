@@ -284,6 +284,9 @@ export class SenderWorkerService {
 
     // 6. Type draft with human-like pacing & abortable signal
     const settings = await this.settingsRepo.getSettings(channelAccountId);
+    if (settings?.settings?.businessTimeZone && typeof this.adapter.setTimeZone === "function") {
+      this.adapter.setTimeZone(settings.settings.businessTimeZone);
+    }
     const typingResult = await this.adapter.typeDraft(text, {
       targetWpmMin: settings.settings.typingTargetWpmMin,
       targetWpmMax: settings.settings.typingTargetWpmMax,

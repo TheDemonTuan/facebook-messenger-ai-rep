@@ -18,17 +18,8 @@ export function isValidAiBaseUrl(baseUrl: string): boolean {
   }
 }
 
-export function isValidTimeZone(timeZone: string): boolean {
-  if (typeof timeZone !== "string" || timeZone.trim().length === 0) {
-    return false;
-  }
-  try {
-    Intl.DateTimeFormat(undefined, { timeZone: timeZone.trim() });
-    return true;
-  } catch {
-    return false;
-  }
-}
+import { isValidTimeZone, resolveBusinessTimeZone, DEFAULT_BUSINESS_TIMEZONE } from "./time.js";
+export { isValidTimeZone, resolveBusinessTimeZone, DEFAULT_BUSINESS_TIMEZONE };
 
 // Single source of truth for SystemSettings field shapes without defaults
 export const SystemSettingsBaseShape = {

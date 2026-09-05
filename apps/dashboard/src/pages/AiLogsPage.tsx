@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { AiRunItem } from "../types";
+import { formatDateTime, formatTime } from "../helpers/date-helpers";
 import {
   Cpu,
   RefreshCw,
@@ -872,7 +873,7 @@ export const AiLogsPage: React.FC = () => {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
                       {getStatusBadge(run.status)}
                       <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-                        {new Date(run.createdAt).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        {formatTime(run.createdAt, null, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                       </span>
                     </div>
 
@@ -937,7 +938,7 @@ export const AiLogsPage: React.FC = () => {
                     {getStatusBadge(selectedRun.status)}
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    Thời gian: {new Date(selectedRun.createdAt).toLocaleString("vi-VN")}
+                    Thời gian: {formatDateTime(selectedRun.createdAt)}
                   </div>
                 </div>
 

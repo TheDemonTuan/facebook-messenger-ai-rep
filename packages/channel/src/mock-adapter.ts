@@ -16,6 +16,7 @@ export interface MockSentMessage {
 
 export class MockChannelAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
+  public timeZone: string = "Asia/Ho_Chi_Minh";
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
   private degradedCallback: ((reason: string) => Promise<void>) | null = null;
   public currentOpenRef: ActiveConversationRef | null = null;
@@ -32,6 +33,10 @@ export class MockChannelAdapter implements ChannelAdapter {
 
   constructor(channelAccountId = "personal-messenger") {
     this.channelAccountId = channelAccountId;
+  }
+
+  setTimeZone(timeZone: string): void {
+    this.timeZone = timeZone;
   }
 
   async observeInbound(

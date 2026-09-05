@@ -19,13 +19,14 @@ import {
   stripSensitiveData,
   sanitizeCustomerOutput,
 } from "@messenger/db";
-import { eq, and, sql, gte, desc } from "drizzle-orm";
+import { eq, and, sql, gte, lt, desc } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import {
   AiApiFormatSchema,
   SystemSettingsSchema,
   isValidAiBaseUrl,
   isValidAiModel,
+  getBusinessDayRange,
   type SessionUser,
 } from "@messenger/contracts";
 import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
@@ -67,7 +68,9 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     // 1. Overview metrics
     fastify.get("/api/overview", async (_request, reply) => {
       const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const settingsData = await settingsRepo.getSettings(channelAccountId);
+      const businessTimeZone = settingsData?.settings?.businessTimeZone || "Asia/Ho_Chi_Minh";
+      const { startOfDay, endOfDay } = getBusinessDayRange(now, businessTimeZone);
 
       const [channel] = await db
         .select()
@@ -104,7 +107,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         .where(
           and(
             eq(conversations.channelAccountId, channelAccountId),
-            gte(conversations.createdAt, startOfDay)
+            gte(conversations.createdAt, startOfDay),
+            lt(conversations.createdAt, endOfDay)
           )
         );
 
@@ -115,7 +119,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         .where(
           and(
             eq(messages.channelAccountId, channelAccountId),
-            gte(messages.createdAt, startOfDay)
+            gte(messages.createdAt, startOfDay),
+            lt(messages.createdAt, endOfDay)
           )
         );
 
@@ -148,6 +153,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         todayConversationsCount: todayConvRes[0]?.count || 0,
         todayMessagesCount: todayMsgRes[0]?.count || 0,
         openIncidentsCount: openIncidentsRes[0]?.count || 0,
+        businessTimeZone,
       });
     });
 

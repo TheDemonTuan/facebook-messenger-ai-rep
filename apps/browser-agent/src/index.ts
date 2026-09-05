@@ -28,10 +28,21 @@ async function main() {
   const incidentRepo = new IncidentRepository(db);
   const jobRepo = new JobRepository(db);
 
+  let initialTimeZone = "Asia/Ho_Chi_Minh";
+  try {
+    const s = await settingsRepo.getSettings(env.DEFAULT_CHANNEL_ACCOUNT_ID);
+    if (s?.settings?.businessTimeZone) {
+      initialTimeZone = s.settings.businessTimeZone;
+    }
+  } catch (err) {
+    console.warn("[Browser Agent] Failed to read initial businessTimeZone from settings:", err);
+  }
+
   const adapter = new PlaywrightMessengerAdapter({
     profileDir: env.BROWSER_PROFILE_DIR,
     headless: env.BROWSER_HEADLESS,
     channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+    timeZone: initialTimeZone,
   });
 
   console.log("Initializing PostgreSQL-foundation Browser Agent...");
@@ -86,11 +97,14 @@ async function main() {
     let debounceMs = 3000;
     try {
       const s = await settingsRepo.getSettings(inbound.channelAccountId);
+      if (s?.settings?.businessTimeZone && typeof adapter.setTimeZone === "function") {
+        adapter.setTimeZone(s.settings.businessTimeZone);
+      }
       if (s?.settings?.debounceMs) {
         debounceMs = s.settings.debounceMs;
       }
     } catch (err) {
-      console.warn("[Browser Agent] Failed to read debounceMs from settings, defaulting to 3000ms:", err);
+      console.warn("[Browser Agent] Failed to read settings, defaulting to 3000ms:", err);
     }
 
     // Ingest into PostgreSQL atomically with debounce job enqueued/updated

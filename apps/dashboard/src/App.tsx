@@ -2,6 +2,7 @@ import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider } from "./context/AuthContext";
 import { SseProvider } from "./context/SseContext";
+import { TimezoneProvider } from "./context/TimezoneContext";
 import { Layout } from "./components/Layout";
 import { OverviewPage } from "./pages/OverviewPage";
 import { InboxPage } from "./pages/InboxPage";
@@ -17,8 +18,9 @@ export const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AuthProvider>
-        <SseProvider>
-          <Routes>
+        <TimezoneProvider>
+          <SseProvider>
+            <Routes>
             <Route path="/login" element={<LoginPage />} />
 
             {/* Protected layout routes */}
@@ -91,7 +93,8 @@ export const App: React.FC = () => {
             <Route path="*" element={<Navigate to="/overview" replace />} />
           </Routes>
         </SseProvider>
-      </AuthProvider>
-    </BrowserRouter>
+      </TimezoneProvider>
+    </AuthProvider>
+  </BrowserRouter>
   );
 };

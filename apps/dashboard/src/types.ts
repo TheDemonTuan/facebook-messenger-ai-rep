@@ -24,6 +24,7 @@ export interface ChannelOverview {
   todayConversationsCount: number;
   todayMessagesCount: number;
   openIncidentsCount: number;
+  businessTimeZone?: string;
 }
 
 export interface ConversationItem {
@@ -215,6 +216,7 @@ export interface NonSecretSettings {
   busyMode: boolean;
   autoReplyEnabled: boolean;
   pauseIntakeProcessing: boolean;
+  businessTimeZone?: string;
 }
 
 export interface SettingItem {

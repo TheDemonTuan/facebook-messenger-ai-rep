@@ -10,6 +10,7 @@ import {
 } from "../helpers/incident-helpers";
 import { shouldRefetchIncidents } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { formatDateTime } from "../helpers/date-helpers";
 import {
   AlertTriangle,
   CheckCircle,
@@ -362,7 +363,7 @@ export const IncidentsPage: React.FC = () => {
                         </span>
 
                         <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-                          {new Date(incident.createdAt).toLocaleString("vi-VN")}
+                          {formatDateTime(incident.createdAt)}
                         </span>
                       </div>
 

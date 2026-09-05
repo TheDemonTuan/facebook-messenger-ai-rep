@@ -3,6 +3,7 @@ import { apiFetch } from "../api";
 import type { AiProviderSettings, SettingItem, NonSecretSettings } from "../types";
 import { sanitizeSettingsForSave } from "../helpers/settings-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { useBusinessTimeZone } from "../context/TimezoneContext";
 import {
   Save,
   History,
@@ -17,6 +18,7 @@ import {
 } from "lucide-react";
 
 export const SettingsPage: React.FC = () => {
+  const { setTimeZone } = useBusinessTimeZone();
   const [data, setData] = useState<SettingItem | null>(null);
   const [formData, setFormData] = useState<Partial<NonSecretSettings>>({});
   const [aiProvider, setAiProvider] = useState<AiProviderSettings>({
@@ -48,6 +50,9 @@ export const SettingsPage: React.FC = () => {
       setData(res);
       setFormData(sanitizeSettingsForSave(res.settings));
       setAiProvider(res.aiProvider);
+      if (typeof res.settings?.businessTimeZone === "string") {
+        setTimeZone(res.settings.businessTimeZone);
+      }
     } catch (err: unknown) {
       setError((err as Error).message || "Không thể tải cấu hình hệ thống");
     } finally {
@@ -127,6 +132,9 @@ export const SettingsPage: React.FC = () => {
       setAiProvider(updated.aiProvider);
       setAiApiKey("");
       setFormData(sanitizeSettingsForSave(updated.settings));
+      if (typeof updated.settings?.businessTimeZone === "string") {
+        setTimeZone(updated.settings.businessTimeZone);
+      }
       setReason("");
       setSaveSuccess("Đã lưu cấu hình mới thành công");
       setTimeout(() => setSaveSuccess(null), 4000);
@@ -349,6 +357,20 @@ export const SettingsPage: React.FC = () => {
                 max={30000}
               />
               <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Thời gian chờ khách nhắn tiếp trước khi AI phản hồi (500ms - 30000ms)</span>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Múi giờ hoạt động doanh nghiệp (IANA)</label>
+              <input
+                type="text"
+                value={formData.businessTimeZone || "Asia/Ho_Chi_Minh"}
+                onChange={(e) => setFormData({ ...formData, businessTimeZone: e.target.value })}
+                placeholder="Asia/Ho_Chi_Minh"
+                style={inputStyle}
+              />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                Múi giờ chuẩn IANA (ví dụ: Asia/Ho_Chi_Minh, America/New_York)
+              </span>
             </div>
 
             <div>

@@ -4,6 +4,7 @@ import { apiFetch } from "../api";
 import type { ChannelOverview } from "../types";
 import { shouldRefetchOverview } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { useBusinessTimeZone } from "../context/TimezoneContext";
 import {
   MessageSquare,
   Users,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 
 export const OverviewPage: React.FC = () => {
+  const { setTimeZone, formatTime } = useBusinessTimeZone();
   const [data, setData] = useState<ChannelOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,12 +27,15 @@ export const OverviewPage: React.FC = () => {
     try {
       const res = await apiFetch<ChannelOverview>("/api/overview");
       setData(res);
+      if (res.businessTimeZone) {
+        setTimeZone(res.businessTimeZone);
+      }
     } catch (err: unknown) {
       setError((err as Error).message || "Không thể tải dữ liệu tổng quan");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setTimeZone]);
 
   useEffect(() => {
     load();
@@ -164,6 +169,11 @@ export const OverviewPage: React.FC = () => {
               <div style={{ marginTop: "2px", fontSize: "1rem", fontWeight: "bold", color: "#1e3a8a" }}>
                 Đang xử lý phản hồi • Trạng thái:{" "}
                 <span style={{ textDecoration: "underline" }}>{formatConvStatus(data.activeConversation.status)}</span>
+                {data.activeConversation.claimedAt && (
+                  <span style={{ fontSize: "0.85rem", fontWeight: "normal", color: "#475569", marginLeft: "8px" }}>
+                    • Tiếp nhận: {formatTime(data.activeConversation.claimedAt)}
+                  </span>
+                )}
               </div>
             ) : (
               <div style={{ marginTop: "2px", fontSize: "0.9rem", color: "#64748b" }}>

@@ -26,6 +26,11 @@ export interface ChannelAdapter {
   readonly botProfileUrl?: string;
 
   /**
+   * Dynamically updates the business timezone used for localized timestamp parsing and page emulation.
+   */
+  setTimeZone?(timeZone: string): void;
+
+  /**
    * Start listening for inbound messages. Calls `callback` whenever a message arrives.
    */
   observeInbound(

@@ -54,6 +54,9 @@ export function sanitizeSettingsForSave(
   if (typeof input.pauseIntakeProcessing === "boolean") {
     sanitized.pauseIntakeProcessing = input.pauseIntakeProcessing;
   }
+  if (typeof input.businessTimeZone === "string" && input.businessTimeZone.trim().length > 0) {
+    sanitized.businessTimeZone = input.businessTimeZone.trim();
+  }
 
   // Safety invariant: NEVER include aiBaseUrl or aiApiKey in output
   delete (sanitized as Record<string, unknown>).aiBaseUrl;

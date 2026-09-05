@@ -4,6 +4,7 @@ import { apiFetch } from "../api";
 import type { QueueItem, JobItem, JobStatus } from "../types";
 import { shouldRefetchQueue } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { formatTime } from "../helpers/date-helpers";
 import {
   ListOrdered,
   Clock,
@@ -111,7 +112,7 @@ export const QueuePage: React.FC = () => {
     if (job.lockedUntil) {
       return (
         <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-          {new Date(job.lockedUntil).toLocaleTimeString("vi-VN")}
+          {formatTime(job.lockedUntil)}
         </span>
       );
     }
@@ -277,7 +278,7 @@ export const QueuePage: React.FC = () => {
                           </td>
                           <td style={{ padding: "10px 14px" }}>{job.priority}</td>
                           <td style={{ padding: "10px 14px", fontSize: "0.75rem", color: "#64748b" }}>
-                            {new Date(job.createdAt).toLocaleTimeString("vi-VN")}
+                            {formatTime(job.createdAt)}
                           </td>
                           <td style={{ padding: "10px 14px" }}>
                             <button
@@ -311,7 +312,7 @@ export const QueuePage: React.FC = () => {
                                 )}
                                 <div style={{ fontSize: "0.8rem", color: "#334155" }}>
                                   <strong>Loại tác vụ:</strong> {formatJobType(job.jobType)}
-                                  {job.availableAt && ` • Thời gian khả dụng: ${new Date(job.availableAt).toLocaleTimeString("vi-VN")}`}
+                                  {job.availableAt && ` • Thời gian khả dụng: ${formatTime(job.availableAt)}`}
                                 </div>
                                 <details style={{ marginTop: "4px" }}>
                                   <summary style={{ fontSize: "0.8rem", color: "#2563eb", cursor: "pointer", fontWeight: "600" }}>
@@ -383,7 +384,7 @@ export const QueuePage: React.FC = () => {
                         )}
                       </td>
                       <td style={{ padding: "12px 16px", color: "#64748b", fontSize: "0.85rem" }}>
-                        {new Date(item.readyAt).toLocaleTimeString("vi-VN")}
+                        {formatTime(item.readyAt)}
                       </td>
                       <td style={{ padding: "12px 16px" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: "4px", color: item.estimatedWaitSeconds > 60 ? "#ea580c" : "#16a34a", fontSize: "0.85rem" }}>

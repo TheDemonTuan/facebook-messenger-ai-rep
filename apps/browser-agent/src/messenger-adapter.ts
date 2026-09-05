@@ -6,6 +6,11 @@ import type {
   ChannelHealthReport,
   ActiveConversationRef,
 } from "@messenger/contracts";
+import {
+  isValidTimeZone,
+  resolveBusinessTimeZone,
+  DEFAULT_BUSINESS_TIMEZONE,
+} from "@messenger/contracts";
 import path from "node:path";
 
 export interface PlaywrightAdapterOptions {
@@ -19,7 +24,7 @@ export interface PlaywrightAdapterOptions {
 
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
-  readonly timeZone: string;
+  timeZone: string;
   readonly botParticipantId?: string;
   readonly botProfileUrl?: string;
   private profileDir: string;
@@ -42,9 +47,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
     this.profileDir = path.resolve(options.profileDir);
     this.headless = options.headless ?? true;
-    this.timeZone = options.timeZone || "Asia/Ho_Chi_Minh";
+    this.timeZone = options.timeZone ? resolveBusinessTimeZone(options.timeZone) : DEFAULT_BUSINESS_TIMEZONE;
     this.botParticipantId = options.botParticipantId;
     this.botProfileUrl = options.botProfileUrl;
+  }
+
+  setTimeZone(timeZone: string): void {
+    if (isValidTimeZone(timeZone)) {
+      this.timeZone = timeZone.trim();
+    }
   }
 
   onDegradedDom(callback: (reason: string) => Promise<void>): void {
@@ -77,7 +88,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       locale: "vi-VN",
-      timezoneId: "Asia/Ho_Chi_Minh",
+      timezoneId: this.timeZone,
       permissions: ["notifications"],
       args: [
         "--disable-blink-features=AutomationControlled",
