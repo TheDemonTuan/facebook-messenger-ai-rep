@@ -225,7 +225,10 @@ async function main() {
           updatedAt: new Date(),
         })
         .where(eq(channelAccounts.id, env.DEFAULT_CHANNEL_ACCOUNT_ID));
-      if (!health.healthy) return;
+      if (!health.healthy) {
+        console.warn(`[Browser Agent] Health check unhealthy: status=${health.status} error=${health.errorMessage || "none"}`);
+        return;
+      }
       await sql.unsafe("SELECT 1");
       fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
     } catch (err) {

@@ -235,7 +235,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   async init(): Promise<void> {
-    if (this.context && this.observerPage && this.senderPage) return;
+    if (this.context && this.observerPage && !this.observerPage.isClosed()) return;
 
     console.log(`[BrowserAdapter] Launching Chromium persistent context from ${this.profileDir} (headless=${this.headless})...`);
 
@@ -270,17 +270,32 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     const pages = this.context.pages();
     this.observerPage =
       pages.find((page) => page.url().includes("facebook.com/messages")) ||
-      pages.find((page) => page.url() === "about:blank") ||
+      pages[0] ||
       (await this.context.newPage());
-    this.senderPage = pages.find((page) => page !== this.observerPage && page.url() === "about:blank") || (await this.context.newPage());
 
+    this.senderPage = null;
+
+    // Close any extraneous blank or extra tabs, keeping only observerPage
     for (const page of pages) {
-      if (page !== this.observerPage && page !== this.senderPage) {
+      if (page !== this.observerPage) {
         await page.close().catch(() => undefined);
       }
     }
 
     await this.ensureObserverPage();
+    await this.observerPage.bringToFront().catch(() => undefined);
+  }
+
+  private async ensureSenderPage(): Promise<Page> {
+    if (!this.context) {
+      await this.init();
+    }
+    if (!this.context) throw new Error("Browser context is not initialized");
+    if (!this.senderPage || this.senderPage.isClosed()) {
+      console.log("[BrowserAdapter] Creating dedicated sender page on demand...");
+      this.senderPage = await this.context.newPage();
+    }
+    return this.senderPage;
   }
 
   private async ensureObserverPage(): Promise<Page> {
@@ -581,33 +596,48 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
    * Reads message bubbles from a page, extracting stable identity, sender, thread type, mentions, and timestamps.
    */
   private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
-    try {
-      const html = await page.evaluate(() => {
-        const header = document.querySelector('div[role="banner"], header, [data-testid*="header"]');
-        const main = document.querySelector('div[role="main"]');
-        if (header && main && !main.contains(header)) {
-          return header.outerHTML + "\n" + main.outerHTML;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const html = await page.evaluate(() => {
+          const header = document.querySelector('div[role="banner"], header, [data-testid*="header"]');
+          const main = document.querySelector('div[role="main"]');
+          if (header && main && !main.contains(header)) {
+            return header.outerHTML + "\n" + main.outerHTML;
+          }
+          if (main) {
+            return main.outerHTML;
+          }
+          return document.body ? document.body.innerHTML : "";
+        });
+        return parseMessengerBubblesFromHtml(html, {
+          observedAt: new Date(),
+          timeZone: this.activeContextTimeZone,
+          botChannelAccountId: this.channelAccountId,
+          botParticipantId: this.botParticipantId,
+          botProfileUrl: this.botProfileUrl,
+        });
+      } catch (err: any) {
+        const isNav =
+          err?.message?.includes("Execution context was destroyed") ||
+          err?.message?.includes("navigation") ||
+          err?.message?.includes("Target closed");
+        if (isNav && attempt < 3) {
+          await new Promise((r) => setTimeout(r, 400 * attempt));
+          continue;
         }
-        if (main) {
-          return main.outerHTML;
-        }
-        return document.body ? document.body.innerHTML : "";
-      });
-      return parseMessengerBubblesFromHtml(html, {
-        observedAt: new Date(),
-        timeZone: this.activeContextTimeZone,
-        botChannelAccountId: this.channelAccountId,
-        botParticipantId: this.botParticipantId,
-        botProfileUrl: this.botProfileUrl,
-      });
-    } catch (err) {
-      console.warn("[BrowserAdapter] Error reading bubbles from page:", err);
-      return {
-        ok: false,
-        bubbles: [],
-        isDegraded: false,
-      };
+        console.warn(`[BrowserAdapter] Error reading bubbles from page (attempt ${attempt}):`, err?.message || err);
+        return {
+          ok: false,
+          bubbles: [],
+          isDegraded: false,
+        };
+      }
     }
+    return {
+      ok: false,
+      bubbles: [],
+      isDegraded: false,
+    };
   }
 
   async stopObserving(): Promise<void> {
@@ -622,12 +652,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   // --- Sender Page Operations ---
 
   async openConversation(threadRef: string): Promise<boolean> {
-    if (!this.senderPage) await this.init();
-    if (!this.senderPage) return false;
-
+    const senderPage = await this.ensureSenderPage();
     const threadId = extractMessengerThreadId(threadRef) || threadRef;
 
-    const currentUrl = this.senderPage.url();
+    const currentUrl = senderPage.url();
     if (!currentUrl.includes(threadId)) {
       const targetUrl = threadRef.startsWith("http")
         ? new URL(threadRef, "https://www.facebook.com").toString()
@@ -635,18 +663,18 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
       console.log(`[BrowserAdapter] Sender opening conversation: ${targetUrl}`);
       try {
-        await this.senderPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await senderPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
       } catch (err) {
         console.warn(`[BrowserAdapter] Sender navigation failed for ${targetUrl}:`, err);
         return false;
       }
     }
 
-    await this.dismissOverlays(this.senderPage);
+    await this.dismissOverlays(senderPage);
 
     // Wait for composer textbox to be visible
     try {
-      await this.senderPage.waitForSelector('div[role="textbox"][contenteditable="true"]', {
+      await senderPage.waitForSelector('div[role="textbox"][contenteditable="true"]', {
         state: "visible",
         timeout: 15000,
       });
@@ -802,9 +830,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     const isContextAlive = Boolean(
       this.context &&
       this.observerPage &&
-      !this.observerPage.isClosed() &&
-      this.senderPage &&
-      !this.senderPage.isClosed()
+      !this.observerPage.isClosed()
     );
     const isObserverFresh = Boolean(
       this.lastSuccessfulPollAt && Date.now() - this.lastSuccessfulPollAt.getTime() <= OBSERVER_STALE_AFTER_MS
