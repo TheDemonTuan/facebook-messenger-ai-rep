@@ -291,7 +291,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
   /**
    * Reads message bubbles from a page, extracting stable identity.
-   * If any message bubble has text but no stable ID attribute, returns isDegraded = true.
    */
   private async readBubblesFromPage(page: Page): Promise<{
     bubbles: Array<{ id: string; text: string; isOutgoing: boolean }>;
@@ -305,8 +304,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         );
 
         const bubbles: Array<{ id: string; text: string; isOutgoing: boolean }> = [];
-        let isDegraded = false;
-        let degradedReason: string | undefined;
 
         for (const row of rows) {
           // Extract message text
@@ -331,8 +328,17 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             (rowId && !rowId.startsWith(":") && !rowId.startsWith("js_") ? rowId : null);
 
           if (!idAttr) {
-            isDegraded = true;
-            degradedReason = `Message row with text "${rawText.slice(0, 30)}" lacks stable mid identifier`;
+            const isMessageRow =
+              row.matches('[data-testid="mw_message_row"]') ||
+              row.querySelector('[data-scope="message_bubble"]') !== null;
+
+            if (isMessageRow) {
+              return {
+                bubbles: [],
+                isDegraded: true,
+                degradedReason: `Message row with text "${rawText.slice(0, 30)}" lacks stable mid identifier`,
+              };
+            }
             continue;
           }
 
@@ -352,7 +358,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           });
         }
 
-        return { bubbles, isDegraded, degradedReason };
+        return { bubbles, isDegraded: false };
       });
     } catch (_err) {
       return {
