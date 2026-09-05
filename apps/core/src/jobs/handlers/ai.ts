@@ -8,6 +8,7 @@ import type {
   EventRepository,
   OutboxRepository,
   JobRepository,
+  JobExecutionContext,
 } from "@messenger/db";
 import { aiRuns, aiDrafts } from "@messenger/db";
 import type { AiReplyGenerator } from "@messenger/ai";

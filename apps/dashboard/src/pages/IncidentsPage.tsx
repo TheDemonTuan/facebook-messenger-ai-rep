@@ -436,24 +436,6 @@ export const IncidentsPage: React.FC = () => {
                         </button>
                       </div>
                     )}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "4px",
-                            padding: "6px 12px",
-                            borderRadius: "6px",
-                            backgroundColor: "#16a34a",
-                            color: "#ffffff",
-                            border: "none",
-                            fontSize: "0.8rem",
-                            fontWeight: "600",
-                            cursor: "pointer",
-                          }}
-                        >
-                          <Check size={14} /> Đã khắc phục & Tiếp tục kênh
-                        </button>
-                      </div>
-                    )}
 
                     {/* Generic resolve button if not already covered */}
                     {isOpen && !isCp && !isDom && !isSendUnc && (

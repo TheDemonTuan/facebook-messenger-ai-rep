@@ -92,7 +92,7 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
     // 5. Transition conversation to THINKING with CAS version check
     const updateBuilder = db
       .update(conversations)
-      .set({ status: "THINKING", updatedAt: new Date() })
+      .set({ status: "THINKING", claimedAt: new Date(), updatedAt: new Date() })
       .where(
         and(
           eq(conversations.id, conversationId),

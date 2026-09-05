@@ -327,9 +327,16 @@ export class ConversationRepository {
   }
 
   async updateStatus(conversationId: string, status: ConversationStatus): Promise<void> {
+    const updateData: Record<string, unknown> = { status, updatedAt: new Date() };
+    if (status === "THINKING" || status === "CLAIMED") {
+      updateData.claimedAt = new Date();
+    } else if (status === "WAITING_CUSTOMER" || status === "QUEUED") {
+      updateData.claimedAt = null;
+      updateData.claimToken = null;
+    }
     await this.db
       .update(conversations)
-      .set({ status, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(conversations.id, conversationId));
   }
 

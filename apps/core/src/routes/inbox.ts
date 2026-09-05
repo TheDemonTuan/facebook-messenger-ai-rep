@@ -17,7 +17,7 @@ import {
   outboundActions,
   channelAccounts,
 } from "@messenger/db";
-import { eq, and, desc, sql } from "drizzle-orm";
+import { eq, and, desc, sql, ne } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import type { SessionUser } from "@messenger/contracts";
 import { requireRole } from "../auth/roles.js";
@@ -394,48 +394,99 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           return reply.status(400).send({ error: `Action is in status ${action.status}, not uncertain/unconfirmed` });
         }
 
+        const targetChannelAccountId = action.channelAccountId || channelAccountId;
+
         if (resolution === "MARK_SENT") {
           await outboundRepo.confirmSent(actionId, `reconciled-by-${user.email}`);
           await eventRepo.recordEvent({
-            channelAccountId,
+            channelAccountId: targetChannelAccountId,
             conversationId,
             type: "SEND_CONFIRMED",
             actor: user.email,
             payload: { actionId, reconciled: true },
           });
 
-          // Resume channel if was suspended
-          await db
-            .update(channelAccounts)
-            .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
-            .where(eq(channelAccounts.id, channelAccountId));
+          // Resume channel only if no other uncertain action remains
+          const remainingUncertain = await db
+            .select({ id: outboundActions.id })
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.channelAccountId, targetChannelAccountId),
+                ne(outboundActions.actionId, action.actionId),
+                sql`${outboundActions.status} IN ('SEND_UNCERTAIN', 'UNCONFIRMED')`
+              )
+            )
+            .limit(1);
+
+          if (remainingUncertain.length === 0) {
+            await db
+              .update(channelAccounts)
+              .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
+              .where(eq(channelAccounts.id, targetChannelAccountId));
+
+            await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
+          }
 
           await broadcaster.broadcast("action:reconciled", { actionId, resolution: "MARK_SENT" });
           return reply.send({ success: true, actionId, status: "CONFIRMED" });
         }
 
         if (resolution === "RETRY") {
+          // Explicit check: ensure no other active or uncertain action exists before retry
+          const otherActiveOrUncertain = await db
+            .select({
+              id: outboundActions.id,
+              actionId: outboundActions.actionId,
+              status: outboundActions.status,
+            })
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.channelAccountId, targetChannelAccountId),
+                ne(outboundActions.actionId, action.actionId),
+                sql`${outboundActions.status} IN ('TYPING', 'SEND_INTENT', 'SENDING', 'SEND_UNCERTAIN', 'UNCONFIRMED', 'PENDING', 'RETRY_APPROVED')`
+              )
+            )
+            .limit(1);
+
+          const [blocking] = otherActiveOrUncertain;
+          if (blocking) {
+            return reply.status(409).send({
+              error: `Cannot retry action: channel has another active or uncertain action (${blocking.actionId} in status ${blocking.status})`,
+              blockingActionId: blocking.actionId,
+              blockingStatus: blocking.status,
+            });
+          }
+
           await outboundRepo.reconcileUncertain(actionId, "RETRY_APPROVED");
-          await outboundRepo.transitionStatus(actionId, "RETRY_APPROVED", "PENDING");
 
           await eventRepo.recordEvent({
-            channelAccountId,
+            channelAccountId: targetChannelAccountId,
             conversationId,
             type: "SEND_STARTED",
             actor: user.email,
             payload: { actionId, retryApproved: true },
           });
 
+          // Safely resume channel before enqueue
+          await db
+            .update(channelAccounts)
+            .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
+            .where(eq(channelAccounts.id, targetChannelAccountId));
+
+          await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
+
           if (jobRepo) {
             const convData = await convRepo.getConversationById(conversationId);
             await jobRepo.enqueue({
-              channelAccountId,
+              channelAccountId: targetChannelAccountId,
               queue: "browser",
               jobType: "BROWSER_SEND",
               priority: 20,
               payload: {
                 actionId: action.actionId,
-                channelAccountId,
+                channelAccountId: targetChannelAccountId,
                 conversationId: action.conversationId,
                 externalThreadRef: convData?.conversation.externalThreadRef || "",
                 inboundVersion: action.inboundVersion,
