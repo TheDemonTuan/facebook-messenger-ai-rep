@@ -15,6 +15,22 @@ import {
   Sparkles,
 } from "lucide-react";
 
+interface AiTestResult {
+  success: boolean;
+  latencyMs?: number;
+  model?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  promptHash?: string;
+  responseHash?: string;
+  data?: {
+    messages?: string[];
+    [key: string]: unknown;
+  } | null;
+  errorMessage?: string;
+}
+
 export const AiLogsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialConvId = searchParams.get("conversationId") || "";
@@ -29,7 +45,7 @@ export const AiLogsPage: React.FC = () => {
   const [showTester, setShowTester] = useState(false);
   const [testMessage, setTestMessage] = useState("Xin chào, shop có bán áo thun không?");
   const [testLoading, setTestLoading] = useState(false);
-  const [testResult, setTestResult] = useState<any>(null);
+  const [testResult, setTestResult] = useState<AiTestResult | null>(null);
   const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   const loadRuns = async (conversationId?: string, status?: string) => {
@@ -79,7 +95,7 @@ export const AiLogsPage: React.FC = () => {
     setTestLoading(true);
     setTestResult(null);
     try {
-      const res = await apiFetch<any>("/api/ai-runs/test", {
+      const res = await apiFetch<AiTestResult>("/api/ai-runs/test", {
         method: "POST",
         body: JSON.stringify({ message: testMessage.trim() }),
       });
@@ -763,7 +779,7 @@ export const AiLogsPage: React.FC = () => {
 
                     {/* Needs clarification indicator */}
                     {(selectedRun.parsedOutput?.needsClarification ||
-                      (selectedRun.parsedOutput?.data as any)?.needsClarification) && (
+                      (selectedRun.parsedOutput?.data as { needsClarification?: boolean } | undefined)?.needsClarification) && (
                       <div
                         style={{
                           backgroundColor: "#fef3c7",
@@ -799,7 +815,7 @@ export const AiLogsPage: React.FC = () => {
 
                     {selectedRun.status !== "ERROR" &&
                       !selectedRun.parsedOutput?.messages &&
-                      !(selectedRun.parsedOutput?.data as any)?.messages && (
+                      !(selectedRun.parsedOutput?.data as { messages?: unknown[] } | undefined)?.messages && (
                         <div style={{ color: "#64748b", fontSize: "0.8rem", fontStyle: "italic" }}>
                           (Không có nội dung tin nhắn được trích xuất)
                         </div>

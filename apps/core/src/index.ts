@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { buildCoreServer } from "./server.js";
-import { getEnv } from "@messenger/config";
+import { getEnv, validateCoreProductionEnv, resetEnvCache } from "@messenger/config";
 import { closeDb } from "@messenger/db";
 
 export * from "./server.js";
@@ -12,9 +12,10 @@ export * from "./security/rate-limiter.js";
 export * from "./security/origin-guard.js";
 export * from "./sse/outbox-broadcaster.js";
 export * from "./jobs/scheduler.js";
+export { resetEnvCache };
 
 async function main() {
-  getEnv();
+  validateCoreProductionEnv(getEnv());
   const port = parseInt(process.env.CORE_PORT || process.env.PORT || "3000", 10);
   const host = process.env.HOST || "0.0.0.0";
 

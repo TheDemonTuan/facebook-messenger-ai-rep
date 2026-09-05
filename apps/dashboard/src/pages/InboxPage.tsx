@@ -13,7 +13,6 @@ import {
   RefreshCw,
   Loader2,
   ChevronRight,
-  Shield,
   Bot,
   UserCheck,
 } from "lucide-react";

@@ -1,12 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { EnvSchema, resetEnvCache } from "../packages/config/src/index.js";
+import { EnvSchema, resetEnvCache, validateCoreProductionEnv } from "../packages/config/src/index.js";
 import { verifyCloudflareAccess } from "../apps/core/src/auth/cloudflare.js";
 import { createAuthMiddleware } from "../apps/core/src/auth/session.js";
 import { createAiHandler } from "../apps/core/src/jobs/handlers/ai.js";
 import { SenderWorkerService } from "../apps/browser-agent/src/sender-worker.js";
 import { MockChannelAdapter } from "../packages/channel/src/mock-adapter.js";
 import type { FastifyRequest, FastifyReply } from "fastify";
-import type { OutboundRepository, ConversationRepository, EventRepository, SettingsRepository, IncidentRepository, TurnRepository, UserRepository, Database } from "../packages/db/src/index.js";
+import type { OutboundRepository, ConversationRepository, EventRepository, SettingsRepository, IncidentRepository, TurnRepository, UserRepository, Database, OutboxRepository, Job } from "../packages/db/src/index.js";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
+import type { AiReplyGenerator } from "../packages/ai/src/index.js";
 
 describe("Critical/High State, Security, and Concurrency Fixes", () => {
   describe("1. Cloudflare Production Security & Config", () => {
@@ -14,15 +16,12 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
       const prodEnvMissingCf = {
         NODE_ENV: "production",
         XAI_API_KEY: "test-xai-key",
+        ADMIN_EMAIL: "admin@example.com",
       };
 
-      const result = EnvSchema.safeParse(prodEnvMissingCf);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        const errorMessages = result.error.issues.map((i) => i.message);
-        expect(errorMessages.some((msg) => msg.includes("CLOUDFLARE_ACCESS_TEAM_NAME"))).toBe(true);
-        expect(errorMessages.some((msg) => msg.includes("CLOUDFLARE_ACCESS_AUD"))).toBe(true);
-      }
+      const result = EnvSchema.parse(prodEnvMissingCf);
+      expect(() => validateCoreProductionEnv(result)).toThrow("CLOUDFLARE_ACCESS_TEAM_NAME");
+      expect(() => validateCoreProductionEnv(result)).toThrow("CLOUDFLARE_ACCESS_AUD");
     });
 
     it("in production, rejects raw cf-access-authenticated-user-email header if JWT assertion is missing", async () => {
@@ -30,11 +29,13 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
       const originalXaiKey = process.env.XAI_API_KEY;
       const originalTeam = process.env.CLOUDFLARE_ACCESS_TEAM_NAME;
       const originalAud = process.env.CLOUDFLARE_ACCESS_AUD;
+      const originalAdminEmail = process.env.ADMIN_EMAIL;
 
       process.env.NODE_ENV = "production";
       process.env.XAI_API_KEY = "test-xai-key-production";
       process.env.CLOUDFLARE_ACCESS_TEAM_NAME = "test-team";
       process.env.CLOUDFLARE_ACCESS_AUD = "test-aud";
+      process.env.ADMIN_EMAIL = "admin@example.com";
       resetEnvCache();
 
       try {
@@ -62,13 +63,14 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         const allowed = await verifyCloudflareAccess(mockReq, mockReply);
         expect(allowed).toBe(false);
         expect(statusCode).toBe(401);
-        expect((responseBody as any)?.error).toContain("Missing Cloudflare Access assertion header");
+        expect((responseBody as { error?: string })?.error).toContain("Missing Cloudflare Access assertion header");
         expect(mockReq.headers["x-cf-access-user"]).toBeUndefined();
       } finally {
         process.env.NODE_ENV = originalNodeEnv;
         process.env.XAI_API_KEY = originalXaiKey;
         process.env.CLOUDFLARE_ACCESS_TEAM_NAME = originalTeam;
         process.env.CLOUDFLARE_ACCESS_AUD = originalAud;
+        process.env.ADMIN_EMAIL = originalAdminEmail;
         resetEnvCache();
       }
     });
@@ -78,11 +80,13 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
       const originalXaiKey = process.env.XAI_API_KEY;
       const originalTeam = process.env.CLOUDFLARE_ACCESS_TEAM_NAME;
       const originalAud = process.env.CLOUDFLARE_ACCESS_AUD;
+      const originalAdminEmail = process.env.ADMIN_EMAIL;
 
       process.env.NODE_ENV = "production";
       process.env.XAI_API_KEY = "test-xai-key-production";
       process.env.CLOUDFLARE_ACCESS_TEAM_NAME = "test-team";
       process.env.CLOUDFLARE_ACCESS_AUD = "test-aud";
+      process.env.ADMIN_EMAIL = "admin@example.com";
       resetEnvCache();
 
       try {
@@ -104,6 +108,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         } as unknown as FastifyReply;
 
         const mockUserRepo = {
+          findByEmail: vi.fn(),
           findOrCreateFromCloudflare: vi.fn(),
         } as unknown as UserRepository;
 
@@ -118,6 +123,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         process.env.XAI_API_KEY = originalXaiKey;
         process.env.CLOUDFLARE_ACCESS_TEAM_NAME = originalTeam;
         process.env.CLOUDFLARE_ACCESS_AUD = originalAud;
+        process.env.ADMIN_EMAIL = originalAdminEmail;
         resetEnvCache();
       }
     });
@@ -285,6 +291,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
       expect(mockEventRepo.recordEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "TYPING_STARTED" })
       );
+      expect(openConversationSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -316,10 +323,6 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         recordEvent: vi.fn(),
       } as unknown as EventRepository;
 
-      const mockJobRepo = {
-        enqueue: vi.fn(),
-      };
-
       const job = {
         id: "job-ai-claim-1",
         payload: {
@@ -328,7 +331,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
           inboundVersion: 2,
           turnId: "turn-fail-1",
         },
-      } as any;
+      } as unknown as Job;
 
       const context = {
         job,
@@ -345,13 +348,13 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         db: mockDb,
         convRepo: mockConvRepo,
         turnRepo: mockTurnRepo,
-        outboundRepo: {} as any,
-        settingsRepo: {} as any,
-        incidentRepo: {} as any,
+        outboundRepo: {} as unknown as OutboundRepository,
+        settingsRepo: {} as unknown as SettingsRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
         eventRepo: mockEventRepo,
-        outboxRepo: {} as any,
-        broadcaster: {} as any,
-        aiGenerator: mockAiGenerator as any,
+        outboxRepo: {} as unknown as OutboxRepository,
+        broadcaster: {} as unknown as OutboxBroadcaster,
+        aiGenerator: mockAiGenerator as unknown as AiReplyGenerator,
       });
 
       await aiHandler(context);

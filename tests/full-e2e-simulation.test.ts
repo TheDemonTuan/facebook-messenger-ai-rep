@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 
 describe("Full E2E Multi-Turn & Fairness Simulation", () => {
   it("maintains single agent invariant and fairness yielding under multi-customer load", async () => {
@@ -21,7 +21,7 @@ describe("Full E2E Multi-Turn & Fairness Simulation", () => {
 
     // Helper to simulate inbound arrival
     const simulateInbound = (convId: string, customer: string) => {
-      let existing = queue.find((q) => q.conversationId === convId);
+      const existing = queue.find((q) => q.conversationId === convId);
       if (existing) {
         existing.inboundVersion++;
         existing.readyAt = now + 3000; // 3s debounce reset

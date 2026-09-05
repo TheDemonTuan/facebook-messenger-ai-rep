@@ -13,7 +13,6 @@ import {
   Radio,
   Menu,
   X,
-  User,
   Shield,
   Loader2,
 } from "lucide-react";

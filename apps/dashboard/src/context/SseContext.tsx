@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 
-type SseListener = (eventType: string, payload: any) => void;
+type SseListener = (eventType: string, payload: unknown) => void;
 
 interface SseContextType {
   connected: boolean;
@@ -66,7 +66,7 @@ export const SseProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         for (const type of registeredTypes) {
           es.addEventListener(type, (event: MessageEvent) => {
-            let parsedData: any = {};
+            let parsedData: unknown = {};
             try {
               parsedData = event.data ? JSON.parse(event.data) : {};
             } catch {
@@ -129,7 +129,7 @@ export function useSse(): SseContextType {
  * When SSE is disconnected, falls back to a low-frequency quiet poll (30s).
  */
 export function useSseWakeup(
-  shouldRefetch: (eventType: string, payload?: any) => boolean,
+  shouldRefetch: (eventType: string, payload?: unknown) => boolean,
   refetchCallback: () => void | Promise<void>,
   debounceMs = 250
 ): void {

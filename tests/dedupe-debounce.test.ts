@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { createDebounceHandler } from "../apps/core/src/jobs/handlers/debounce.js";
+import type { Database, TurnRepository, JobRepository, OutboxRepository, EventRepository } from "@messenger/db";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("Deduplication and Debounce Invariants", () => {
   it("detects stale debounce job when conversation inboundVersion has advanced", async () => {
@@ -24,27 +26,27 @@ describe("Deduplication and Debounce Invariants", () => {
           where: vi.fn().mockResolvedValue([]),
         })),
       })),
-    } as any;
+    } as unknown as Database;
 
     const mockTurnRepo = {
       createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
-    } as any;
+    } as unknown as TurnRepository;
 
     const mockJobRepo = {
       enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
-    } as any;
+    } as unknown as JobRepository;
 
     const mockOutboxRepo = {
       enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
-    } as any;
+    } as unknown as OutboxRepository;
 
     const mockEventRepo = {
       recordEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
-    } as any;
+    } as unknown as EventRepository;
 
     const mockBroadcaster = {
       broadcast: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    } as unknown as OutboxBroadcaster;
 
     const debounceHandler = createDebounceHandler({
       db: mockDb,
@@ -115,10 +117,11 @@ describe("Deduplication and Debounce Invariants", () => {
 
     const mockDb = {
       select: vi.fn(() => ({
-        from: vi.fn((tbl) => ({
+        from: vi.fn((tbl: unknown) => ({
           where: vi.fn(() => ({
             limit: vi.fn(() => {
-              const tableName = (tbl as any)?._?.name || (tbl as any)?.[Symbol.for("drizzle:Name")];
+              const tableObj = tbl as { _?: { name?: string }; [key: symbol]: unknown } | null | undefined;
+              const tableName = tableObj?._?.name || (tableObj?.[Symbol.for("drizzle:Name")] as string | undefined);
               if (tableName === "channel_accounts") return [channelRow];
               return [conversationRow];
             }),
@@ -130,27 +133,27 @@ describe("Deduplication and Debounce Invariants", () => {
           where: vi.fn().mockResolvedValue([]),
         })),
       })),
-    } as any;
+    } as unknown as Database;
 
     const mockTurnRepo = {
       createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
-    } as any;
+    } as unknown as TurnRepository;
 
     const mockJobRepo = {
       enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
-    } as any;
+    } as unknown as JobRepository;
 
     const mockOutboxRepo = {
       enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
-    } as any;
+    } as unknown as OutboxRepository;
 
     const mockEventRepo = {
       recordEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
-    } as any;
+    } as unknown as EventRepository;
 
     const mockBroadcaster = {
       broadcast: vi.fn().mockResolvedValue(undefined),
-    } as any;
+    } as unknown as OutboxBroadcaster;
 
     const debounceHandler = createDebounceHandler({
       db: mockDb,

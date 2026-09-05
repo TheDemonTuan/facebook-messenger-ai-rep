@@ -134,8 +134,8 @@ export class ConversationRepository {
         );
 
       const lockedConvQuery =
-        typeof (convQuery as any).for === "function"
-          ? (convQuery as any).for("update")
+        "for" in convQuery && typeof convQuery.for === "function"
+          ? convQuery.for("update")
           : convQuery;
 
       const existingConv = await lockedConvQuery.limit(1);

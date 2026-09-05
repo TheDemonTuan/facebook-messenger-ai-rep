@@ -1,9 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { apiFetch } from "../api";
-import { Download, Search, Loader2, AlertCircle, RefreshCw, Shield } from "lucide-react";
+import { Search, Loader2, AlertCircle, Shield } from "lucide-react";
+
+interface AuditEventItem {
+  id: string;
+  type: string;
+  actor?: string | null;
+  conversationId?: string | null;
+  inboundVersion?: number | null;
+  payload?: Record<string, unknown> | null;
+  createdAt: string;
+}
 
 export const AuditPage: React.FC = () => {
-  const [events, setEvents] = useState<any[]>([]);
+  const [events, setEvents] = useState<AuditEventItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterConvId, setFilterConvId] = useState("");
@@ -13,7 +23,7 @@ export const AuditPage: React.FC = () => {
     setError(null);
     try {
       const url = convId ? `/api/audit?conversationId=${encodeURIComponent(convId)}&limit=100` : "/api/audit?limit=100";
-      const res = await apiFetch<{ items?: any[]; events?: any[] }>(url);
+      const res = await apiFetch<{ items?: AuditEventItem[]; events?: AuditEventItem[] }>(url);
       setEvents(res.items || res.events || []);
     } catch (err: unknown) {
       setError((err as Error).message || "Không thể tải nhật ký kiểm toán");

@@ -1,7 +1,6 @@
 import type {
   Database,
   ConversationRepository,
-  QueueRepository,
   OutboundRepository,
   EventRepository,
   SettingsRepository,
@@ -63,7 +62,11 @@ export class SenderWorkerService {
     const list = this.cancelAckCallbacks.get(actionId);
     if (list) {
       for (const cb of list) {
-        try { cb(); } catch {}
+        try {
+          cb();
+        } catch {
+          // Cancellation acknowledgments are best-effort callbacks.
+        }
       }
       this.cancelAckCallbacks.delete(actionId);
     }
@@ -349,7 +352,7 @@ export class SenderWorkerService {
         casSendIntentSuccess = false;
       }
     } else {
-      await this.outboundRepo.updateStatus(actionId, "SEND_INTENT" as any, { ownerToken, fencingEpoch });
+      await this.outboundRepo.updateStatus(actionId, "SEND_INTENT", { ownerToken, fencingEpoch });
     }
 
     if (!casSendIntentSuccess) {
@@ -411,7 +414,7 @@ export class SenderWorkerService {
         { ownerToken, fencingEpoch }
       );
     } else {
-      await this.outboundRepo.updateStatus(actionId, "SEND_UNCERTAIN" as any, {
+      await this.outboundRepo.updateStatus(actionId, "SEND_UNCERTAIN", {
         unconfirmedReason: "Message send could not be verified after Enter key was pressed",
         ownerToken,
         fencingEpoch,

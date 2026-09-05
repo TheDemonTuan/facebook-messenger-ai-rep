@@ -293,13 +293,13 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     fastify.post<{ Body: Record<string, unknown> }>(
       "/api/settings",
       { preHandler: [requireRole("OWNER")] },
-      handleUpdateSettings as any
+      async (request, reply) => handleUpdateSettings(request, reply)
     );
 
     fastify.put<{ Body: Record<string, unknown> }>(
       "/api/settings",
       { preHandler: [requireRole("OWNER")] },
-      handleUpdateSettings as any
+      async (request, reply) => handleUpdateSettings(request, reply)
     );
 
     fastify.post<{ Body: { model?: string } }>(

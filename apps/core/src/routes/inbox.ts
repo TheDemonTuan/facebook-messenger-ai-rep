@@ -39,7 +39,6 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
   const {
     db,
     convRepo,
-    queueRepo,
     outboundRepo,
     jobRepo,
     eventRepo,
@@ -206,7 +205,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               inboundVersion: 9999999,
             })})`
           );
-        } catch {}
+        } catch {
+          /* ignore notification failure */
+        }
 
         await eventRepo.recordEvent({
           channelAccountId,

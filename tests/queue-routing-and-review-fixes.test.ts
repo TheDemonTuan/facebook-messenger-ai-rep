@@ -1,41 +1,50 @@
 import { describe, it, expect, vi } from "vitest";
-import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
+import { SystemSettingsSchema, type SystemSettings } from "../packages/contracts/src/settings.js";
 import { shouldRefetchIncidents, shouldRefetchOverview } from "../apps/dashboard/src/helpers/sse-helpers";
-import { createDebounceHandler } from "../apps/core/src/jobs/handlers/debounce.js";
-import { createAiHandler } from "../apps/core/src/jobs/handlers/ai.js";
+import { createDebounceHandler, type DebounceHandlerDeps } from "../apps/core/src/jobs/handlers/debounce.js";
+import { createAiHandler, type AiHandlerDeps } from "../apps/core/src/jobs/handlers/ai.js";
 import { SenderWorkerService } from "../apps/browser-agent/src/sender-worker.js";
-import { CoreJobService } from "../apps/core/src/jobs/scheduler.js";
+import { CoreJobService, type CoreJobServiceDeps } from "../apps/core/src/jobs/scheduler.js";
 import { buildCoreServer } from "../apps/core/src/server.js";
 import { ConversationRepository } from "../packages/db/src/repository/conversation-repo.js";
 import { IncidentRepository } from "../packages/db/src/repository/incident-repo.js";
+import type {
+  Database,
+  JobRepository,
+  OutboundRepository,
+  EventRepository,
+  SettingsRepository,
+} from "../packages/db/src/index.js";
+import type { Job } from "../packages/contracts/src/index.js";
+import type { ChannelAdapter } from "../packages/channel/src/index.js";
 
 describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", () => {
   describe("1. Queue Routing & Explicit Queue Assignments", () => {
     it("browser JobRunner only claims browser queues and never default/system/ai", () => {
-      const mockDb = {} as any;
+      const mockDb = {} as unknown as Database;
       const mockJobRepo = {
         claimNext: vi.fn().mockResolvedValue(null),
         reconcileStaleJobs: vi.fn().mockResolvedValue({}),
-      } as any;
+      } as unknown as JobRepository;
 
       const worker = new SenderWorkerService(
         mockDb,
         null,
-        {} as any,
+        {} as unknown as ChannelAdapter,
         null,
-        {} as any,
+        {} as unknown as ConversationRepository,
         null,
-        {} as any,
-        {} as any,
-        {} as any,
-        {} as any,
+        {} as unknown as OutboundRepository,
+        {} as unknown as EventRepository,
+        {} as unknown as SettingsRepository,
+        {} as unknown as IncidentRepository,
         mockJobRepo
       );
 
       worker.start();
-      const runner = (worker as any).jobRunner;
+      const runner = (worker as unknown as { jobRunner: { queues: string[] } }).jobRunner;
       expect(runner).toBeDefined();
-      const claimedQueues: string[] = (runner as any).queues;
+      const claimedQueues: string[] = runner.queues;
 
       expect(claimedQueues).toContain("browser");
       expect(claimedQueues).toContain("browser-actions");
@@ -48,29 +57,22 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
     });
 
     it("CoreJobService runner claims default, debounce, ai, and system queues", () => {
-      const mockDb = {} as any;
+      const mockDb = {} as unknown as Database;
       const mockJobRepo = {
         claimNext: vi.fn().mockResolvedValue(null),
         reconcileStaleJobs: vi.fn().mockResolvedValue({}),
-      } as any;
+      } as unknown as JobRepository;
 
       const coreJobService = new CoreJobService({
         db: mockDb,
         jobRepo: mockJobRepo,
-        turnRepo: {} as any,
-        convRepo: {} as any,
-        outboundRepo: {} as any,
-        settingsRepo: {} as any,
-        incidentRepo: {} as any,
-        eventRepo: {} as any,
-        outboxRepo: { claimBatch: vi.fn().mockResolvedValue([]) } as any,
-        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) } as any,
-        aiGenerator: {} as any,
-      });
+        outboxRepo: { claimBatch: vi.fn().mockResolvedValue([]) },
+        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) },
+      } as unknown as CoreJobServiceDeps);
 
-      const runner = (coreJobService as any).runner;
+      const runner = (coreJobService as unknown as { runner: { queues: string[] } }).runner;
       expect(runner).toBeDefined();
-      const coreQueues: string[] = (runner as any).queues;
+      const coreQueues: string[] = runner.queues;
 
       expect(coreQueues).toContain("debounce");
       expect(coreQueues).toContain("ai");
@@ -108,23 +110,23 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             where: vi.fn().mockResolvedValue([]),
           })),
         })),
-      } as any;
+      };
 
       const mockTurnRepo = {
         createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
-      } as any;
+      };
       const mockJobRepo = {
         enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
-      } as any;
+      };
       const mockOutboxRepo = {
         enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
-      } as any;
+      };
       const mockEventRepo = {
         recordEvent: vi.fn().mockResolvedValue({ id: "ev-1" }),
-      } as any;
+      };
       const mockBroadcaster = {
         broadcast: vi.fn().mockResolvedValue(undefined),
-      } as any;
+      };
 
       const debounceHandler = createDebounceHandler({
         db: mockDb,
@@ -133,7 +135,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         outboxRepo: mockOutboxRepo,
         eventRepo: mockEventRepo,
         broadcaster: mockBroadcaster,
-      });
+      } as unknown as DebounceHandlerDeps);
 
       await debounceHandler({
         signal: new AbortController().signal,
@@ -144,7 +146,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
           jobType: "debounce",
           queue: "debounce",
           payload: { channelAccountId: "acc-1", conversationId: "conv-1", inboundVersion: 2 },
-        } as any,
+        } as unknown as Job,
       });
 
       expect(mockJobRepo.enqueue).toHaveBeenCalledWith(
@@ -167,7 +169,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             returning: vi.fn().mockResolvedValue([{ id: "run-1" }]),
           })),
         })),
-      } as any;
+      };
 
       const mockConvRepo = {
         getConversationById: vi.fn().mockResolvedValue({
@@ -182,29 +184,29 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         }),
         getRecentMessages: vi.fn().mockResolvedValue([{ text: "Hello" }]),
         updateStatus: vi.fn().mockResolvedValue({}),
-      } as any;
+      };
 
       const mockTurnRepo = {
         claimTurn: vi.fn().mockResolvedValue({}),
         transitionStatus: vi.fn().mockResolvedValue({}),
-      } as any;
+      };
 
       const mockOutboundRepo = {
         createAction: vi.fn().mockResolvedValue({
           actionId: "action-uuid-1",
           textHash: "hash-1",
         }),
-      } as any;
+      };
 
       const mockSettingsRepo = {
         getSettings: vi.fn().mockResolvedValue({
           settings: { aiMaxResponseCount: 1, aiTotalMaxChars: 480 },
         }),
-      } as any;
+      };
 
       const mockJobRepo = {
         enqueue: vi.fn().mockResolvedValue({ id: "job-send-1" }),
-      } as any;
+      };
 
       const mockAiGenerator = {
         generateReply: vi.fn().mockResolvedValue({
@@ -212,7 +214,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
           data: { messages: ["Xin chao quy khach!"] },
           runId: "run-1",
         }),
-      } as any;
+      };
 
       const aiHandler = createAiHandler({
         db: mockDb,
@@ -220,13 +222,13 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         turnRepo: mockTurnRepo,
         outboundRepo: mockOutboundRepo,
         settingsRepo: mockSettingsRepo,
-        incidentRepo: {} as any,
-        eventRepo: { recordEvent: vi.fn().mockResolvedValue({}) } as any,
-        outboxRepo: { enqueue: vi.fn().mockResolvedValue({}) } as any,
-        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) } as any,
+        incidentRepo: {},
+        eventRepo: { recordEvent: vi.fn().mockResolvedValue({}) },
+        outboxRepo: { enqueue: vi.fn().mockResolvedValue({}) },
+        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) },
         aiGenerator: mockAiGenerator,
         jobRepo: mockJobRepo,
-      });
+      } as unknown as AiHandlerDeps);
 
       await aiHandler({
         signal: new AbortController().signal,
@@ -242,7 +244,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             inboundVersion: 3,
             turnId: "turn-1",
           },
-        } as any,
+        } as unknown as Job,
       });
 
       expect(mockJobRepo.enqueue).toHaveBeenCalledWith(
@@ -275,8 +277,8 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             })),
           })),
         })),
-        insert: vi.fn((table: any) => ({
-          values: vi.fn((vals: any) => {
+        insert: vi.fn((_table: unknown) => ({
+          values: vi.fn((vals: { jobType?: string; eventType?: string; direction?: string }) => {
             recordedOperations.push(`insert-${vals.jobType || vals.eventType || vals.direction || "row"}`);
             return {
               returning: vi.fn().mockResolvedValue([{ id: "generated-id" }]),
@@ -295,8 +297,8 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
       };
 
       const mockDb = {
-        transaction: vi.fn(async (cb: (tx: any) => Promise<any>) => cb(mockTx)),
-      } as any;
+        transaction: vi.fn(async <T>(cb: (tx: unknown) => Promise<T>) => cb(mockTx)),
+      } as unknown as Database;
 
       const repo = new ConversationRepository(mockDb);
       const res = await repo.ingestInboundMessage(
@@ -329,13 +331,13 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
       };
 
       const createChain = () => {
-        const chain: any = {
+        const chain: Record<string, unknown> = {
           from: vi.fn(() => chain),
           where: vi.fn(() => chain),
           orderBy: vi.fn(() => chain),
           limit: vi.fn(() => chain),
           offset: vi.fn(() => chain),
-          then: (resolve: any) => resolve([userRecord]),
+          then: (resolve: (records: typeof userRecord[]) => void) => resolve([userRecord]),
           [Symbol.iterator]: function* () {
             yield userRecord;
           },
@@ -343,7 +345,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         return chain;
       };
 
-      const mockDb: any = {
+      const mockDb = {
         execute: vi.fn().mockResolvedValue({ rows: [{ "?column?": 1 }] }),
         select: vi.fn(() => createChain()),
         insert: vi.fn(() => ({
@@ -359,10 +361,10 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             where: vi.fn().mockResolvedValue([userRecord]),
           })),
         })),
-        transaction: vi.fn(async (cb: any) => cb(mockDb)),
+        transaction: vi.fn(async <T>(cb: (tx: unknown) => Promise<T>) => cb(mockDb)),
       };
 
-      return mockDb;
+      return mockDb as unknown as Database;
     }
 
     it("test-ai returns healthy, status, model and latencyMs matching dashboard expectations", async () => {
@@ -406,15 +408,16 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         async (_accId, _newSettings, _user, reason) => {
           savedReason = reason || "";
           return {
-            settings: {} as any,
+            settings: {} as SystemSettings,
             revision: 5,
           };
         }
       );
 
-      vi.spyOn(serverCtx.repos.eventRepo, "recordEvent").mockImplementation(async (ev: any) => {
-        recordedReason = ev.payload?.reason || "";
-        return {} as any;
+      vi.spyOn(serverCtx.repos.eventRepo, "recordEvent").mockImplementation(async (ev) => {
+        const payload = ev.payload as { reason?: string } | undefined;
+        recordedReason = payload?.reason || "";
+        return {} as never;
       });
 
       const res = await serverCtx.fastify.inject({
@@ -474,7 +477,7 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
       const operations: string[] = [];
       const mockTx = {
         insert: vi.fn(() => ({
-          values: vi.fn((vals: any) => {
+          values: vi.fn((vals: { eventType?: string; type?: string }) => {
             operations.push(`insert-${vals.eventType || vals.type || "incident"}`);
             return {
               returning: vi.fn().mockResolvedValue([{ id: "inc-1", type: vals.type || "DOM_DEGRADED", title: "Test" }]),
@@ -484,8 +487,8 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
       };
 
       const mockDb = {
-        transaction: vi.fn(async (cb: (tx: any) => Promise<any>) => cb(mockTx)),
-      } as any;
+        transaction: vi.fn(async <T>(cb: (tx: unknown) => Promise<T>) => cb(mockTx)),
+      } as unknown as Database;
 
       const incidentRepo = new IncidentRepository(mockDb);
       const inc = await incidentRepo.createIncident({

@@ -1,50 +1,48 @@
 import js from "@eslint/js";
-import babelParser from "@babel/eslint-parser";
+import tseslint from "typescript-eslint";
+import globals from "globals";
 
-export default [
-  js.configs.recommended,
+export default tseslint.config(
   {
     ignores: [
       "**/dist/**",
       "**/node_modules/**",
       "**/coverage/**",
+      "**/migrations/**",
       "facebook-messenger-ai-system-audit.md",
       "**/*.d.ts",
-      "**/*.js",
-      "**/*.mjs",
-      "**/*.cjs",
       "apps/dashboard/dist/**",
     ],
   },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
   {
-    files: ["**/*.ts", "**/*.tsx"],
     languageOptions: {
-      parser: babelParser,
-      parserOptions: {
-        requireConfigFile: false,
-        babelOptions: {
-          presets: [
-            "@babel/preset-typescript",
-            ["@babel/preset-react", { runtime: "automatic" }],
-          ],
-        },
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: {
+        ...globals.node,
+        ...globals.es2021,
       },
     },
     rules: {
-      "no-undef": "off",
-      "no-unused-vars": [
-        "warn",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
         {
           argsIgnorePattern: "^_",
           varsIgnorePattern: "^_",
           caughtErrorsIgnorePattern: "^_",
         },
       ],
-      "no-empty": "warn",
-      "no-constant-condition": "warn",
-      "no-useless-escape": "warn",
-      "no-case-declarations": "off",
-      "no-redeclare": "off",
+      "@typescript-eslint/no-explicit-any": "error",
     },
   },
-];
+  {
+    files: ["apps/dashboard/**/*.{ts,tsx}"],
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+      },
+    },
+  },
+);

@@ -1,9 +1,19 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import type OpenAI from "openai";
 import { AiReplyGenerator } from "../packages/ai/src/generator.js";
 import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
 import * as clientModule from "../packages/ai/src/client.js";
 import Fastify from "fastify";
 import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
+import type {
+  Database,
+  QueueRepository,
+  SettingsRepository,
+  IncidentRepository,
+  EventRepository,
+  JobRepository,
+} from "@messenger/db";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("AI Generator & Proxy Error Handling & Logs", () => {
   afterEach(() => {
@@ -30,13 +40,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
                 message: "Model 'gemini-3.7-flash-low' not found on upstream proxy",
                 code: 404,
               },
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -57,13 +67,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
           create: vi.fn(async () => {
             return {
               choices: [],
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -97,13 +107,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
                 completion_tokens: 45,
                 total_tokens: 195,
               },
-            } as any;
+            } as unknown as OpenAI.Chat.Completions.ChatCompletion;
           }),
         },
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -134,7 +144,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
           completion_tokens: 25,
           total_tokens: 145,
         },
-      } as any;
+      } as unknown as OpenAI.Chat.Completions.ChatCompletion;
     });
 
     const mockOpenAiClient = {
@@ -145,7 +155,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
       },
     };
 
-    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as any);
+    vi.spyOn(clientModule, "getAiClient").mockReturnValue(mockOpenAiClient as unknown as OpenAI);
 
     const generator = new AiReplyGenerator();
     const result = await generator.generateReply(dummyContext);
@@ -178,7 +188,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     ];
 
     const mockDb = {
-      select: vi.fn((fields?: any) => ({
+      select: vi.fn((fields?: unknown) => ({
         from: vi.fn(() => ({
           where: vi.fn(() => {
             if (fields && typeof fields === "object" && "count" in fields) {
@@ -199,12 +209,13 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     const fastify = Fastify();
     await fastify.register(
       createAdminRoutes({
-        db: mockDb as any,
-        queueRepo: {} as any,
-        settingsRepo: { getSettings: vi.fn(async () => ({ settings })) } as any,
-        incidentRepo: {} as any,
-        eventRepo: {} as any,
-        broadcaster: { broadcast: vi.fn() } as any,
+        db: mockDb as unknown as Database,
+        queueRepo: {} as unknown as QueueRepository,
+        settingsRepo: { getSettings: vi.fn(async () => ({ settings })) } as unknown as SettingsRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: {} as unknown as EventRepository,
+        jobRepo: {} as unknown as JobRepository,
+        broadcaster: { broadcast: vi.fn() } as unknown as OutboxBroadcaster,
         requireAuth: async () => ({
           id: "u-1",
           email: "owner@example.com",

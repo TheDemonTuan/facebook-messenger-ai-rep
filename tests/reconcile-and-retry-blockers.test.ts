@@ -1,22 +1,52 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { createInboxRoutes } from "../apps/core/src/routes/inbox.js";
 import { createReconcileHandler } from "../apps/core/src/jobs/handlers/reconcile.js";
 import { createDebounceHandler } from "../apps/core/src/jobs/handlers/debounce.js";
 import { ConversationRepository } from "../packages/db/src/repository/conversation-repo.js";
 import { OutboundRepository } from "../packages/db/src/repository/outbound-repo.js";
 import type { SessionUser } from "@messenger/contracts";
+import type {
+  Database,
+  JobRepository,
+  EventRepository,
+  OutboxRepository,
+  QueueRepository,
+  TurnRepository,
+  JobExecutionContext,
+} from "../packages/db/src/index.js";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconciler, Stale THINKING", () => {
   describe("1. Operator-Approved SEND_UNCERTAIN RETRY & Channel Resumption", () => {
-    let mockDb: any;
-    let mockOutboundRepo: any;
-    let mockJobRepo: any;
-    let mockEventRepo: any;
-    let mockConvRepo: any;
-    let mockBroadcaster: any;
-    let channelAccountState: any;
-    let app: any;
+    let mockDb: {
+      select: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+    };
+    let mockOutboundRepo: {
+      getActionById: ReturnType<typeof vi.fn>;
+      reconcileUncertain: ReturnType<typeof vi.fn>;
+      confirmSent: ReturnType<typeof vi.fn>;
+    };
+    let mockJobRepo: {
+      enqueue: ReturnType<typeof vi.fn>;
+    };
+    let mockEventRepo: {
+      recordEvent: ReturnType<typeof vi.fn>;
+    };
+    let mockConvRepo: {
+      getConversationById: ReturnType<typeof vi.fn>;
+    };
+    let mockBroadcaster: {
+      broadcast: ReturnType<typeof vi.fn>;
+    };
+    let channelAccountState: {
+      id: string;
+      status: string;
+      isSuspended: boolean;
+      statusReason: string | null;
+    };
+    let app: FastifyInstance;
 
     beforeEach(async () => {
       channelAccountState = {
@@ -37,7 +67,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
           })),
         })),
         update: vi.fn(() => ({
-          set: vi.fn((data: any) => ({
+          set: vi.fn((data: Record<string, unknown>) => ({
             where: vi.fn(() => {
               executionOrder.push("channel:resume");
               Object.assign(channelAccountState, data);
@@ -98,20 +128,20 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       app = Fastify();
       await app.register(
         createInboxRoutes({
-          db: mockDb,
-          convRepo: mockConvRepo,
-          queueRepo: {} as any,
-          outboundRepo: mockOutboundRepo,
-          jobRepo: mockJobRepo,
-          eventRepo: mockEventRepo,
-          outboxRepo: {} as any,
-          broadcaster: mockBroadcaster,
+          db: mockDb as unknown as Database,
+          convRepo: mockConvRepo as unknown as ConversationRepository,
+          queueRepo: {} as unknown as QueueRepository,
+          outboundRepo: mockOutboundRepo as unknown as OutboundRepository,
+          jobRepo: mockJobRepo as unknown as JobRepository,
+          eventRepo: mockEventRepo as unknown as EventRepository,
+          outboxRepo: {} as unknown as OutboxRepository,
+          broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
           requireAuth,
           channelAccountId: "channel-1",
         })
       );
 
-      (app as any)._executionOrder = executionOrder;
+      (app as unknown as { _executionOrder: string[] })._executionOrder = executionOrder;
     });
 
     it("safely resumes channel before enqueue and transitions action to PENDING", async () => {
@@ -135,7 +165,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       expect(channelAccountState.statusReason).toBeNull();
 
       // Verify execution order: channel resume MUST occur before job enqueue
-      const order: string[] = (app as any)._executionOrder;
+      const order: string[] = (app as unknown as { _executionOrder: string[] })._executionOrder;
       expect(order).toContain("action:reconcile");
       expect(order).toContain("channel:resume");
       expect(order).toContain("job:enqueue");
@@ -278,16 +308,16 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
 
   describe("2. Phase-Aware Reconciler: Stale TYPING vs Stale SEND_INTENT", () => {
     it("stale TYPING cancels safely via startedTypingAt and does not suspend channel", async () => {
-      const updatedActions: any[] = [];
-      const updatedChannels: any[] = [];
-      const recordedEvents: any[] = [];
+      const updatedActions: Record<string, unknown>[] = [];
+      const updatedChannels: Record<string, unknown>[] = [];
+      const recordedEvents: Record<string, unknown>[] = [];
 
       const mockDb = {
-        update: vi.fn((table: any) => ({
-          set: vi.fn((setData: any) => ({
+        update: vi.fn((table: Record<string | symbol, unknown>) => ({
+          set: vi.fn((setData: Record<string, unknown>) => ({
             where: vi.fn(() => ({
               returning: vi.fn().mockImplementation(() => {
-                const tableName = table[Symbol.for("drizzle:Name")] || "";
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
                 if (tableName === "outbound_actions" && setData.status === "CANCELLED") {
                   const staleTypingAction = {
                     id: "action-typing-stale",
@@ -313,7 +343,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const mockEventRepo = {
-        recordEvent: vi.fn().mockImplementation((ev) => {
+        recordEvent: vi.fn().mockImplementation((ev: Record<string, unknown>) => {
           recordedEvents.push(ev);
           return Promise.resolve({ id: "ev-1" });
         }),
@@ -324,11 +354,11 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const reconcile = createReconcileHandler({
-        db: mockDb as any,
-        jobRepo: mockJobRepo as any,
-        eventRepo: mockEventRepo as any,
-        outboxRepo: {} as any,
-        broadcaster: mockBroadcaster as any,
+        db: mockDb as unknown as Database,
+        jobRepo: mockJobRepo as unknown as JobRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        outboxRepo: {} as unknown as OutboxRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
       });
 
       const stats = await reconcile();
@@ -349,16 +379,16 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
     });
 
     it("stale SEND_INTENT enters SEND_UNCERTAIN via startedSendingAt and suspends channel fail-closed", async () => {
-      const updatedActions: any[] = [];
-      const updatedChannels: any[] = [];
-      const recordedEvents: any[] = [];
+      const updatedActions: Record<string, unknown>[] = [];
+      const updatedChannels: Record<string, unknown>[] = [];
+      const recordedEvents: Record<string, unknown>[] = [];
 
       const mockDb = {
-        update: vi.fn((table: any) => ({
-          set: vi.fn((setData: any) => ({
+        update: vi.fn((table: Record<string | symbol, unknown>) => ({
+          set: vi.fn((setData: Record<string, unknown>) => ({
             where: vi.fn(() => ({
               returning: vi.fn().mockImplementation(() => {
-                const tableName = table[Symbol.for("drizzle:Name")] || "";
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
                 if (tableName === "outbound_actions" && setData.status === "SEND_UNCERTAIN") {
                   const staleIntentAction = {
                     id: "action-send-intent-stale",
@@ -377,10 +407,10 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       // Also track direct channel update on suspension
-      mockDb.update.mockImplementation((table: any) => ({
-        set: vi.fn((setData: any) => ({
+      mockDb.update.mockImplementation((table: Record<string | symbol, unknown>) => ({
+        set: vi.fn((setData: Record<string, unknown>) => ({
           where: vi.fn(() => {
-            const tableName = table[Symbol.for("drizzle:Name")] || "";
+            const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
             if (tableName === "channel_accounts" && setData.isSuspended) {
               updatedChannels.push(setData);
             }
@@ -408,7 +438,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const mockEventRepo = {
-        recordEvent: vi.fn().mockImplementation((ev) => {
+        recordEvent: vi.fn().mockImplementation((ev: Record<string, unknown>) => {
           recordedEvents.push(ev);
           return Promise.resolve({ id: "ev-1" });
         }),
@@ -419,11 +449,11 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const reconcile = createReconcileHandler({
-        db: mockDb as any,
-        jobRepo: mockJobRepo as any,
-        eventRepo: mockEventRepo as any,
-        outboxRepo: {} as any,
-        broadcaster: mockBroadcaster as any,
+        db: mockDb as unknown as Database,
+        jobRepo: mockJobRepo as unknown as JobRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        outboxRepo: {} as unknown as OutboxRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
       });
 
       const stats = await reconcile();
@@ -448,22 +478,22 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
     });
 
     it("valid transitions permit TYPING to CANCELLED, PENDING, or SEND_INTENT", () => {
-      const repo = new OutboundRepository({} as any);
+      const repo = new OutboundRepository({} as unknown as Database);
       // Verify transition map
-      expect((repo as any).constructor).toBeDefined();
+      expect(repo.constructor).toBeDefined();
     });
   });
 
   describe("3. Stale THINKING Reconciliation & claimedAt Source", () => {
     it("debounce handler sets claimedAt timestamp when transitioning conversation to THINKING", async () => {
-      let updatedConversationSet: any = null;
+      let updatedConversationSet: Record<string, unknown> | null = null;
 
       const mockDb = {
         select: vi.fn(() => ({
-          from: vi.fn((table: any) => ({
+          from: vi.fn((table: Record<string | symbol, unknown>) => ({
             where: vi.fn(() => ({
               limit: vi.fn().mockImplementation(() => {
-                const tableName = table[Symbol.for("drizzle:Name")] || "";
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
                 if (tableName === "channel_accounts") {
                   return Promise.resolve([{ isPaused: false, isSuspended: false, status: "RUNNING" }]);
                 }
@@ -483,7 +513,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
           })),
         })),
         update: vi.fn(() => ({
-          set: vi.fn((setData: any) => {
+          set: vi.fn((setData: Record<string, unknown>) => {
             updatedConversationSet = setData;
             return {
               where: vi.fn(() => Promise.resolve([{ id: "conv-1", status: "THINKING" }])),
@@ -505,39 +535,55 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const debounceHandler = createDebounceHandler({
-        db: mockDb as any,
-        convRepo: {} as any,
-        turnRepo: mockTurnRepo as any,
-        jobRepo: mockJobRepo as any,
-        eventRepo: mockEventRepo as any,
-        outboxRepo: { enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }) } as any,
-        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) } as any,
+        db: mockDb as unknown as Database,
+        turnRepo: mockTurnRepo as unknown as TurnRepository,
+        jobRepo: mockJobRepo as unknown as JobRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        outboxRepo: { enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }) } as unknown as OutboxRepository,
+        broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) } as unknown as OutboxBroadcaster,
       });
 
       await debounceHandler({
         job: {
           id: "debounce-job-1",
+          channelAccountId: "channel-1",
+          queue: "debounce",
+          jobType: "debounce",
           payload: {
             channelAccountId: "channel-1",
             conversationId: "conv-1",
             inboundVersion: 3,
           },
+          status: "RUNNING",
+          priority: 0,
+          attempts: 1,
+          maxAttempts: 3,
+          availableAt: new Date(),
+          lockedUntil: null,
+          ownerToken: "worker-1",
+          fencingEpoch: 1,
+          idempotencyKey: null,
+          lastError: null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
-        signal: { aborted: false } as any,
-      } as any);
+        ownerToken: "worker-1",
+        fencingEpoch: 1,
+        signal: new AbortController().signal,
+      } as unknown as JobExecutionContext);
 
       expect(updatedConversationSet).not.toBeNull();
-      expect(updatedConversationSet.status).toBe("THINKING");
-      expect(updatedConversationSet.claimedAt).toBeInstanceOf(Date);
-      expect(updatedConversationSet.updatedAt).toBeInstanceOf(Date);
+      expect(updatedConversationSet?.status).toBe("THINKING");
+      expect(updatedConversationSet?.claimedAt).toBeInstanceOf(Date);
+      expect(updatedConversationSet?.updatedAt).toBeInstanceOf(Date);
     });
 
     it("ConversationRepository.updateStatus sets claimedAt when transitioning to THINKING", async () => {
-      let updatedSetData: any = null;
+      let updatedSetData: Record<string, unknown> | null = null;
 
       const mockDb = {
         update: vi.fn(() => ({
-          set: vi.fn((setData: any) => {
+          set: vi.fn((setData: Record<string, unknown>) => {
             updatedSetData = setData;
             return {
               where: vi.fn().mockResolvedValue(undefined),
@@ -546,29 +592,29 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
         })),
       };
 
-      const repo = new ConversationRepository(mockDb as any);
+      const repo = new ConversationRepository(mockDb as unknown as Database);
       await repo.updateStatus("conv-123", "THINKING");
 
       expect(updatedSetData).not.toBeNull();
-      expect(updatedSetData.status).toBe("THINKING");
-      expect(updatedSetData.claimedAt).toBeInstanceOf(Date);
+      expect(updatedSetData?.status).toBe("THINKING");
+      expect(updatedSetData?.claimedAt).toBeInstanceOf(Date);
 
       // When returning to WAITING_CUSTOMER, claimedAt is cleared
       await repo.updateStatus("conv-123", "WAITING_CUSTOMER");
-      expect(updatedSetData.status).toBe("WAITING_CUSTOMER");
-      expect(updatedSetData.claimedAt).toBeNull();
+      expect(updatedSetData?.status).toBe("WAITING_CUSTOMER");
+      expect(updatedSetData?.claimedAt).toBeNull();
     });
 
     it("reconciler resets conversations stuck in THINKING (> 2m) to QUEUED and releases claim", async () => {
-      const recoveredConversations: any[] = [];
-      const recordedEvents: any[] = [];
+      const recoveredConversations: Record<string, unknown>[] = [];
+      const recordedEvents: Record<string, unknown>[] = [];
 
       const mockDb = {
-        update: vi.fn((table: any) => ({
-          set: vi.fn((setData: any) => ({
+        update: vi.fn((table: Record<string | symbol, unknown>) => ({
+          set: vi.fn((setData: Record<string, unknown>) => ({
             where: vi.fn(() => ({
               returning: vi.fn().mockImplementation(() => {
-                const tableName = table[Symbol.for("drizzle:Name")] || "";
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
                 if (tableName === "conversations" && setData.status === "QUEUED") {
                   const staleConv = {
                     id: "conv-stuck-thinking",
@@ -590,7 +636,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const mockEventRepo = {
-        recordEvent: vi.fn().mockImplementation((ev) => {
+        recordEvent: vi.fn().mockImplementation((ev: Record<string, unknown>) => {
           recordedEvents.push(ev);
           return Promise.resolve({ id: "ev-1" });
         }),
@@ -601,11 +647,11 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const reconcile = createReconcileHandler({
-        db: mockDb as any,
-        jobRepo: mockJobRepo as any,
-        eventRepo: mockEventRepo as any,
-        outboxRepo: {} as any,
-        broadcaster: mockBroadcaster as any,
+        db: mockDb as unknown as Database,
+        jobRepo: mockJobRepo as unknown as JobRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        outboxRepo: {} as unknown as OutboxRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
       });
 
       const stats = await reconcile();
@@ -624,14 +670,14 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
     });
 
     it("reconciler fails stale turns in THINKING (> 2m) and clears channel activeTurnId lease", async () => {
-      const failedTurns: any[] = [];
-      const channelClears: any[] = [];
+      const failedTurns: Record<string, unknown>[] = [];
+      const channelClears: Record<string, unknown>[] = [];
 
       const mockDb = {
-        update: vi.fn((table: any) => ({
-          set: vi.fn((setData: any) => ({
+        update: vi.fn((table: Record<string | symbol, unknown>) => ({
+          set: vi.fn((setData: Record<string, unknown>) => ({
             where: vi.fn(() => {
-              const tableName = table[Symbol.for("drizzle:Name")] || "";
+              const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
               if (tableName === "channel_accounts" && setData.activeTurnId === null) {
                 channelClears.push(setData);
               }
@@ -668,11 +714,11 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       };
 
       const reconcile = createReconcileHandler({
-        db: mockDb as any,
-        jobRepo: mockJobRepo as any,
-        eventRepo: mockEventRepo as any,
-        outboxRepo: {} as any,
-        broadcaster: mockBroadcaster as any,
+        db: mockDb as unknown as Database,
+        jobRepo: mockJobRepo as unknown as JobRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        outboxRepo: {} as unknown as OutboxRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
       });
 
       const stats = await reconcile();

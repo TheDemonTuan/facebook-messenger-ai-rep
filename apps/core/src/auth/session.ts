@@ -29,12 +29,18 @@ export function createAuthMiddleware(userRepo: UserRepository) {
       return null;
     }
 
-    // 2. Fetch or create user record in DB.
-    // If user already exists in DB, findOrCreateFromCloudflare preserves the existing role in DB!
-    const dbUser = await userRepo.findOrCreateFromCloudflare({
-      email,
-      role: "OWNER",
-    });
+    // Production identities must be explicitly provisioned; unknown users are denied.
+    let dbUser = await userRepo.findByEmail(email);
+    if (!dbUser && !isProduction) {
+      dbUser = await userRepo.findOrCreateFromCloudflare({
+        email,
+        role: "OWNER",
+      });
+    }
+    if (!dbUser) {
+      reply.status(403).send({ error: "Cloudflare identity is not authorized" });
+      return null;
+    }
 
     const sessionUser: SessionUser = {
       id: dbUser.id,

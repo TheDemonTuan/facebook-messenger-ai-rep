@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import Fastify from "fastify";
+import type { FastifyRequest, FastifyReply } from "fastify";
 import {
   buildCoreServer,
   hasRolePermission,
@@ -7,6 +7,7 @@ import {
   InMemoryRateLimiter,
   OutboxBroadcaster,
   verifySameOrigin,
+  resetEnvCache,
 } from "../apps/core/src/index.js";
 import {
   createDebounceHandler,
@@ -23,7 +24,18 @@ import {
 import {
   createRetentionHandler,
 } from "../apps/core/src/jobs/handlers/retention.js";
-import type { SessionUser, UserRole } from "@messenger/contracts";
+import type {
+  Database,
+  TurnRepository,
+  JobRepository,
+  OutboxRepository,
+  EventRepository,
+  ConversationRepository,
+  SettingsRepository,
+  IncidentRepository,
+  Job,
+} from "@messenger/db";
+import type { AiReplyGenerator } from "@messenger/ai";
 
 describe("Apps/Core Foundation Architecture & Flow Tests", () => {
   describe("Role Hierarchy & Permissions", () => {
@@ -64,14 +76,23 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         url: "/api/test",
         headers: {},
         ip: "192.168.1.100",
-      } as any;
+      } as unknown as FastifyRequest;
 
-      const createMockReply = () => {
+      interface MockReply {
+        statusCode: number;
+        headers: Record<string, string | number>;
+        body: { error?: string } | null;
+        header(k: string, v: string | number): MockReply;
+        status(code: number): MockReply;
+        send(payload: unknown): MockReply;
+      }
+
+      const createMockReply = (): MockReply & FastifyReply => {
         const reply = {
           statusCode: 200,
-          headers: {} as Record<string, any>,
-          body: null as any,
-          header(k: string, v: any) {
+          headers: {} as Record<string, string | number>,
+          body: null as { error?: string } | null,
+          header(k: string, v: string | number) {
             this.headers[k] = v;
             return this;
           },
@@ -79,12 +100,12 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             this.statusCode = code;
             return this;
           },
-          send(payload: any) {
-            this.body = payload;
+          send(payload: unknown) {
+            this.body = payload as { error?: string } | null;
             return this;
           },
         };
-        return reply as any;
+        return reply as unknown as MockReply & FastifyReply;
       };
 
       // Requests 1, 2, 3 should be allowed
@@ -102,8 +123,8 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
     });
 
     it("never throttles health probes /health, /healthz, /readyz", async () => {
-      const createReq = (url: string) => ({ url, headers: {}, ip: "1.2.3.4" } as any);
-      const reply = { status: vi.fn(), header: vi.fn(), send: vi.fn() } as any;
+      const createReq = (url: string) => ({ url, headers: {}, ip: "1.2.3.4" } as unknown as FastifyRequest);
+      const reply = { status: vi.fn(), header: vi.fn(), send: vi.fn() } as unknown as FastifyReply;
 
       for (let i = 0; i < 10; i++) {
         expect(await limiter.checkRateLimit(createReq("/healthz"), reply)).toBe(true);
@@ -115,8 +136,8 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
 
   describe("Same-Origin & Sec-Fetch-Site Guard", () => {
     it("allows safe read methods GET, HEAD, OPTIONS without check", async () => {
-      const req = { method: "GET", url: "/api/overview", headers: {} } as any;
-      const reply = { status: vi.fn().mockReturnThis(), send: vi.fn() } as any;
+      const req = { method: "GET", url: "/api/overview", headers: {} } as unknown as FastifyRequest;
+      const reply = { status: vi.fn().mockReturnThis(), send: vi.fn() } as unknown as FastifyReply;
       expect(await verifySameOrigin(req, reply)).toBe(true);
     });
 
@@ -125,23 +146,27 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         method: "POST",
         url: "/api/settings",
         headers: { "sec-fetch-site": "cross-site", host: "app.example.com" },
-      } as any;
-      let sentBody: any;
+      } as unknown as FastifyRequest;
+      let sentBody: { error?: string } | undefined;
       let statusCode = 200;
-      const reply = {
+      interface MockCsrfReply {
+        status: (code: number) => MockCsrfReply;
+        send: (body: { error?: string }) => void;
+      }
+      const reply: MockCsrfReply = {
         status: (code: number) => {
           statusCode = code;
           return reply;
         },
-        send: (body: any) => {
+        send: (body: { error?: string }) => {
           sentBody = body;
         },
-      } as any;
+      };
 
-      const allowed = await verifySameOrigin(req, reply);
+      const allowed = await verifySameOrigin(req, reply as unknown as FastifyReply);
       expect(allowed).toBe(false);
       expect(statusCode).toBe(403);
-      expect(sentBody.error).toContain("cross-site requests are not permitted");
+      expect(sentBody?.error).toContain("cross-site requests are not permitted");
     });
 
     it("blocks mutating requests with mismatched Origin header in production", async () => {
@@ -157,7 +182,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             host: "production.example.com",
             origin: "https://attacker.evil.com",
           },
-        } as any;
+        } as unknown as FastifyRequest;
         let statusCode = 200;
         const reply = {
           status: (code: number) => {
@@ -165,7 +190,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             return reply;
           },
           send: vi.fn(),
-        } as any;
+        } as unknown as FastifyReply;
 
         const allowed = await verifySameOrigin(req, reply);
         expect(allowed).toBe(false);
@@ -184,8 +209,8 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           host: "app.example.com",
           origin: "https://app.example.com",
         },
-      } as any;
-      const reply = { status: vi.fn().mockReturnThis(), send: vi.fn() } as any;
+      } as unknown as FastifyRequest;
+      const reply = { status: vi.fn().mockReturnThis(), send: vi.fn() } as unknown as FastifyReply;
       const allowed = await verifySameOrigin(req, reply);
       expect(allowed).toBe(true);
     });
@@ -197,7 +222,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         getEventsSince: vi.fn().mockResolvedValue([
           { id: "ev-1", eventType: "turn:created", payload: { turnId: "t-1" } },
         ]),
-      } as any;
+      } as unknown as OutboxRepository;
 
       const broadcaster = new OutboxBroadcaster(mockOutboxRepo);
 
@@ -217,7 +242,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           removeListener: vi.fn(),
           end: vi.fn(),
         },
-      } as any;
+      } as unknown as FastifyReply;
 
       await broadcaster.addClient(mockReply, {
         lastEventId: "0",
@@ -239,7 +264,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
 
   describe("PostgreSQL Job Handlers Execution Flow", () => {
     it("Debounce Handler: skips when inboundVersion is stale; creates turn and enqueues AI job when fresh", async () => {
-      let conversationRow = {
+      const conversationRow = {
         id: "conv-101",
         inboundVersion: 2,
         status: "DEBOUNCING",
@@ -256,10 +281,11 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
 
       const mockDb = {
         select: vi.fn(() => ({
-          from: vi.fn((tbl) => ({
+          from: vi.fn((tbl: unknown) => ({
             where: vi.fn(() => ({
               limit: vi.fn(() => {
-                const tableName = (tbl as any)?._?.name || (tbl as any)?.[Symbol.for("drizzle:Name")];
+                const tableObj = tbl as { _?: { name?: string }; [key: symbol]: unknown } | null | undefined;
+                const tableName = tableObj?._?.name || (tableObj?.[Symbol.for("drizzle:Name")] as string | undefined);
                 if (tableName === "channel_accounts") return [channelRow];
                 return [conversationRow];
               }),
@@ -271,27 +297,27 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             where: vi.fn().mockResolvedValue([]),
           })),
         })),
-      } as any;
+      } as unknown as Database;
 
       const mockTurnRepo = {
         createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-uuid-1" }),
-      } as any;
+      } as unknown as TurnRepository;
 
       const mockJobRepo = {
         enqueue: vi.fn().mockResolvedValue({ id: "job-ai-1" }),
-      } as any;
+      } as unknown as JobRepository;
 
       const mockOutboxRepo = {
         enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }),
-      } as any;
+      } as unknown as OutboxRepository;
 
       const mockEventRepo = {
         recordEvent: vi.fn().mockResolvedValue({ id: "event-1" }),
-      } as any;
+      } as unknown as EventRepository;
 
       const mockBroadcaster = {
         broadcast: vi.fn().mockResolvedValue(undefined),
-      } as any;
+      } as unknown as OutboxBroadcaster;
 
       const debounceHandler = createDebounceHandler({
         db: mockDb,
@@ -311,7 +337,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           id: "job-db-1",
           jobType: "debounce",
           payload: { channelAccountId: "acc-1", conversationId: "conv-101", inboundVersion: 1 },
-        } as any,
+        } as unknown as Job,
       });
 
       expect(mockTurnRepo.createOrGetTurn).not.toHaveBeenCalled();
@@ -329,7 +355,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           id: "job-db-2",
           jobType: "debounce",
           payload: { channelAccountId: "acc-1", conversationId: "conv-101", inboundVersion: 2 },
-        } as any,
+        } as unknown as Job,
       });
 
       expect(mockTurnRepo.createOrGetTurn).toHaveBeenCalledWith({
@@ -367,46 +393,46 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             returning: vi.fn().mockResolvedValue([{ id: "run-uuid-1" }]),
           })),
         })),
-      } as any;
+      } as unknown as Database;
 
       const mockConvRepo = {
         getConversationById: vi.fn().mockResolvedValue(convData),
         getRecentMessages: vi.fn().mockResolvedValue([{ direction: "INBOUND", text: "Shop co size L khong?" }]),
         updateStatus: vi.fn().mockResolvedValue(undefined),
-      } as any;
+      } as unknown as ConversationRepository;
 
       const mockTurnRepo = {
         claimTurn: vi.fn().mockResolvedValue({ id: "turn-1" }),
         transitionStatus: vi.fn().mockResolvedValue({ id: "turn-1", status: "DRAFT_READY" }),
         cancelTurn: vi.fn(),
         failTurn: vi.fn(),
-      } as any;
+      } as unknown as TurnRepository;
 
       const mockOutboundRepo = {
         createAction: vi.fn().mockResolvedValue({ actionId: "act-123" }),
-      } as any;
+      } as unknown as OutboundRepository;
 
       const mockSettingsRepo = {
         getSettings: vi.fn().mockResolvedValue({
           settings: { aiModel: "grok-2" },
         }),
-      } as any;
+      } as unknown as SettingsRepository;
 
       const mockIncidentRepo = {
         createIncident: vi.fn(),
-      } as any;
+      } as unknown as IncidentRepository;
 
       const mockEventRepo = {
         recordEvent: vi.fn().mockResolvedValue({}),
-      } as any;
+      } as unknown as EventRepository;
 
       const mockOutboxRepo = {
         enqueue: vi.fn().mockResolvedValue({}),
-      } as any;
+      } as unknown as OutboxRepository;
 
       const mockBroadcaster = {
         broadcast: vi.fn().mockResolvedValue(undefined),
-      } as any;
+      } as unknown as OutboxBroadcaster;
 
       const mockAiGenerator = {
         generateReply: vi.fn().mockResolvedValue({
@@ -420,7 +446,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             messages: ["Chao ban, shop con san size L a!"],
           },
         }),
-      } as any;
+      } as unknown as AiReplyGenerator;
 
       const aiHandler = createAiHandler({
         db: mockDb,
@@ -448,7 +474,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             inboundVersion: 2,
             turnId: "turn-1",
           },
-        } as any,
+        } as unknown as Job,
       });
 
       expect(mockTurnRepo.claimTurn).toHaveBeenCalledWith("turn-1", "worker-token");
@@ -473,7 +499,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
     it("Reconcile Handler: invokes stale job reconciliation and cleans expired leases", async () => {
       const mockJobRepo = {
         reconcileStaleJobs: vi.fn().mockResolvedValue({ recovered: 2, failed: 1 }),
-      } as any;
+      } as unknown as JobRepository;
 
       const mockDb = {
         update: vi.fn(() => ({
@@ -483,11 +509,11 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             })),
           })),
         })),
-      } as any;
+      } as unknown as Database;
 
-      const mockEventRepo = { recordEvent: vi.fn() } as any;
-      const mockOutboxRepo = {} as any;
-      const mockBroadcaster = { broadcast: vi.fn() } as any;
+      const mockEventRepo = { recordEvent: vi.fn() } as unknown as EventRepository;
+      const mockOutboxRepo = {} as unknown as OutboxRepository;
+      const mockBroadcaster = { broadcast: vi.fn() } as unknown as OutboxBroadcaster;
 
       const reconcileHandler = createReconcileHandler({
         db: mockDb,
@@ -512,11 +538,11 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         claimBatch: vi.fn().mockResolvedValue(eventsBatch),
         completeBatch: vi.fn().mockResolvedValue(2),
         failEvent: vi.fn(),
-      } as any;
+      } as unknown as OutboxRepository;
 
       const mockBroadcaster = {
         broadcast: vi.fn().mockResolvedValue(undefined),
-      } as any;
+      } as unknown as OutboxBroadcaster;
 
       const outboxHandler = createOutboxHandler({
         outboxRepo: mockOutboxRepo,
@@ -532,11 +558,11 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
     it("Retention Handler: prunes completed jobs and processed outbox events", async () => {
       const mockJobRepo = {
         cleanOldJobs: vi.fn().mockResolvedValue(15),
-      } as any;
+      } as unknown as JobRepository;
 
       const mockOutboxRepo = {
         cleanProcessedEvents: vi.fn().mockResolvedValue(30),
-      } as any;
+      } as unknown as OutboxRepository;
 
       const retentionHandler = createRetentionHandler({
         jobRepo: mockJobRepo,
@@ -551,8 +577,53 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
   });
 
   describe("Core Fastify API Endpoints Integration (inject)", () => {
-    let mockDb: any;
-    let userRecord: any;
+    interface MockRecord {
+      id: string;
+      email: string;
+      name: string;
+      role: string;
+      conversation: { id: string; manualMode: boolean; status: string };
+      customer: { id: string; name: string };
+      queue: {
+        id: string;
+        queuedAt: Date;
+        readyAt: Date;
+        inboundVersion: number;
+        attempt: number;
+        continuationEligibleUntil: Date | null;
+        stickyTurns: number;
+        yieldRequired: boolean;
+      };
+      conv: { id: string };
+      cust: { name: string };
+      queuedAt: Date;
+      estimatedWaitSeconds: number;
+      count: number;
+      [key: string]: unknown;
+    }
+
+    interface QueryChain {
+      from: ReturnType<typeof vi.fn>;
+      innerJoin: ReturnType<typeof vi.fn>;
+      leftJoin: ReturnType<typeof vi.fn>;
+      where: ReturnType<typeof vi.fn>;
+      orderBy: ReturnType<typeof vi.fn>;
+      limit: ReturnType<typeof vi.fn>;
+      offset: ReturnType<typeof vi.fn>;
+      then: (resolve: (val: unknown[]) => unknown) => unknown;
+      [Symbol.iterator]: () => Generator<unknown, void, unknown>;
+    }
+
+    interface MockDb {
+      execute: ReturnType<typeof vi.fn>;
+      select: ReturnType<typeof vi.fn>;
+      insert: ReturnType<typeof vi.fn>;
+      update: ReturnType<typeof vi.fn>;
+      transaction: ReturnType<typeof vi.fn>;
+    }
+
+    let mockDb: MockDb & Database;
+    let userRecord: MockRecord;
 
     beforeEach(() => {
       userRecord = {
@@ -579,8 +650,8 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         count: 1,
       };
 
-      const createChain = () => {
-        const chain: any = {
+      const createChain = (): QueryChain => {
+        const chain: QueryChain = {
           from: vi.fn(() => chain),
           innerJoin: vi.fn(() => chain),
           leftJoin: vi.fn(() => chain),
@@ -588,7 +659,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           orderBy: vi.fn(() => chain),
           limit: vi.fn(() => chain),
           offset: vi.fn(() => chain),
-          then: (resolve: any) => resolve([userRecord]),
+          then: (resolve: (val: unknown[]) => unknown) => resolve([userRecord]),
           [Symbol.iterator]: function* () {
             yield userRecord;
           },
@@ -612,8 +683,8 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
             where: vi.fn().mockResolvedValue([userRecord]),
           })),
         })),
-        transaction: vi.fn(async (cb: any) => cb(mockDb)),
-      };
+        transaction: vi.fn(async (cb: (tx: unknown) => unknown) => cb(mockDb)),
+      } as unknown as MockDb & Database;
     });
 
     it("GET /healthz verifies process liveness (200 OK)", async () => {
@@ -682,6 +753,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
       } finally {
         process.env.NODE_ENV = originalEnv;
         process.env.XAI_API_KEY = originalKey;
+        resetEnvCache();
       }
     });
 

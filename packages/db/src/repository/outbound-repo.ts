@@ -294,7 +294,7 @@ export class OutboundRepository {
   async confirmSent(
     actionId: string,
     externalMessageRef?: string,
-    options: TransitionActionOptions = {},
+    _options: TransitionActionOptions = {},
     tx?: DatabaseOrTx
   ) {
     const executor = (tx || this.db) as Database;

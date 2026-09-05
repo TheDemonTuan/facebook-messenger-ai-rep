@@ -1,7 +1,7 @@
 import { eq, desc } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { incidents, channelAccounts, outboxEvents } from "../schema/index.js";
-import type { IncidentType, IncidentStatus } from "@messenger/contracts";
+import type { IncidentType } from "@messenger/contracts";
 
 export interface CreateIncidentParams {
   channelAccountId: string;

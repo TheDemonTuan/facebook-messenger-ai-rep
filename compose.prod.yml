@@ -23,12 +23,12 @@ services:
       - SETUID
       - SETGID
       - DAC_OVERRIDE
-    pids_limit: 100
     deploy:
       resources:
         limits:
           cpus: "2.0"
           memory: 1024M
+          pids: 100
     logging:
       driver: json-file
       options:
@@ -46,7 +46,7 @@ services:
       context: .
       dockerfile: docker/Dockerfile.core
     container_name: messenger-migrate
-    command: ["bun", "packages/db/dist/migrate.js"]
+    command: ["sh", "-c", "bun packages/db/dist/migrate.js && bun packages/db/dist/seed.js"]
     restart: "no"
     read_only: true
     security_opt:
@@ -60,6 +60,7 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-messenger_user}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger_ai}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,12 +89,12 @@ services:
     user: "1000:1000"
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
-    pids_limit: 100
     deploy:
       resources:
         limits:
           cpus: "1.5"
           memory: 1024M
+          pids: 100
     logging:
       driver: json-file
       options:
@@ -111,6 +112,7 @@ services:
       XAI_MODEL: ${XAI_MODEL:-grok-4.5}
       CLOUDFLARE_ACCESS_TEAM_NAME: ${CLOUDFLARE_ACCESS_TEAM_NAME:-}
       CLOUDFLARE_ACCESS_AUD: ${CLOUDFLARE_ACCESS_AUD:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
       DEFAULT_CHANNEL_ACCOUNT_ID: ${DEFAULT_CHANNEL_ACCOUNT_ID:-personal-messenger}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     depends_on:
@@ -138,17 +140,16 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
-      - seccomp=unconfined
     init: true
     cap_drop:
       - ALL
     user: "1000:1000"
-    pids_limit: 200
     deploy:
       resources:
         limits:
           cpus: "2.0"
           memory: 2048M
+          pids: 200
     logging:
       driver: json-file
       options:
@@ -202,12 +203,12 @@ services:
     cap_drop:
       - ALL
     user: "65532:65532"
-    pids_limit: 50
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 256M
+          pids: 50
     logging:
       driver: json-file
       options:

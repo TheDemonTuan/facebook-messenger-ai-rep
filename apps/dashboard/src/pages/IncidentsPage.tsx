@@ -197,14 +197,16 @@ export const IncidentsPage: React.FC = () => {
       {/* Tabs & Search Filter */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px" }}>
         <div style={{ display: "flex", gap: "8px" }}>
-          {[
-            { id: "OPEN", label: `Đang mở (${openCount})` },
-            { id: "ALL", label: `Tất cả (${incidents.length})` },
-            { id: "RESOLVED", label: `Đã đóng (${resolvedCount})` },
-          ].map((tab) => (
+          {(
+            [
+              { id: "OPEN", label: `Đang mở (${openCount})` },
+              { id: "ALL", label: `Tất cả (${incidents.length})` },
+              { id: "RESOLVED", label: `Đã đóng (${resolvedCount})` },
+            ] as const
+          ).map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setTabFilter(tab.id as any)}
+              onClick={() => setTabFilter(tab.id)}
               style={{
                 padding: "6px 14px",
                 borderRadius: "6px",

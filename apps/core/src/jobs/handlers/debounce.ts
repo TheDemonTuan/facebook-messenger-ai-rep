@@ -100,8 +100,9 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
         )
       );
 
-    if (typeof (updateBuilder as any)?.returning === "function") {
-      const [updatedConv] = await (updateBuilder as any).returning();
+    const builderWithReturning = updateBuilder as unknown as { returning?: () => Promise<unknown[]> };
+    if (typeof builderWithReturning.returning === "function") {
+      const [updatedConv] = await builderWithReturning.returning();
       if (!updatedConv) {
         console.log(
           `[DebounceHandler] Inbound version moved during debounce processing for ${conversationId}. Skipping.`

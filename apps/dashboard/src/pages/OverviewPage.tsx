@@ -7,12 +7,10 @@ import { useSseWakeup } from "../context/SseContext";
 import {
   MessageSquare,
   Users,
-  Clock,
   AlertTriangle,
   Activity,
   Loader2,
   RefreshCw,
-  CheckCircle2,
   AlertCircle,
   Bot,
 } from "lucide-react";

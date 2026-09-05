@@ -9,8 +9,13 @@ import type {
   SettingsRepository,
   IncidentRepository,
   TurnRepository,
+  OutboxRepository,
+  JobRepository,
 } from "../packages/db/src/index.js";
 import type { ChannelAdapter } from "@messenger/channel";
+import type { AiReplyGenerator } from "@messenger/ai";
+import type { OutboundJobPayload } from "@messenger/contracts";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("Stale Inbound Version Cancellation Race Protection", () => {
   it("cancels AI job when conversation inbound version is higher than job version", async () => {
@@ -42,16 +47,16 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
     };
 
     const aiHandler = createAiHandler({
-      db: {} as any,
+      db: {} as unknown as Database,
       convRepo: mockConvRepo,
       turnRepo: mockTurnRepo,
-      outboundRepo: {} as any,
-      settingsRepo: {} as any,
-      incidentRepo: {} as any,
+      outboundRepo: {} as unknown as OutboundRepository,
+      settingsRepo: {} as unknown as SettingsRepository,
+      incidentRepo: {} as unknown as IncidentRepository,
       eventRepo: mockEventRepo,
-      outboxRepo: {} as any,
-      broadcaster: { broadcast: vi.fn() } as any,
-      aiGenerator: mockAiGenerator as any,
+      outboxRepo: {} as unknown as OutboxRepository,
+      broadcaster: { broadcast: vi.fn() } as unknown as OutboxBroadcaster,
+      aiGenerator: mockAiGenerator as unknown as AiReplyGenerator,
     });
 
     // Job arrives with stale version 18
@@ -157,7 +162,7 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       mockEventRepo,
       { getSettings: vi.fn().mockResolvedValue({ settings: { maxConsecutiveAiReplies: 5 } }) } as unknown as SettingsRepository,
       {} as unknown as IncidentRepository,
-      { updateStatus: vi.fn() } as any
+      { updateStatus: vi.fn() } as unknown as JobRepository
     );
 
     // Action has inboundVersion = 18
@@ -172,7 +177,7 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       status: "QUEUED",
       retryCount: 0,
       createdAt: new Date(),
-    } as any);
+    } as unknown as OutboundJobPayload);
 
     // Should open conversation and clear composer due to race
     expect(mockAdapter.openConversation).toHaveBeenCalled();

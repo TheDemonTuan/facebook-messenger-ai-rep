@@ -1,11 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   OutboundRepository,
   JobRepository,
-  TurnRepository,
-  OutboxRepository,
   UserRepository,
   JobRunner,
+  type Database,
 } from "../packages/db/src/index.js";
 import {
   UserRoleSchema,
@@ -67,7 +66,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
       const mockDb = {
         select: vi.fn(),
         update: vi.fn(),
-      } as any;
+      } as unknown as Database;
       const repo = new OutboundRepository(mockDb);
 
       // PENDING cannot jump directly to CONFIRMED without TYPING and SEND_INTENT
@@ -82,7 +81,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
     });
 
     it("supports the SEND_UNCERTAIN and operator reconciliation workflow", async () => {
-      let currentStatus = "SEND_INTENT";
+      const currentStatus = "SEND_INTENT";
       let actionRow = {
         id: "action-uuid-1",
         actionId: "act-123",
@@ -101,8 +100,9 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
           set: vi.fn((updateData) => ({
             where: vi.fn(() => {
               actionRow = { ...actionRow, ...updateData };
-              const res = [actionRow];
-              (res as any).returning = vi.fn(() => [actionRow]);
+              const res = Object.assign([actionRow], {
+                returning: vi.fn(() => [actionRow]),
+              });
               return res;
             }),
           })),
@@ -134,7 +134,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
             })),
           });
         }),
-      } as any;
+      } as unknown as Database;
 
       const repo = new OutboundRepository(mockDb);
 
@@ -162,8 +162,9 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
 
   describe("Job Runner Lifecycle & CAS Fencing", () => {
     it("handles execution lifecycle with heartbeats and completes with fencing check", async () => {
+      const claimNext = vi.fn();
       const mockJobRepo = {
-        claimNext: vi.fn(),
+        claimNext,
         heartbeat: vi.fn().mockResolvedValue(true),
         complete: vi.fn().mockResolvedValue(true),
         fail: vi.fn().mockResolvedValue({ status: "FAILED", retrying: false }),
@@ -204,7 +205,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
         updatedAt: new Date(),
       };
 
-      (mockJobRepo.claimNext as any)
+      claimNext
         .mockResolvedValueOnce(testJob)
         .mockResolvedValue(null);
 
@@ -224,8 +225,9 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
     });
 
     it("triggers job failure and records error when handler throws", async () => {
+      const claimNext = vi.fn();
       const mockJobRepo = {
-        claimNext: vi.fn(),
+        claimNext,
         heartbeat: vi.fn().mockResolvedValue(true),
         complete: vi.fn(),
         fail: vi.fn().mockResolvedValue({ status: "FAILED", retrying: false }),
@@ -257,7 +259,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
         updatedAt: new Date(),
       };
 
-      (mockJobRepo.claimNext as any)
+      claimNext
         .mockResolvedValueOnce(testJob)
         .mockResolvedValue(null);
 
@@ -302,7 +304,7 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
             })),
           })),
         })),
-      } as any;
+      } as unknown as Database;
 
       const userRepo = new UserRepository(mockDb);
       const user = await userRepo.findOrCreateFromCloudflare({
@@ -315,8 +317,8 @@ describe("Foundation Architecture & State Machine Unit Tests", () => {
       expect(user.email).toBe("cskh@company.com");
       expect(user.role).toBe("OPERATOR");
       // Password hash and TOTP fields must not exist
-      expect((user as any).passwordHash).toBeUndefined();
-      expect((user as any).totpSecret).toBeUndefined();
+      expect((user as Record<string, unknown>).passwordHash).toBeUndefined();
+      expect((user as Record<string, unknown>).totpSecret).toBeUndefined();
     });
   });
 });

@@ -13,7 +13,7 @@ function sha256(text: string): string {
 export function sanitizeAiError(err?: string | null): string | undefined {
   if (!err) return undefined;
   return err
-    .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-\.]{10,}/gi, "[REDACTED]")
+    .replace(/(?:sk-|bearer\s+|key=)[a-zA-Z0-9_\-.]{10,}/gi, "[REDACTED]")
     .replace(/https?:\/\/[^\s]+/gi, "[REDACTED_URL]")
     .slice(0, 500);
 }

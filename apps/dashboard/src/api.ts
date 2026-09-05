@@ -17,7 +17,9 @@ export function setStoredDevEmail(email: string): void {
     } else {
       localStorage.removeItem(DEV_EMAIL_STORAGE_KEY);
     }
-  } catch {}
+  } catch {
+    /* ignore localStorage error */
+  }
 }
 
 export async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {

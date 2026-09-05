@@ -1,46 +1,52 @@
 import { describe, it, expect, vi } from "vitest";
-import { SystemSettingsSchema } from "../packages/contracts/src/settings.js";
+import { SystemSettingsSchema, type SystemSettings } from "../packages/contracts/src/settings.js";
 import { getAiClient, resetAiClientCache } from "../packages/ai/src/client.js";
-import { EnvSchema } from "../packages/config/src/index.js";
+import { EnvSchema, validateCoreProductionEnv } from "../packages/config/src/index.js";
 import Fastify from "fastify";
 import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
+import type {
+  Database,
+  QueueRepository,
+  SettingsRepository,
+  IncidentRepository,
+  EventRepository,
+  JobRepository,
+} from "../packages/db/src/index.js";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("Settings API & Server-Side xAI Configuration", () => {
   it("SystemSettingsSchema does not store aiApiKey or aiBaseUrl and sets safe defaults", () => {
     const defaultSettings = SystemSettingsSchema.parse({});
-    expect((defaultSettings as any).aiBaseUrl).toBeUndefined();
-    expect((defaultSettings as any).aiApiKey).toBeUndefined();
+    expect((defaultSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((defaultSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
     expect(defaultSettings.aiModel).toBe("grok-4.5");
 
     const customSettings = SystemSettingsSchema.parse({
       aiModel: "grok-beta",
     });
 
-    expect((customSettings as any).aiBaseUrl).toBeUndefined();
-    expect((customSettings as any).aiApiKey).toBeUndefined();
+    expect((customSettings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((customSettings as Record<string, unknown>).aiApiKey).toBeUndefined();
     expect(customSettings.aiModel).toBe("grok-beta");
   });
 
-  it("fails fast in production when XAI_API_KEY is missing", () => {
-    const prodWithoutKey = EnvSchema.safeParse({
+  it("fails fast when the production core configuration is incomplete", () => {
+    const prodWithoutKey = EnvSchema.parse({
       NODE_ENV: "production",
       XAI_API_KEY: "",
     });
-    expect(prodWithoutKey.success).toBe(false);
-    if (!prodWithoutKey.success) {
-      const errorMsg = prodWithoutKey.error.issues[0]?.message;
-      expect(errorMsg).toContain("XAI_API_KEY is required");
-    }
+    expect(() => validateCoreProductionEnv(prodWithoutKey)).toThrow("XAI_API_KEY");
 
-    const prodWithKey = EnvSchema.safeParse({
+    const prodWithKey = EnvSchema.parse({
       NODE_ENV: "production",
       XAI_API_KEY: "xai-test-secret-key-12345",
       CLOUDFLARE_ACCESS_TEAM_NAME: "test-team",
       CLOUDFLARE_ACCESS_AUD: "test-aud-12345",
+      ADMIN_EMAIL: "owner@example.com",
       SESSION_SECRET: "super-secret-session-key-must-be-at-least-32-chars-long!",
       INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
     });
-    expect(prodWithKey.success).toBe(true);
+    expect(() => validateCoreProductionEnv(prodWithKey)).not.toThrow();
   });
 
   it("getAiClient uses server-side xAI env and caches client", () => {
@@ -64,7 +70,7 @@ describe("Settings API & Server-Side xAI Configuration", () => {
 
     const mockSettingsRepo = {
       getSettings: vi.fn(async () => ({ settings: storedSettings, revision })),
-      updateSettings: vi.fn(async (_id: string, partial: any) => {
+      updateSettings: vi.fn(async (_id: string, partial: Partial<SystemSettings>) => {
         storedSettings = SystemSettingsSchema.parse({ ...storedSettings, ...partial });
         revision += 1;
         return { settings: storedSettings, revision };
@@ -82,12 +88,13 @@ describe("Settings API & Server-Side xAI Configuration", () => {
     const fastify = Fastify();
     await fastify.register(
       createAdminRoutes({
-        db: {} as any,
-        queueRepo: {} as any,
-        settingsRepo: mockSettingsRepo as any,
-        incidentRepo: {} as any,
-        eventRepo: mockEventRepo as any,
-        broadcaster: mockBroadcaster as any,
+        db: {} as unknown as Database,
+        queueRepo: {} as unknown as QueueRepository,
+        settingsRepo: mockSettingsRepo as unknown as SettingsRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: mockEventRepo as unknown as EventRepository,
+        jobRepo: {} as unknown as JobRepository,
+        broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
         requireAuth: async () => ({
           id: "u-1",
           email: "owner@example.com",
@@ -104,8 +111,8 @@ describe("Settings API & Server-Side xAI Configuration", () => {
     });
     expect(getRes.statusCode).toBe(200);
     const getData = JSON.parse(getRes.body);
-    expect((getData.settings as any).aiBaseUrl).toBeUndefined();
-    expect((getData.settings as any).aiApiKey).toBeUndefined();
+    expect((getData.settings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((getData.settings as Record<string, unknown>).aiApiKey).toBeUndefined();
     expect(getData.settings.aiModel).toBe("grok-4.5");
 
     // 2. PUT /api/settings
@@ -119,8 +126,8 @@ describe("Settings API & Server-Side xAI Configuration", () => {
     });
     expect(putRes.statusCode).toBe(200);
     const putData = JSON.parse(putRes.body);
-    expect((putData.settings as any).aiBaseUrl).toBeUndefined();
-    expect((putData.settings as any).aiApiKey).toBeUndefined();
+    expect((putData.settings as Record<string, unknown>).aiBaseUrl).toBeUndefined();
+    expect((putData.settings as Record<string, unknown>).aiApiKey).toBeUndefined();
     expect(putData.settings.aiModel).toBe("grok-beta");
     expect(putData.revision).toBe(2);
     expect(mockBroadcaster.broadcast).toHaveBeenCalledWith("settings:updated", { revision: 2 });

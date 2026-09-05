@@ -17,39 +17,29 @@ export const EnvSchema = z
     XAI_MODEL: z.string().default("grok-4.5"),
     CLOUDFLARE_ACCESS_TEAM_NAME: z.string().optional(),
     CLOUDFLARE_ACCESS_AUD: z.string().optional(),
+    ADMIN_EMAIL: z.string().email().optional(),
     DEFAULT_CHANNEL_ACCOUNT_ID: z.string().default("personal-messenger"),
     BROWSER_PROFILE_DIR: z.string().default("./browser_profile"),
     BROWSER_HEADLESS: z.preprocess((val) => val === "true" || val === true || val === "1", z.boolean()).default(true),
     NOVNC_PORT: z.coerce.number().int().default(6080),
     LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
-  })
-  .superRefine((data, ctx) => {
-    if (data.NODE_ENV === "production") {
-      if (!data.XAI_API_KEY || data.XAI_API_KEY.trim() === "") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["XAI_API_KEY"],
-          message: "XAI_API_KEY is required and must not be empty in production environment.",
-        });
-      }
-      if (!data.CLOUDFLARE_ACCESS_TEAM_NAME || data.CLOUDFLARE_ACCESS_TEAM_NAME.trim() === "") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["CLOUDFLARE_ACCESS_TEAM_NAME"],
-          message: "CLOUDFLARE_ACCESS_TEAM_NAME is required in production environment.",
-        });
-      }
-      if (!data.CLOUDFLARE_ACCESS_AUD || data.CLOUDFLARE_ACCESS_AUD.trim() === "") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["CLOUDFLARE_ACCESS_AUD"],
-          message: "CLOUDFLARE_ACCESS_AUD is required in production environment.",
-        });
-      }
-    }
   });
 
 export type Env = z.infer<typeof EnvSchema>;
+
+export function validateCoreProductionEnv(env: Env): void {
+  if (env.NODE_ENV !== "production") return;
+
+  const missing: string[] = [];
+  if (!env.XAI_API_KEY?.trim()) missing.push("XAI_API_KEY");
+  if (!env.CLOUDFLARE_ACCESS_TEAM_NAME?.trim()) missing.push("CLOUDFLARE_ACCESS_TEAM_NAME");
+  if (!env.CLOUDFLARE_ACCESS_AUD?.trim()) missing.push("CLOUDFLARE_ACCESS_AUD");
+  if (!env.ADMIN_EMAIL) missing.push("ADMIN_EMAIL");
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required production core configuration: ${missing.join(", ")}`);
+  }
+}
 
 let cachedEnv: Env | null = null;
 

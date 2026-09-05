@@ -23,12 +23,9 @@ import {
   UserCheck,
   Send,
   RefreshCw,
-  CheckCircle2,
   Cpu,
   AlertTriangle,
   Clock,
-  User,
-  Bot,
   ShieldAlert,
   Loader2,
   Play,
@@ -108,7 +105,11 @@ export const ConversationDetailPage: React.FC = () => {
   // SSE wakeup: refetches only when events relevant to this conversation arrive
   useSseWakeup(
     (type, payload) =>
-      shouldRefetchConversationDetail(type, conversationId || "", payload),
+      shouldRefetchConversationDetail(
+        type,
+        conversationId || "",
+        payload as { conversationId?: string; id?: string } | undefined
+      ),
     () => loadDetails()
   );
 

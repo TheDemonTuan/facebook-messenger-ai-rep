@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { JobRepository } from "../packages/db/src/index.js";
+import { JobRepository, type Database } from "../packages/db/src/index.js";
 
 describe("Single Agent Leases and Fencing Tokens", () => {
   it("acquires lease with monotonic fencing token and blocks concurrent holder", async () => {
@@ -40,7 +40,7 @@ describe("Single Agent Leases and Fencing Tokens", () => {
         // Subsequent call when already held: concurrent worker-2 gets empty result
         return { rows: [] };
       }),
-    } as any;
+    } as unknown as Database;
 
     const jobRepo = new JobRepository(mockDb);
 

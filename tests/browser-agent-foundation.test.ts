@@ -14,7 +14,6 @@ import type {
   EventRepository,
   SettingsRepository,
   IncidentRepository,
-  JobRepository,
 } from "@messenger/db";
 
 describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () => {
@@ -294,6 +293,7 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
       expect(adapter.composerText).toBe("");
       expect(adapter.sentMessages.length).toBe(0);
       expect(mockOutboundRepo.confirmSent).not.toHaveBeenCalled();
+      expect(cancelAckFired).toBe(true);
     });
   });
 
@@ -614,6 +614,7 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
           actor: "MANUAL_OWNER",
         })
       );
+      expect(manualCancelAckFired).toBe(false);
     });
   });
 });

@@ -13,7 +13,7 @@ export interface ReconcileHandlerDeps {
 }
 
 export function createReconcileHandler(deps: ReconcileHandlerDeps) {
-  const { db, jobRepo, eventRepo, outboxRepo, broadcaster } = deps;
+  const { db, jobRepo, eventRepo, broadcaster } = deps;
 
   return async function handleReconcile(_context?: JobExecutionContext): Promise<Record<string, unknown>> {
     const now = new Date();

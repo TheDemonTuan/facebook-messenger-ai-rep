@@ -47,15 +47,20 @@ export async function seedDatabase(channelAccountId?: string) {
     });
   }
 
-  // 3. Ensure default admin user exists
-  await db
-    .insert(users)
-    .values({
-      email: "admin@example.com",
-      name: "Default Admin",
-      role: "OWNER",
-    })
-    .onConflictDoNothing();
+  // 3. Bootstrap the explicitly configured Cloudflare identity only.
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  if (adminEmail) {
+    await db
+      .insert(users)
+      .values({
+        email: adminEmail,
+        name: "Default Admin",
+        role: "OWNER",
+      })
+      .onConflictDoNothing();
+  } else if (env.NODE_ENV === "production") {
+    throw new Error("ADMIN_EMAIL is required to bootstrap the production OWNER identity");
+  }
 
   console.log("✅ Seed completed successfully.");
 }

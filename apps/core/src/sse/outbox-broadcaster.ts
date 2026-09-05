@@ -157,7 +157,9 @@ export class OutboxBroadcaster {
     for (const client of this.clients) {
       try {
         client.raw.end();
-      } catch {}
+      } catch {
+        /* ignore error during client disconnect */
+      }
     }
     this.clients.clear();
   }
