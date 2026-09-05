@@ -5,16 +5,30 @@ import { eq } from "drizzle-orm";
 
 const accountId = process.env.DEFAULT_CHANNEL_ACCOUNT_ID || "personal-messenger";
 
+let hasDb = false;
+
 beforeAll(async () => {
-  await getSql().unsafe("SELECT 1");
+  try {
+    await getSql().unsafe("SELECT 1");
+    hasDb = true;
+  } catch {
+    hasDb = false;
+  }
 });
 
 afterAll(async () => {
-  await closeDb();
+  if (hasDb) {
+    try {
+      await closeDb();
+    } catch {
+      // ignore
+    }
+  }
 });
 
 describe("PostgreSQL production acceptance", () => {
-  it("allows exactly one winner across 100 concurrent claims", async () => {
+  it("allows exactly one winner across 100 concurrent claims", async (ctx) => {
+    if (!hasDb) return ctx.skip();
     const db = getDb();
     const repo = new JobRepository(db);
     const key = `acceptance-claim-${randomUUID()}`;
@@ -41,7 +55,8 @@ describe("PostgreSQL production acceptance", () => {
     expect(winners[0]?.fencingEpoch).toBeGreaterThan(0);
   });
 
-  it("rejects stale heartbeat, completion, and failure after a new fence owns the job", async () => {
+  it("rejects stale heartbeat, completion, and failure after a new fence owns the job", async (ctx) => {
+    if (!hasDb) return ctx.skip();
     const db = getDb();
     const repo = new JobRepository(db);
     const queued = await repo.enqueue({
@@ -74,7 +89,8 @@ describe("PostgreSQL production acceptance", () => {
     await expect(repo.complete(queued.id, "new-owner", second!.fencingEpoch)).resolves.toBe(true);
   });
 
-  it("deduplicates concurrent enqueue by idempotency key", async () => {
+  it("deduplicates concurrent enqueue by idempotency key", async (ctx) => {
+    if (!hasDb) return ctx.skip();
     const db = getDb();
     const key = `acceptance-idempotency-${randomUUID()}`;
     const rows = await Promise.all(

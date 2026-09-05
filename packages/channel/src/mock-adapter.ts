@@ -1,8 +1,10 @@
 import type { ChannelAdapter, PreSendMarker } from "./channel-adapter.js";
-import type {
-  InboundMessagePayload,
-  ChannelHealthReport,
-  ActiveConversationRef,
+import {
+  isValidTimeZone,
+  resolveBusinessTimeZone,
+  type InboundMessagePayload,
+  type ChannelHealthReport,
+  type ActiveConversationRef,
 } from "@messenger/contracts";
 import { createHash } from "node:crypto";
 
@@ -16,6 +18,9 @@ export interface MockSentMessage {
 
 export class MockChannelAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
+  public timeZone: string = "Asia/Ho_Chi_Minh";
+  public activeContextTimeZone: string = "Asia/Ho_Chi_Minh";
+  public contextRecreationCount: number = 0;
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
   private degradedCallback: ((reason: string) => Promise<void>) | null = null;
   public currentOpenRef: ActiveConversationRef | null = null;
@@ -32,6 +37,30 @@ export class MockChannelAdapter implements ChannelAdapter {
 
   constructor(channelAccountId = "personal-messenger") {
     this.channelAccountId = channelAccountId;
+  }
+
+  setTimeZone(timeZone: string): boolean {
+    if (!isValidTimeZone(timeZone)) {
+      return false;
+    }
+    const normalized = resolveBusinessTimeZone(timeZone);
+    this.timeZone = normalized;
+    if (this.activeContextTimeZone !== normalized) {
+      return true;
+    }
+    return false;
+  }
+
+  async reinitializeContext(timeZone?: string): Promise<void> {
+    if (timeZone && isValidTimeZone(timeZone)) {
+      this.timeZone = resolveBusinessTimeZone(timeZone);
+    }
+    this.activeContextTimeZone = this.timeZone;
+    this.contextRecreationCount++;
+  }
+
+  getActiveContextTimeZone(): string {
+    return this.activeContextTimeZone;
   }
 
   async observeInbound(

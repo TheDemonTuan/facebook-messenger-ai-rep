@@ -1,6 +1,6 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { Database, TurnRepository, JobRepository, OutboxRepository, EventRepository } from "@messenger/db";
-import { conversations, channelAccounts } from "@messenger/db";
+import { conversations, channelAccounts, ReplyPolicyService } from "@messenger/db";
 import { eq, and } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
@@ -17,10 +17,12 @@ export interface DebounceHandlerDeps {
   outboxRepo: OutboxRepository;
   eventRepo: EventRepository;
   broadcaster: OutboxBroadcaster;
+  replyPolicyService?: ReplyPolicyService;
 }
 
 export function createDebounceHandler(deps: DebounceHandlerDeps) {
   const { db, turnRepo, jobRepo, outboxRepo, eventRepo, broadcaster } = deps;
+  const replyPolicyService = deps.replyPolicyService ?? new ReplyPolicyService(db);
 
   return async function handleDebounce(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as DebounceJobPayload;
@@ -86,6 +88,38 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
         .update(conversations)
         .set({ status: "QUEUED", updatedAt: new Date() })
         .where(eq(conversations.id, conversationId));
+      return;
+    }
+
+    // 4b. Re-check policy revision & eligibility (stops newly-disallowed work or race)
+    const policyResult = await replyPolicyService.recheckEligibility({
+      channelAccountId,
+      conversationId,
+      inboundVersion,
+      conversation: conv,
+    });
+
+    if (!policyResult.eligible) {
+      console.log(
+        `[DebounceHandler] Inbound v${inboundVersion} for conv ${conversationId} is no longer eligible (${policyResult.reasonCode}): ${policyResult.reason}. Skipping AI generation.`
+      );
+      await db
+        .update(conversations)
+        .set({ status: "WAITING_CUSTOMER", updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_CANCELLED_STALE",
+        inboundVersion,
+        actor: "SCHEDULER",
+        payload: {
+          reason: "POLICY_INELIGIBLE",
+          reasonCode: policyResult.reasonCode,
+          details: policyResult.details,
+        },
+      });
       return;
     }
 

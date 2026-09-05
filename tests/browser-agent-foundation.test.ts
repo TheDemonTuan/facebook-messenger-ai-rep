@@ -250,7 +250,12 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        mockIncidentRepo
+        mockIncidentRepo,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       let cancelAckFired = false;
@@ -360,7 +365,12 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await senderWorker.processAction({
@@ -478,7 +488,12 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        mockIncidentRepo
+        mockIncidentRepo,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await senderWorker.processAction({
@@ -578,7 +593,12 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       // Verify cancel ack exposure

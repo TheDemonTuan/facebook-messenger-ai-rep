@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger Timestamps</title></head>
+<body>
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Row 1: Exact ISO datetime attribute -->
+      <div role="row" id="mid.$gABtime1001" aria-label="Khách 1: Tin nhắn có datetime ISO">
+        <div dir="auto">Tin nhắn có datetime ISO</div>
+        <time datetime="2026-09-05T07:30:00Z"></time>
+      </div>
+
+      <!-- Row 2: Exact epoch milliseconds attribute -->
+      <div role="row" id="mid.$gABtime1002" aria-label="Khách 2: Tin nhắn có data-timestamp epoch">
+        <div dir="auto">Tin nhắn có data-timestamp epoch</div>
+        <div data-timestamp="1788614546000"></div>
+      </div>
+
+      <!-- Row 3: Localized Vietnamese time today -->
+      <div role="row" id="mid.$gABtime1003" aria-label="Khách 3: Tin nhắn lúc 14:30 hôm nay">
+        <div dir="auto">Tin nhắn lúc 14:30 hôm nay</div>
+        <time>14:30</time>
+      </div>
+
+      <!-- Row 4: Localized Vietnamese yesterday time -->
+      <div role="row" id="mid.$gABtime1004" aria-label="Khách 4: Tin nhắn hôm qua lúc 14:30">
+        <div dir="auto">Tin nhắn hôm qua lúc 14:30</div>
+        <div data-tooltip-content="Hôm qua lúc 14:30"></div>
+      </div>
+
+      <!-- Row 5: Localized English timestamp -->
+      <div role="row" id="mid.$gABtime1005" aria-label="Khách 5: Message at 2:30 PM">
+        <div dir="auto">Message at 2:30 PM</div>
+        <time>2:30 PM</time>
+      </div>
+
+      <!-- Row 6: Degraded / missing timestamp in DOM -->
+      <div role="row" id="mid.$gABtime1006" aria-label="Khách 6: Tin nhắn không có giờ trong DOM">
+        <div dir="auto">Tin nhắn không có giờ trong DOM</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

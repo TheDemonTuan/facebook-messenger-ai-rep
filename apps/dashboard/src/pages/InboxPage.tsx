@@ -5,6 +5,7 @@ import type { ConversationItem, PaginatedInboxResponse } from "../types";
 import { buildInboxQuery, mergePaginatedConversations } from "../helpers/pagination";
 import { shouldRefetchInbox } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
+import { formatDateTime } from "../helpers/date-helpers";
 import {
   MessageSquare,
   Clock,
@@ -250,13 +251,18 @@ export const InboxPage: React.FC = () => {
                     <span style={{ fontWeight: "700", fontSize: "0.95rem", color: "#0f172a" }}>
                       {item.customer.name || "Khách hàng Messenger"}
                     </span>
+                    {item.conversation.threadKind === "GROUP" && (
+                      <span style={{ backgroundColor: "#ede9fe", color: "#6d28d9", padding: "1px 6px", borderRadius: "4px", fontSize: "0.7rem", fontWeight: "700" }}>
+                        NHÓM
+                      </span>
+                    )}
                     {getStatusBadge(item.conversation)}
                   </div>
 
                   <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
                     {item.conversation.lastInboundAt ? (
                       <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                        <Clock size={12} /> Tin cuối: {new Date(item.conversation.lastInboundAt).toLocaleString("vi-VN")}
+                        <Clock size={12} /> Tin cuối: {formatDateTime(item.conversation.lastInboundAt)}
                       </span>
                     ) : (
                       <span>Chưa có tin nhắn</span>

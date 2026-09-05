@@ -12,8 +12,35 @@ export interface PreSendMarker {
   capturedAt: Date;
 }
 
+export interface ChannelAdapterOptions {
+  channelAccountId?: string;
+  timeZone?: string;
+  botParticipantId?: string;
+  botProfileUrl?: string;
+}
+
 export interface ChannelAdapter {
   readonly channelAccountId: string;
+  readonly timeZone?: string;
+  readonly botParticipantId?: string;
+  readonly botProfileUrl?: string;
+
+  /**
+   * Dynamically updates the business timezone used for localized timestamp parsing and page emulation.
+   * Returns true if context recreation is required because the BrowserContext is
+   * currently running with an immutable timezoneId that differs from the new timezone.
+   */
+  setTimeZone?(timeZone: string): boolean;
+
+  /**
+   * Safely reinitializes the browser context with the target timezone while preserving session profile.
+   */
+  reinitializeContext?(timeZone?: string): Promise<void>;
+
+  /**
+   * Gets the active browser context timezone currently emulated by Chromium.
+   */
+  getActiveContextTimeZone?(): string;
 
   /**
    * Start listening for inbound messages. Calls `callback` whenever a message arrives.

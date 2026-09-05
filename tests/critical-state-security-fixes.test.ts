@@ -194,7 +194,12 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await senderWorker.processAction({
@@ -265,7 +270,12 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
             settings: { typingTargetWpmMin: 60, typingTargetWpmMax: 70 },
           }),
         } as unknown as SettingsRepository,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await senderWorker.processAction({
@@ -356,7 +366,12 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         mockOutboundRepo,
         mockEventRepo,
         mockSettingsRepo,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await expect(senderWorker.processAction({
@@ -428,7 +443,12 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
             settings: { typingTargetWpmMin: 60000, typingTargetWpmMax: 60000 },
           }),
         } as unknown as SettingsRepository,
-        {} as unknown as IncidentRepository
+        {} as unknown as IncidentRepository,
+        undefined,
+        undefined,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await expect(senderWorker.processAction({
@@ -510,6 +530,9 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         outboxRepo: {} as unknown as OutboxRepository,
         broadcaster: {} as unknown as OutboxBroadcaster,
         aiGenerator: mockAiGenerator as unknown as AiReplyGenerator,
+        replyPolicyService: {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService,
       });
 
       await aiHandler(context);

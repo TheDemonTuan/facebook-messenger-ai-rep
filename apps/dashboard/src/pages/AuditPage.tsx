@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import { Search, Loader2, AlertCircle, Shield } from "lucide-react";
+import { formatDateTime } from "../helpers/date-helpers";
 
 interface AuditEventItem {
   id: string;
@@ -184,7 +185,7 @@ export const AuditPage: React.FC = () => {
               {events.map((ev) => (
                 <tr key={ev.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
                   <td style={{ padding: "10px 14px", color: "#64748b", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
-                    {new Date(ev.createdAt).toLocaleString("vi-VN")}
+                    {formatDateTime(ev.createdAt)}
                   </td>
                   <td style={{ padding: "10px 14px", fontWeight: "600", color: "#1e293b" }}>{formatEventType(ev.type)}</td>
                   <td style={{ padding: "10px 14px", color: "#334155" }}>{formatActor(ev.actor)}</td>

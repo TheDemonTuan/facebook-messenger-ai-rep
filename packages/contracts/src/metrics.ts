@@ -17,5 +17,6 @@ export const SystemMetricsSummarySchema = z.object({
   errorCountLastHour: z.number().int().nonnegative(),
   incidentCountOpen: z.number().int().nonnegative(),
   timestamp: z.coerce.date(),
+  businessTimeZone: z.string().optional(),
 });
 export type SystemMetricsSummary = z.infer<typeof SystemMetricsSummarySchema>;

@@ -15,11 +15,13 @@ import {
   X,
   Shield,
   Loader2,
+  Clock,
 } from "lucide-react";
 import { apiFetch } from "../api";
 import type { ChannelOverview } from "../types";
 import { useAuth } from "../context/AuthContext";
 import { useSse, useSseWakeup } from "../context/SseContext";
+import { useBusinessTimeZone } from "../context/TimezoneContext";
 import { shouldRefetchOverview } from "../helpers/sse-helpers";
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -27,6 +29,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const { connected: sseConnected } = useSse();
+  const { timeZone, setTimeZone, friendlyIndicator } = useBusinessTimeZone();
 
   const [overview, setOverview] = useState<ChannelOverview | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -36,10 +39,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     try {
       const data = await apiFetch<ChannelOverview>("/api/overview");
       setOverview(data);
+      if (data.businessTimeZone) {
+        setTimeZone(data.businessTimeZone);
+      }
     } catch {
       // Handled silently
     }
-  }, []);
+  }, [setTimeZone]);
 
   useEffect(() => {
     fetchOverview();
@@ -316,6 +322,27 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             >
               <Radio size={12} color={sseConnected ? "#16a34a" : "#d97706"} />
               <span>{sseConnected ? "Trực tiếp" : "Đang kết nối lại..."}</span>
+            </div>
+
+            {/* Customer-Friendly Active Timezone Indicator */}
+            <div
+              title={`Múi giờ làm việc hệ thống: ${timeZone}`}
+              data-testid="active-timezone-indicator"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "5px",
+                padding: "3px 8px",
+                borderRadius: "12px",
+                backgroundColor: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                fontSize: "0.75rem",
+                color: "#475569",
+                fontWeight: "500",
+              }}
+            >
+              <Clock size={12} color="#64748b" />
+              <span>{friendlyIndicator}</span>
             </div>
           </div>
 

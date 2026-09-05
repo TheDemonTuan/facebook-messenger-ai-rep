@@ -1,10 +1,15 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
-import type { ChannelAdapter, PreSendMarker } from "@messenger/channel";
-import { TypingEngine } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker, BubbleParseResult } from "@messenger/channel";
+import { TypingEngine, parseMessengerBubblesFromHtml } from "@messenger/channel";
 import type {
   InboundMessagePayload,
   ChannelHealthReport,
   ActiveConversationRef,
+} from "@messenger/contracts";
+import {
+  isValidTimeZone,
+  resolveBusinessTimeZone,
+  DEFAULT_BUSINESS_TIMEZONE,
 } from "@messenger/contracts";
 import path from "node:path";
 
@@ -12,10 +17,19 @@ export interface PlaywrightAdapterOptions {
   profileDir: string;
   headless?: boolean;
   channelAccountId?: string;
+  timeZone?: string;
+  botParticipantId?: string;
+  botProfileUrl?: string;
 }
 
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
+  timeZone: string;
+  private activeContextTimeZone: string;
+  private targetTimeZone: string;
+  private reinitPromise: Promise<void> | null = null;
+  readonly botParticipantId?: string;
+  readonly botProfileUrl?: string;
   private profileDir: string;
   private headless: boolean;
   private context: BrowserContext | null = null;
@@ -36,6 +50,124 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
     this.profileDir = path.resolve(options.profileDir);
     this.headless = options.headless ?? true;
+    const resolved = options.timeZone ? resolveBusinessTimeZone(options.timeZone) : DEFAULT_BUSINESS_TIMEZONE;
+    this.timeZone = resolved;
+    this.targetTimeZone = resolved;
+    this.activeContextTimeZone = resolved;
+    this.botParticipantId = options.botParticipantId;
+    this.botProfileUrl = options.botProfileUrl;
+  }
+
+  /**
+   * Sets desired business timezone.
+   * Returns true if context recreation is required because the BrowserContext is
+   * currently running with an immutable timezoneId that differs from the new timezone.
+   */
+  setTimeZone(timeZone: string): boolean {
+    if (!isValidTimeZone(timeZone)) {
+      return false;
+    }
+    const normalized = resolveBusinessTimeZone(timeZone);
+    this.targetTimeZone = normalized;
+    this.timeZone = normalized;
+
+    // If context is running and active timezone differs from target, recreation is required
+    if (this.context && this.activeContextTimeZone !== normalized) {
+      return true;
+    }
+
+    // If context not initialized yet, target becomes active when initialized without recreation
+    if (!this.context) {
+      this.activeContextTimeZone = normalized;
+    }
+
+    return false;
+  }
+
+  /**
+   * Gets the active browser context timezone currently emulated by Chromium.
+   */
+  getActiveContextTimeZone(): string {
+    return this.activeContextTimeZone;
+  }
+
+  /**
+   * Controlled browser/context reinitialization.
+   * Safely closes existing pages and context, flushing session state to disk,
+   * then relaunches persistent context with timezoneId matching target timezone.
+   */
+  async reinitializeContext(targetTimeZone?: string): Promise<void> {
+    if (targetTimeZone) {
+      this.setTimeZone(targetTimeZone);
+    }
+    if (this.reinitPromise) {
+      return this.reinitPromise;
+    }
+    this.reinitPromise = this.performReinitializeContext();
+    try {
+      await this.reinitPromise;
+    } finally {
+      this.reinitPromise = null;
+    }
+  }
+
+  private async performReinitializeContext(): Promise<void> {
+    const wasObserving = this.isObserving;
+    const savedCallback = this.inboundCallback;
+
+    console.log(`[BrowserAdapter] Controlled context reinitialization starting: aligning timezone to ${this.targetTimeZone}...`);
+
+    // 1. Pause polling observer cleanly
+    if (this.observeTimer) {
+      clearTimeout(this.observeTimer);
+      this.observeTimer = null;
+    }
+    this.isObserving = false;
+
+    // 2. Safely close sender and observer pages first
+    if (this.senderPage) {
+      try {
+        await this.senderPage.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing senderPage during context reinitialization:", err);
+      } finally {
+        this.senderPage = null;
+      }
+    }
+
+    if (this.observerPage) {
+      try {
+        await this.observerPage.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing observerPage during context reinitialization:", err);
+      } finally {
+        this.observerPage = null;
+      }
+    }
+
+    // 3. Safely close persistent context (Playwright flushes session cookies/storage to profileDir)
+    if (this.context) {
+      try {
+        await this.context.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing context during reinitialization:", err);
+      } finally {
+        this.context = null;
+      }
+    }
+
+    // 4. Update activeContextTimeZone to match target timezone
+    this.activeContextTimeZone = this.targetTimeZone;
+    this.timeZone = this.targetTimeZone;
+
+    // 5. Reinitialize browser context with the new timezoneId
+    await this.init();
+
+    // 6. Resume observation if it was active before reinitialization
+    if (wasObserving && savedCallback) {
+      await this.observeInbound(savedCallback);
+    }
+    console.log(`[BrowserAdapter] Controlled context reinitialization complete (activeContextTimeZone=${this.activeContextTimeZone}).`);
   }
 
   onDegradedDom(callback: (reason: string) => Promise<void>): void {
@@ -68,7 +200,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       locale: "vi-VN",
-      timezoneId: "Asia/Ho_Chi_Minh",
+      timezoneId: this.activeContextTimeZone,
       permissions: ["notifications"],
       args: [
         "--disable-blink-features=AutomationControlled",
@@ -204,18 +336,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         for (const t of threadElements) {
           if (!t.threadId || !t.snippet) continue;
 
-          // Skip group chats
-          const isGroupChat =
-            t.customerName.toLowerCase().includes("group") ||
-            t.customerName.toLowerCase().includes("club") ||
-            t.snippet.includes("left the group") ||
-            t.snippet.includes("đã rời khỏi");
-
-          if (isGroupChat) {
-            this.lastSeenSnippets.set(t.threadId, t.snippet);
-            continue;
-          }
-
           const prevSnippet = this.lastSeenSnippets.get(t.threadId);
           const hasTrigger = t.isUnread || (prevSnippet !== undefined && prevSnippet !== t.snippet);
 
@@ -262,15 +382,43 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 ? t.href
                 : `https://www.facebook.com/messages/t/${t.threadId}`;
 
+              const isVerifiedSender = Boolean(bubble.senderId && bubble.senderReliability === "VERIFIED");
+
               await this.inboundCallback({
                 channelAccountId: this.channelAccountId,
                 externalThreadId: t.threadId,
                 externalThreadRef: fullThreadRef,
-                externalCustomerId: t.threadId,
-                customerName: t.customerName,
+                // Never conflate externalThreadId with actual sender identity
+                externalCustomerId: bubble.senderId ?? null,
+                customerName: bubble.senderName || t.customerName || null,
                 externalMessageId: bubble.id,
                 text: bubble.text,
-                timestamp: new Date(),
+                timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
+                threadKind: bubble.threadKind ?? bubbleResult.threadClassification?.kind ?? "UNKNOWN",
+                threadReliability: bubble.threadReliability ?? bubbleResult.threadClassification?.reliability ?? "UNVERIFIED",
+                threadEvidence: bubble.threadEvidence ?? bubbleResult.threadClassification?.evidence ?? [],
+                senderKind: bubble.senderKind ?? "UNKNOWN",
+                senderReliability: bubble.senderReliability ?? "UNVERIFIED",
+                senderEvidence: bubble.senderEvidence ?? [],
+                senderExternalId: bubble.senderId ?? null,
+                senderParticipantId: bubble.senderId ?? null,
+                participantIdentity: isVerifiedSender
+                  ? {
+                      channelAccountId: this.channelAccountId,
+                      participantId: bubble.senderId!,
+                      senderKind: bubble.senderKind ?? "PERSON",
+                      isVerified: true,
+                      profileUrl: bubble.senderProfileUrl ?? null,
+                      displayName: bubble.senderName ?? null,
+                      verifiedAt: new Date(),
+                      metadata: {},
+                    }
+                  : null,
+                mentions: bubble.mentions ?? [],
+                timestamps: bubble.timestamps,
+                observedTimestamp: bubble.observedTimestamp,
+                timestampProvenance: bubble.timestampProvenance,
+                timestampPrecision: bubble.timestampPrecision,
               });
             }
           }
@@ -290,78 +438,32 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   /**
-   * Reads message bubbles from a page, extracting stable identity.
+   * Reads message bubbles from a page, extracting stable identity, sender, thread type, mentions, and timestamps.
    */
-  private async readBubblesFromPage(page: Page): Promise<{
-    bubbles: Array<{ id: string; text: string; isOutgoing: boolean }>;
-    isDegraded: boolean;
-    degradedReason?: string;
-  }> {
+  private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
     try {
-      return await page.evaluate(() => {
-        const rows = Array.from(
-          document.querySelectorAll('div[role="row"], div[data-scope="messages_table"], div[data-testid="mw_message_row"]')
-        );
-
-        const bubbles: Array<{ id: string; text: string; isOutgoing: boolean }> = [];
-
-        for (const row of rows) {
-          // Extract message text
-          const textEl =
-            row.querySelector('div[dir="auto"], span[dir="auto"], div[data-scope="message_bubble"]') ||
-            row.querySelector('span');
-
-          const rawText = textEl?.textContent?.trim() || "";
-          if (!rawText) continue;
-
-          // Stable ID extraction (mid.$..., data-message-id, data-mid, id, data-id)
-          const midMatch = row.querySelector('[id^="mid."]')?.getAttribute("id");
-          const rowId = row.getAttribute("id");
-          const idAttr =
-            midMatch ||
-            (rowId && rowId.startsWith("mid.") ? rowId : null) ||
-            row.getAttribute("data-message-id") ||
-            row.querySelector('[data-message-id]')?.getAttribute("data-message-id") ||
-            row.getAttribute("data-mid") ||
-            row.querySelector('[data-mid]')?.getAttribute("data-mid") ||
-            row.getAttribute("data-id") ||
-            (rowId && !rowId.startsWith(":") && !rowId.startsWith("js_") ? rowId : null);
-
-          if (!idAttr) {
-            const isMessageRow =
-              row.matches('[data-testid="mw_message_row"]') ||
-              row.querySelector('[data-scope="message_bubble"]') !== null;
-
-            if (isMessageRow) {
-              return {
-                bubbles: [],
-                isDegraded: true,
-                degradedReason: `Message row with text "${rawText.slice(0, 30)}" lacks stable mid identifier`,
-              };
-            }
-            continue;
-          }
-
-          // Direction extraction
-          const ariaLabel = (row.getAttribute("aria-label") || "").toLowerCase();
-          const isOutgoing =
-            ariaLabel.includes("bạn đã gửi") ||
-            ariaLabel.includes("bạn:") ||
-            ariaLabel.includes("you sent") ||
-            ariaLabel.includes("you:") ||
-            row.querySelector('[data-testid="outgoing_message"]') !== null;
-
-          bubbles.push({
-            id: idAttr,
-            text: rawText,
-            isOutgoing,
-          });
+      const html = await page.evaluate(() => {
+        const header = document.querySelector('div[role="banner"], header, [data-testid*="header"]');
+        const main = document.querySelector('div[role="main"]');
+        if (header && main && !main.contains(header)) {
+          return header.outerHTML + "\n" + main.outerHTML;
         }
-
-        return { bubbles, isDegraded: false };
+        if (main) {
+          return main.outerHTML;
+        }
+        return document.body ? document.body.innerHTML : "";
       });
-    } catch (_err) {
+      return parseMessengerBubblesFromHtml(html, {
+        observedAt: new Date(),
+        timeZone: this.activeContextTimeZone,
+        botChannelAccountId: this.channelAccountId,
+        botParticipantId: this.botParticipantId,
+        botProfileUrl: this.botProfileUrl,
+      });
+    } catch (err) {
+      console.warn("[BrowserAdapter] Error reading bubbles from page:", err);
       return {
+        ok: false,
         bubbles: [],
         isDegraded: false,
       };

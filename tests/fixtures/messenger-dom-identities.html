@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger Identities</title></head>
+<body>
+  <div role="main">
+    <div data-scope="messages_table">
+      <!-- Row 1: PERSON sender with structured personal profile URL -->
+      <div role="row" id="mid.$gABident1001" aria-label="Alice Nguyễn: Shop còn mẫu này không?">
+        <a href="https://www.facebook.com/alice.nguyen.123" data-testid="author_link">
+          <span dir="auto">Alice Nguyễn</span>
+        </a>
+        <div dir="auto">Shop còn mẫu này không?</div>
+      </div>
+
+      <!-- Row 2: PAGE sender with verified Page badge and Page profile link -->
+      <div role="row" id="mid.$gABident1002" aria-label="Vietnam Apparel: Cảm ơn quý khách đã ghé thăm.">
+        <a href="https://www.facebook.com/pages/vietnam-apparel/100077700011" data-testid="author_link">
+          <span dir="auto">Vietnam Apparel</span>
+        </a>
+        <span aria-label="Trang" data-testid="page_badge"></span>
+        <div dir="auto">Cảm ơn quý khách đã ghé thăm.</div>
+      </div>
+
+      <!-- Row 3: NON_PERSON system message -->
+      <div role="status" id="mid.$gABident1003" data-testid="system_message" aria-label="Tin nhắn hệ thống">
+        <div dir="auto">Meta AI đã rời khỏi cuộc trò chuyện</div>
+      </div>
+
+      <!-- Row 4: UNKNOWN sender (no structured profile link, avatar image without link, display name only) -->
+      <div role="row" id="mid.$gABident1004" aria-label="Khách Ẩn Danh: Alo shop còn hàng không?">
+        <img src="https://example.com/avatar.jpg" alt="Avatar">
+        <div dir="auto">Alo shop còn hàng không?</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

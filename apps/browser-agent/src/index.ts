@@ -28,10 +28,21 @@ async function main() {
   const incidentRepo = new IncidentRepository(db);
   const jobRepo = new JobRepository(db);
 
+  let initialTimeZone = "Asia/Ho_Chi_Minh";
+  try {
+    const s = await settingsRepo.getSettings(env.DEFAULT_CHANNEL_ACCOUNT_ID);
+    if (s?.settings?.businessTimeZone) {
+      initialTimeZone = s.settings.businessTimeZone;
+    }
+  } catch (err) {
+    console.warn("[Browser Agent] Failed to read initial businessTimeZone from settings:", err);
+  }
+
   const adapter = new PlaywrightMessengerAdapter({
     profileDir: env.BROWSER_PROFILE_DIR,
     headless: env.BROWSER_HEADLESS,
     channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+    timeZone: initialTimeZone,
   });
 
   console.log("Initializing PostgreSQL-foundation Browser Agent...");
@@ -86,11 +97,18 @@ async function main() {
     let debounceMs = 3000;
     try {
       const s = await settingsRepo.getSettings(inbound.channelAccountId);
+      if (s?.settings?.businessTimeZone && typeof adapter.setTimeZone === "function") {
+        const needsRecreation = adapter.setTimeZone(s.settings.businessTimeZone);
+        if (needsRecreation && typeof adapter.reinitializeContext === "function") {
+          console.log(`[Browser Agent] Timezone changed to ${s.settings.businessTimeZone}, reinitializing context...`);
+          await adapter.reinitializeContext();
+        }
+      }
       if (s?.settings?.debounceMs) {
         debounceMs = s.settings.debounceMs;
       }
     } catch (err) {
-      console.warn("[Browser Agent] Failed to read debounceMs from settings, defaulting to 3000ms:", err);
+      console.warn("[Browser Agent] Failed to read settings, defaulting to 3000ms:", err);
     }
 
     // Ingest into PostgreSQL atomically with debounce job enqueued/updated
@@ -98,6 +116,12 @@ async function main() {
     if (result.isDuplicate) {
       console.log(`[Browser Agent] Deduplicated message ${inbound.externalMessageId}`);
       return;
+    }
+
+    if (result.eligibility?.eligible) {
+      console.log(`[Browser Agent] Inbound message is ELIGIBLE for reply: debounce scheduled (v${result.inboundVersion})`);
+    } else {
+      console.log(`[Browser Agent] Inbound message is INELIGIBLE for reply (${result.eligibility?.reasonCode}): ${result.eligibility?.reason}`);
     }
 
     // Abort stale outbound actions for this conversation

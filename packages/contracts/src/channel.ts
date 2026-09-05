@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { ChannelStatusSchema } from "./enums.js";
+import { ChannelStatusSchema, ChannelAccountTypeSchema } from "./enums.js";
 
 export const ChannelAccountSchema = z.object({
   id: z.string(),
   name: z.string(),
-  type: z.enum(["PERSONAL_MESSENGER", "FACEBOOK_PAGE"]),
+  type: ChannelAccountTypeSchema,
   status: ChannelStatusSchema,
   statusReason: z.string().nullable().optional(),
   lastHealthCheckAt: z.coerce.date().nullable().optional(),

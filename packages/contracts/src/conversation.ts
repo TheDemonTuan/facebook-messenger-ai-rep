@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { ConversationStatusSchema } from "./enums.js";
+import {
+  ConversationStatusSchema,
+  ThreadKindSchema,
+  ClassificationReliabilitySchema,
+} from "./enums.js";
 
 export const CustomerSchema = z.object({
   id: z.string().uuid(),
@@ -16,10 +20,13 @@ export type Customer = z.infer<typeof CustomerSchema>;
 export const ConversationSchema = z.object({
   id: z.string().uuid(),
   channelAccountId: z.string(),
-  customerId: z.string().uuid(),
+  customerId: z.string().uuid().nullable().optional(),
   externalThreadId: z.string(),
   externalThreadRef: z.string(), // Stable URL / ref for browser navigation
   status: ConversationStatusSchema,
+  threadKind: ThreadKindSchema.default("UNKNOWN"),
+  title: z.string().nullable().optional(),
+  reliability: ClassificationReliabilitySchema.default("UNVERIFIED"),
   inboundVersion: z.number().int().nonnegative(),
   lastInboundAt: z.coerce.date().nullable(),
   lastOutboundAt: z.coerce.date().nullable(),
@@ -36,6 +43,6 @@ export const ConversationSchema = z.object({
 export type Conversation = z.infer<typeof ConversationSchema>;
 
 export const ConversationWithCustomerSchema = ConversationSchema.extend({
-  customer: CustomerSchema,
+  customer: CustomerSchema.nullable().optional(),
 });
 export type ConversationWithCustomer = z.infer<typeof ConversationWithCustomerSchema>;

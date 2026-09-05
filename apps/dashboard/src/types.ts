@@ -24,12 +24,14 @@ export interface ChannelOverview {
   todayConversationsCount: number;
   todayMessagesCount: number;
   openIncidentsCount: number;
+  businessTimeZone?: string;
 }
 
 export interface ConversationItem {
   conversation: {
     id: string;
     status: string;
+    threadKind?: string;
     inboundVersion: number;
     lastInboundAt: string | null;
     lastOutboundAt: string | null;
@@ -46,6 +48,16 @@ export interface ConversationItem {
   };
 }
 
+export interface SkipReasonInfo {
+  decision: "ELIGIBLE" | "INELIGIBLE";
+  eligible: boolean;
+  reasonCode: string;
+  reason: string;
+  humanReadableReason: string;
+  precedenceStep: string;
+  evaluationMode?: "LIVE" | "SHADOW";
+}
+
 export interface MessageItem {
   id: string;
   direction: "INBOUND" | "OUTBOUND";
@@ -54,6 +66,11 @@ export interface MessageItem {
   inboundVersion: number;
   responseIndex: number;
   timestamp: string;
+  senderName?: string | null;
+  avatarUrl?: string | null;
+  senderKind?: string;
+  isVerified?: boolean;
+  skipReason?: SkipReasonInfo | null;
 }
 
 export type OutboundActionStatus =
@@ -199,6 +216,32 @@ export interface AiProviderSettings {
   apiKeyConfigured: boolean;
 }
 
+export interface PolicyMemberItem {
+  id: string;
+  personId?: string;
+  displayName: string;
+  name?: string;
+  avatarUrl: string | null;
+  senderKind?: string;
+  type?: string;
+  policyMode: "EXCLUDE" | "INCLUDE";
+  notes?: string | null;
+  conversationContext?: string;
+}
+
+export interface SafePersonItem {
+  id: string;
+  personId: string;
+  name: string;
+  rawName?: string;
+  avatarUrl: string | null;
+  type: string;
+  isVerified: boolean;
+  conversationContext: string;
+  duplicateContext?: string;
+  policyMode?: "EXCLUDE" | "INCLUDE" | null;
+}
+
 export interface NonSecretSettings {
   debounceMs: number;
   stickyWindowMs: number;
@@ -215,12 +258,22 @@ export interface NonSecretSettings {
   busyMode: boolean;
   autoReplyEnabled: boolean;
   pauseIntakeProcessing: boolean;
+  businessTimeZone?: string;
+  replyMode?: "EVERYONE_EXCEPT" | "ONLY_SELECTED";
+  directRepliesEnabled?: boolean;
+  groupRepliesEnabled?: boolean;
+  pageRepliesEnabled?: boolean;
+  nonPersonRepliesEnabled?: boolean;
+  requireGroupMention?: boolean;
+  selectedParticipantIds?: string[];
+  excludedParticipantIds?: string[];
 }
 
 export interface SettingItem {
   settings: NonSecretSettings & Record<string, unknown>;
   aiProvider: AiProviderSettings;
   revision: number;
+  policyMembers?: PolicyMemberItem[];
 }
 
 export interface PaginatedInboxResponse {
@@ -236,13 +289,15 @@ export interface ConversationDetailData {
   conversation: {
     id: string;
     channelAccountId: string;
-    customerId: string;
-    externalThreadId: string;
-    externalThreadRef: string;
+    customerId?: string | null;
+    externalThreadId?: string;
+    externalThreadRef?: string;
     inboundVersion: number;
     lastInboundAt: string | null;
     lastOutboundAt: string | null;
     status: string;
+    threadKind?: string;
+    title?: string | null;
     isBlocked: boolean;
     manualMode: boolean;
     unreadCount: number;
@@ -253,7 +308,7 @@ export interface ConversationDetailData {
   };
   customer: {
     id: string;
-    externalId: string;
+    externalId?: string;
     name: string | null;
     avatarUrl: string | null;
   };

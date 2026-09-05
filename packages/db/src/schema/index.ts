@@ -70,6 +70,52 @@ export const customers = pgTable(
   ]
 );
 
+// 3b. Channel Participants (channel-scoped participant identity for sender attribution & classification)
+export const participants = pgTable(
+  "participants",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    participantId: text("participant_id").notNull(), // Stable external Facebook entity/participant ID
+    senderKind: varchar("sender_kind", { length: 32 }).notNull().default("UNKNOWN"), // PERSON | PAGE | NON_PERSON | UNKNOWN
+    reliability: varchar("reliability", { length: 32 }).notNull().default("UNVERIFIED"), // VERIFIED | UNVERIFIED | LEGACY_UNVERIFIED
+    isVerified: boolean("is_verified").notNull().default(false),
+    profileUrl: text("profile_url"),
+    displayName: text("display_name"),
+    avatarUrl: text("avatar_url"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("participants_channel_participant_uniq").on(t.channelAccountId, t.participantId),
+    index("participants_channel_sender_kind_idx").on(t.channelAccountId, t.senderKind),
+  ]
+);
+
+// 3c. Reply Policy Members (explicit member lists for reply eligibility)
+export const replyPolicyMembers = pgTable(
+  "reply_policy_members",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    participantId: text("participant_id").notNull(),
+    policyMode: varchar("policy_mode", { length: 32 }).notNull().default("EXCLUDE"), // EXCLUDE | INCLUDE
+    notes: text("notes"),
+    addedBy: text("added_by"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("reply_policy_members_channel_participant_uniq").on(t.channelAccountId, t.participantId),
+  ]
+);
+
 // 4. Conversations
 export const conversations = pgTable(
   "conversations",
@@ -79,11 +125,13 @@ export const conversations = pgTable(
       .notNull()
       .references(() => channelAccounts.id, { onDelete: "cascade" }),
     customerId: uuid("customer_id")
-      .notNull()
-      .references(() => customers.id, { onDelete: "cascade" }),
+      .references(() => customers.id, { onDelete: "set null" }),
     externalThreadId: text("external_thread_id").notNull(),
     externalThreadRef: text("external_thread_ref").notNull(),
     status: varchar("status", { length: 32 }).notNull().default("WAITING_CUSTOMER"),
+    threadKind: varchar("thread_kind", { length: 32 }).notNull().default("UNKNOWN"), // DIRECT | GROUP | UNKNOWN
+    title: text("title"),
+    reliability: varchar("reliability", { length: 32 }).notNull().default("UNVERIFIED"), // VERIFIED | UNVERIFIED | LEGACY_UNVERIFIED
     inboundVersion: integer("inbound_version").notNull().default(0),
     lastInboundAt: timestamp("last_inbound_at", { withTimezone: true }),
     lastOutboundAt: timestamp("last_outbound_at", { withTimezone: true }),
@@ -101,6 +149,7 @@ export const conversations = pgTable(
     uniqueIndex("conversations_channel_ext_thread_uniq").on(t.channelAccountId, t.externalThreadId),
     index("conversations_status_idx").on(t.status),
     index("conversations_last_inbound_idx").on(t.lastInboundAt),
+    index("conversations_thread_kind_idx").on(t.threadKind),
   ]
 );
 
@@ -117,6 +166,14 @@ export const inboundMessages = pgTable(
       .references(() => conversations.id, { onDelete: "cascade" }),
     sourceMessageId: text("source_message_id").notNull(),
     senderExternalId: text("sender_external_id"),
+    senderParticipantId: text("sender_participant_id"),
+    senderKind: varchar("sender_kind", { length: 32 }).notNull().default("UNKNOWN"),
+    senderReliability: varchar("sender_reliability", { length: 32 }).notNull().default("UNVERIFIED"),
+    eventTimestamp: timestamp("event_timestamp", { withTimezone: true }),
+    observedTimestamp: timestamp("observed_timestamp", { withTimezone: true }),
+    timestampProvenance: varchar("timestamp_provenance", { length: 32 }).notNull().default("OBSERVED"),
+    timestampPrecision: varchar("timestamp_precision", { length: 32 }).notNull().default("UNKNOWN"),
+    timestamps: jsonb("timestamps").$type<Record<string, unknown>>(),
     text: text("text").notNull(),
     textHash: varchar("text_hash", { length: 64 }).notNull(),
     inboundVersion: integer("inbound_version").notNull().default(1),
@@ -127,6 +184,7 @@ export const inboundMessages = pgTable(
   (t) => [
     uniqueIndex("inbound_messages_channel_src_msg_uniq").on(t.channelAccountId, t.sourceMessageId),
     index("inbound_messages_conv_received_idx").on(t.conversationId, t.receivedAt),
+    index("inbound_messages_conv_sender_hash_time_idx").on(t.conversationId, t.senderParticipantId, t.textHash, t.receivedAt),
   ]
 );
 
@@ -144,6 +202,14 @@ export const messages = pgTable(
     externalMessageId: text("external_message_id").notNull(),
     direction: varchar("direction", { length: 16 }).notNull(), // INBOUND | OUTBOUND
     actor: varchar("actor", { length: 32 }).notNull().default("SYSTEM"), // AI | MANUAL_OWNER | SYSTEM
+    senderParticipantId: text("sender_participant_id"),
+    senderKind: varchar("sender_kind", { length: 32 }).notNull().default("UNKNOWN"),
+    senderReliability: varchar("sender_reliability", { length: 32 }).notNull().default("UNVERIFIED"),
+    eventTimestamp: timestamp("event_timestamp", { withTimezone: true }),
+    observedTimestamp: timestamp("observed_timestamp", { withTimezone: true }),
+    timestampProvenance: varchar("timestamp_provenance", { length: 32 }).notNull().default("OBSERVED"),
+    timestampPrecision: varchar("timestamp_precision", { length: 32 }).notNull().default("UNKNOWN"),
+    timestamps: jsonb("timestamps").$type<Record<string, unknown>>(),
     text: text("text").notNull(),
     textHash: varchar("text_hash", { length: 64 }).notNull(),
     inboundVersion: integer("inbound_version").notNull().default(0),
@@ -155,6 +221,37 @@ export const messages = pgTable(
   (t) => [
     uniqueIndex("messages_channel_ext_msg_uniq").on(t.channelAccountId, t.externalMessageId),
     index("messages_conv_timestamp_idx").on(t.conversationId, t.timestamp),
+    index("messages_conv_sender_hash_time_idx").on(t.conversationId, t.senderParticipantId, t.textHash, t.timestamp),
+  ]
+);
+
+// 6b. Reply Eligibility Decisions (evaluated per inbound message with LIVE/SHADOW modes)
+export const replyEligibilityDecisions = pgTable(
+  "reply_eligibility_decisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
+    inboundMessageId: uuid("inbound_message_id")
+      .notNull()
+      .references(() => inboundMessages.id, { onDelete: "cascade" }),
+    evaluationMode: varchar("evaluation_mode", { length: 32 }).notNull().default("LIVE"), // LIVE | SHADOW
+    decision: varchar("decision", { length: 32 }).notNull(), // ELIGIBLE | INELIGIBLE
+    eligible: boolean("eligible").notNull(),
+    reasonCode: varchar("reason_code", { length: 64 }).notNull(),
+    reason: text("reason").notNull(),
+    precedenceStep: varchar("precedence_step", { length: 64 }).notNull(),
+    details: jsonb("details").$type<Record<string, unknown>>().default({}),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().default({}),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true }).notNull().defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("reply_eligibility_decisions_inbound_mode_uniq").on(t.inboundMessageId, t.evaluationMode),
+    index("reply_eligibility_decisions_conv_idx").on(t.conversationId, t.evaluatedAt),
+    index("reply_eligibility_decisions_channel_idx").on(t.channelAccountId, t.evaluatedAt),
   ]
 );
 
@@ -503,9 +600,12 @@ export const outboxEvents = pgTable(
 // Relations
 export const channelAccountsRelations = relations(channelAccounts, ({ many }) => ({
   customers: many(customers),
+  participants: many(participants),
+  replyPolicyMembers: many(replyPolicyMembers),
   conversations: many(conversations),
   messages: many(messages),
   inboundMessages: many(inboundMessages),
+  replyEligibilityDecisions: many(replyEligibilityDecisions),
   turns: many(turns),
   jobs: many(jobs),
   outboundActions: many(outboundActions),
@@ -521,6 +621,47 @@ export const customersRelations = relations(customers, ({ one, many }) => ({
   conversations: many(conversations),
 }));
 
+export const participantsRelations = relations(participants, ({ one }) => ({
+  channelAccount: one(channelAccounts, {
+    fields: [participants.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+}));
+
+export const replyPolicyMembersRelations = relations(replyPolicyMembers, ({ one }) => ({
+  channelAccount: one(channelAccounts, {
+    fields: [replyPolicyMembers.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+}));
+
+export const replyEligibilityDecisionsRelations = relations(replyEligibilityDecisions, ({ one }) => ({
+  channelAccount: one(channelAccounts, {
+    fields: [replyEligibilityDecisions.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+  conversation: one(conversations, {
+    fields: [replyEligibilityDecisions.conversationId],
+    references: [conversations.id],
+  }),
+  inboundMessage: one(inboundMessages, {
+    fields: [replyEligibilityDecisions.inboundMessageId],
+    references: [inboundMessages.id],
+  }),
+}));
+
+export const inboundMessagesRelations = relations(inboundMessages, ({ one, many }) => ({
+  conversation: one(conversations, {
+    fields: [inboundMessages.conversationId],
+    references: [conversations.id],
+  }),
+  channelAccount: one(channelAccounts, {
+    fields: [inboundMessages.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+  replyEligibilityDecisions: many(replyEligibilityDecisions),
+}));
+
 export const conversationsRelations = relations(conversations, ({ one, many }) => ({
   channelAccount: one(channelAccounts, {
     fields: [conversations.channelAccountId],
@@ -532,6 +673,7 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   }),
   messages: many(messages),
   inboundMessages: many(inboundMessages),
+  replyEligibilityDecisions: many(replyEligibilityDecisions),
   turns: many(turns),
   outboundActions: many(outboundActions),
   events: many(conversationEvents),

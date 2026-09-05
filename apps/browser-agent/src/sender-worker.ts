@@ -8,7 +8,7 @@ import type {
   JobExecutionContext,
   Sql,
 } from "@messenger/db";
-import { channelAccounts, JobRepository, JobRunner } from "@messenger/db";
+import { channelAccounts, JobRepository, JobRunner, ReplyPolicyService } from "@messenger/db";
 import { eq } from "drizzle-orm";
 import type { ChannelAdapter, PreSendMarker } from "@messenger/channel";
 import type { OutboundJobPayload } from "@messenger/contracts";
@@ -27,6 +27,8 @@ export class SenderWorkerService {
   private activeTypings = new Map<string, ActiveTypingEntry>();
   private cancelAckCallbacks = new Map<string, Array<() => void>>();
 
+  private replyPolicyService: ReplyPolicyService;
+
   constructor(
     private db: Database,
     _redisOrUnused: unknown,
@@ -39,10 +41,12 @@ export class SenderWorkerService {
     private settingsRepo: SettingsRepository,
     private incidentRepo: IncidentRepository,
     customJobRepo?: JobRepository,
-    customSql?: Sql
+    customSql?: Sql,
+    customPolicyService?: ReplyPolicyService
   ) {
     this.jobRepo = customJobRepo || new JobRepository(db);
     this.sql = customSql || null;
+    this.replyPolicyService = customPolicyService || new ReplyPolicyService(db);
   }
 
   setSql(sql: Sql): void {
@@ -225,6 +229,52 @@ export class SenderWorkerService {
       return;
     }
 
+    // Re-check policy revision & eligibility before typing
+    if (actor === "AI") {
+      const policyResult = await this.replyPolicyService.recheckEligibility({
+        channelAccountId,
+        conversationId,
+        inboundVersion,
+        conversation: convData.conversation,
+      });
+
+      if (!policyResult.eligible) {
+        console.warn(
+          `[Sender Worker] Inbound v${inboundVersion} for conv ${conversationId} became ineligible before typing (${policyResult.reasonCode}): ${policyResult.reason}. Aborting action.`
+        );
+        if (this.outboundRepo.transitionStatus) {
+          await this.outboundRepo
+            .transitionStatus(actionId, "PENDING", "CANCELLED", { ownerToken, fencingEpoch })
+            .catch(() => {});
+        }
+        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+          errorMessage: `Policy ineligible: ${policyResult.reason}`,
+          ownerToken,
+          fencingEpoch,
+        });
+
+        await this.eventRepo.recordEvent({
+          channelAccountId,
+          conversationId,
+          type: "AI_CANCELLED_STALE",
+          inboundVersion,
+          actor: "BROWSER_AGENT",
+          payload: { actionId, reason: "POLICY_INELIGIBLE", reasonCode: policyResult.reasonCode },
+        });
+        return;
+      }
+    }
+
+    // Align dynamic business timezone before opening thread/processing
+    const settings = await this.settingsRepo.getSettings(channelAccountId);
+    if (settings?.settings?.businessTimeZone && typeof this.adapter.setTimeZone === "function") {
+      const needsRecreation = this.adapter.setTimeZone(settings.settings.businessTimeZone);
+      if (needsRecreation && typeof this.adapter.reinitializeContext === "function") {
+        console.log(`[Sender Worker] Aligning browser context timezone to ${settings.settings.businessTimeZone}...`);
+        await this.adapter.reinitializeContext();
+      }
+    }
+
     // 3. Validate thread navigation in sender page
     const threadOpened = await this.adapter.openConversation(externalThreadRef);
     if (!threadOpened) {
@@ -283,7 +333,6 @@ export class SenderWorkerService {
     });
 
     // 6. Type draft with human-like pacing & abortable signal
-    const settings = await this.settingsRepo.getSettings(channelAccountId);
     const typingResult = await this.adapter.typeDraft(text, {
       targetWpmMin: settings.settings.typingTargetWpmMin,
       targetWpmMax: settings.settings.typingTargetWpmMax,
@@ -313,7 +362,7 @@ export class SenderWorkerService {
       return;
     }
 
-    // 7. Verify version right before Enter to guard against late races
+    // 7. Verify version and policy right before Enter to guard against late races
     const preSendCheck = await this.convRepo.getConversationById(conversationId);
     if (preSendCheck && preSendCheck.conversation.inboundVersion > inboundVersion) {
       console.warn(`[Sender Worker] Stale inbound version detected right before send: expected v${inboundVersion}, found v${preSendCheck.conversation.inboundVersion}`);
@@ -336,6 +385,39 @@ export class SenderWorkerService {
         payload: { actionId, reason: "inbound_bumped_pre_enter" },
       });
       return;
+    }
+
+    if (actor === "AI") {
+      const preSendPolicy = await this.replyPolicyService.recheckEligibility({
+        channelAccountId,
+        conversationId,
+        inboundVersion,
+        conversation: preSendCheck?.conversation ?? convData.conversation,
+      });
+      if (!preSendPolicy.eligible) {
+        console.warn(
+          `[Sender Worker] Policy disallowed reply right before send (${preSendPolicy.reasonCode}): ${preSendPolicy.reason}`
+        );
+        await this.adapter.clearComposer();
+        this.activeTypings.delete(conversationId);
+        cancelAck();
+
+        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+          errorMessage: `Policy ineligible pre-enter: ${preSendPolicy.reason}`,
+          ownerToken,
+          fencingEpoch,
+        });
+
+        await this.eventRepo.recordEvent({
+          channelAccountId,
+          conversationId,
+          type: "TYPING_ABORTED",
+          inboundVersion,
+          actor,
+          payload: { actionId, reason: "policy_disallowed_pre_enter", reasonCode: preSendPolicy.reasonCode },
+        });
+        return;
+      }
     }
 
     // 8. Atomic CAS TYPING -> SEND_INTENT immediately before Enter

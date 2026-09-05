@@ -11,7 +11,7 @@ import type {
   JobRepository,
   JobExecutionContext,
 } from "@messenger/db";
-import { aiRuns, aiDrafts } from "@messenger/db";
+import { aiRuns, aiDrafts, ReplyPolicyService } from "@messenger/db";
 import type { AiReplyGenerator } from "@messenger/ai";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
@@ -35,6 +35,7 @@ export interface AiHandlerDeps {
   broadcaster: OutboxBroadcaster;
   aiGenerator: AiReplyGenerator;
   jobRepo?: JobRepository;
+  replyPolicyService?: ReplyPolicyService;
 }
 
 export function createAiHandler(deps: AiHandlerDeps) {
@@ -52,6 +53,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
     aiGenerator,
     jobRepo,
   } = deps;
+  const replyPolicyService = deps.replyPolicyService ?? new ReplyPolicyService(db);
 
   return async function handleAi(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as AiJobPayload;
@@ -97,6 +99,37 @@ export function createAiHandler(deps: AiHandlerDeps) {
       console.log(
         `[AiHandler] Skipping conversation ${conversationId}: manualMode=${conversation.manualMode}, blocked=${conversation.isBlocked}`
       );
+      return;
+    }
+
+    // Re-check policy revision & eligibility before AI generation
+    const policyResult = await replyPolicyService.recheckEligibility({
+      channelAccountId,
+      conversationId,
+      inboundVersion,
+      conversation,
+    });
+
+    if (!policyResult.eligible) {
+      console.warn(
+        `[AiHandler] Inbound v${inboundVersion} for conv ${conversationId} became ineligible before AI generation (${policyResult.reasonCode}): ${policyResult.reason}. Cancelling.`
+      );
+      if (turnId && typeof turnRepo.cancelTurn === "function") {
+        await turnRepo.cancelTurn(turnId, `Policy ineligible: ${policyResult.reason}`);
+      }
+      await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_CANCELLED_STALE",
+        inboundVersion,
+        actor: "AI_WORKER",
+        payload: {
+          reason: "POLICY_INELIGIBLE",
+          reasonCode: policyResult.reasonCode,
+          details: policyResult.details,
+        },
+      });
       return;
     }
 
