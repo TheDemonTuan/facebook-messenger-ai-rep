@@ -616,16 +616,17 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           botParticipantId: this.botParticipantId,
           botProfileUrl: this.botProfileUrl,
         });
-      } catch (err: any) {
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
         const isNav =
-          err?.message?.includes("Execution context was destroyed") ||
-          err?.message?.includes("navigation") ||
-          err?.message?.includes("Target closed");
+          message.includes("Execution context was destroyed") ||
+          message.includes("navigation") ||
+          message.includes("Target closed");
         if (isNav && attempt < 3) {
           await new Promise((r) => setTimeout(r, 400 * attempt));
           continue;
         }
-        console.warn(`[BrowserAdapter] Error reading bubbles from page (attempt ${attempt}):`, err?.message || err);
+        console.warn(`[BrowserAdapter] Error reading bubbles from page (attempt ${attempt}):`, message);
         return {
           ok: false,
           bubbles: [],
