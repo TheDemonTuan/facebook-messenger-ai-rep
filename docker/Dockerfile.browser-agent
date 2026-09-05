@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # 1. Builder stage
-FROM mcr.microsoft.com/playwright:v1.50.1-noble AS builder
+FROM mcr.microsoft.com/playwright:v1.62.1-noble AS builder
 WORKDIR /app
 
 # Install Bun for compilation
@@ -30,7 +30,7 @@ COPY apps/browser-agent/ ./apps/browser-agent/
 RUN bun run --filter='@messenger/*' build
 
 # 2. Production runtime stage
-FROM mcr.microsoft.com/playwright:v1.50.1-noble AS runner
+FROM mcr.microsoft.com/playwright:v1.62.1-noble AS runner
 WORKDIR /app
 
 # Install Xvfb, VNC, noVNC, and Bun runtime
