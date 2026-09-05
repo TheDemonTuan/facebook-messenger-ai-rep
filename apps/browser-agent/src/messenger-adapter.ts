@@ -7,7 +7,6 @@ import type {
   ActiveConversationRef,
 } from "@messenger/contracts";
 import path from "node:path";
-import { createHash } from "node:crypto";
 
 export interface PlaywrightAdapterOptions {
   profileDir: string;
@@ -348,7 +347,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
         return { bubbles, isDegraded, degradedReason };
       });
-    } catch (err) {
+    } catch (_err) {
       return {
         bubbles: [],
         isDegraded: false,

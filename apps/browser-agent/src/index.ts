@@ -125,12 +125,18 @@ async function main() {
 
   try {
     fs.writeFileSync(HEARTBEAT_FILE, Date.now().toString());
-  } catch {}
+  } catch {
+    // ignore initial heartbeat write failure
+  }
 
   const shutdown = async (signal: string) => {
     console.log(`\nReceived ${signal}. Shutting down Browser Agent...`);
     clearInterval(heartbeatInterval);
-    try { fs.unlinkSync(HEARTBEAT_FILE); } catch {}
+    try {
+      fs.unlinkSync(HEARTBEAT_FILE);
+    } catch {
+      // ignore cleanup unlink error
+    }
     await senderWorker.stop();
     await adapter.close();
     await closeDb();

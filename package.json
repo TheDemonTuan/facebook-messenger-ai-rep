@@ -10,10 +10,10 @@
   ],
   "scripts": {
     "build": "bun run --filter='!@messenger/dashboard' build && bun run --filter='@messenger/dashboard' build",
-    "test": "vitest run",
+    "test": "bun run --filter='!@messenger/dashboard' build && vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
-    "typecheck": "bun run --workspaces typecheck",
+    "test:coverage": "bun run --filter='!@messenger/dashboard' build && vitest run --coverage",
+    "typecheck": "bun run --filter='!@messenger/dashboard' build && bun run --workspaces typecheck",
     "lint": "eslint .",
     "db:generate": "bun run --filter=@messenger/db db:generate",
     "db:migrate": "bun run --filter=@messenger/db db:migrate",

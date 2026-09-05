@@ -84,8 +84,8 @@ jobs:
 
       - run: bun install --frozen-lockfile
       - run: bun run lint
-      - run: bun run typecheck
       - run: bun run build
+      - run: bun run typecheck
       - run: bun run test
       - name: Verify database schema and migrations are in sync
         run: |

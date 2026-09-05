@@ -1,4 +1,6 @@
-import { buildCoreServer, type CoreServerContext } from "./server.js";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { buildCoreServer } from "./server.js";
 import { getEnv } from "@messenger/config";
 import { closeDb } from "@messenger/db";
 
@@ -12,12 +14,12 @@ export * from "./sse/outbox-broadcaster.js";
 export * from "./jobs/scheduler.js";
 
 async function main() {
-  const env = getEnv();
+  getEnv();
   const port = parseInt(process.env.CORE_PORT || process.env.PORT || "3000", 10);
   const host = process.env.HOST || "0.0.0.0";
 
   console.log("[Core] Booting Core Application (Control-Plane + Scheduler + AI-Worker)...");
-  const context: CoreServerContext = await buildCoreServer();
+  const context = await buildCoreServer();
 
   // 1. Start Job Runner & background tasks
   await context.jobService.start();
@@ -71,7 +73,8 @@ async function main() {
 }
 
 // Auto-run if executed directly
-if (import.meta.url === `file://${process.argv[1]}`) {
+const isDirectRun = Boolean(process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url));
+if (isDirectRun) {
   main().catch((err) => {
     console.error("[Core] Fatal error during startup:", err);
     process.exit(1);

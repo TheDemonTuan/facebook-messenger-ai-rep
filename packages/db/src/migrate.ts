@@ -1,5 +1,5 @@
 import { migrate } from "drizzle-orm/postgres-js/migrator";
-import { getDb, getSql, closeDb } from "./client.js";
+import { getDb, closeDb } from "./client.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
