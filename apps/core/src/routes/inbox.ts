@@ -358,8 +358,10 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               text: text.trim(),
               textHash: action.textHash,
               actor: "MANUAL_OWNER",
-              claimToken: "manual-send-token",
-              fencingToken: 1,
+              claimToken: action.claimToken || "manual-send-token",
+              ownerToken: action.ownerToken || "manual-send-token",
+              fencingToken: action.fencingToken ?? 1,
+              fencingEpoch: action.fencingEpoch ?? 1,
             },
             idempotencyKey: `browser-send:${action.actionId}`,
           });

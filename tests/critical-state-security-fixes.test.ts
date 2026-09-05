@@ -218,7 +218,91 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
       expect(updateStatusCalls).not.toContain("TYPING");
     });
 
-    it("aborts processing immediately if PENDING -> TYPING transition fails", async () => {
+    it("uses the outbound action ownership instead of the browser job lease", async () => {
+      const adapter = new MockChannelAdapter("personal-messenger");
+      adapter.abortOnType = true;
+
+      const mockDb = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([
+                { id: "personal-messenger", status: "RUNNING", isSuspended: false, isPaused: false },
+              ]),
+            }),
+          }),
+        }),
+      } as unknown as Database;
+
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-owner-1",
+            inboundVersion: 1,
+            manualMode: false,
+            externalThreadRef: "https://www.facebook.com/messages/t/thread-owner-1",
+          },
+          customer: { name: "Customer Owner" },
+        }),
+      } as unknown as ConversationRepository;
+
+      const mockOutboundRepo = {
+        transitionStatus: vi.fn().mockResolvedValue({ id: "action-owner-1", status: "TYPING" }),
+        updateStatus: vi.fn().mockResolvedValue({ id: "action-owner-1", status: "ABORTED" }),
+      } as unknown as OutboundRepository;
+
+      const senderWorker = new SenderWorkerService(
+        mockDb,
+        null,
+        adapter,
+        null,
+        mockConvRepo,
+        null,
+        mockOutboundRepo,
+        { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository,
+        {
+          getSettings: vi.fn().mockResolvedValue({
+            settings: { typingTargetWpmMin: 60, typingTargetWpmMax: 70 },
+          }),
+        } as unknown as SettingsRepository,
+        {} as unknown as IncidentRepository
+      );
+
+      await senderWorker.processAction({
+        actionId: "action-owner-1",
+        channelAccountId: "personal-messenger",
+        conversationId: "conv-owner-1",
+        externalThreadRef: "https://www.facebook.com/messages/t/thread-owner-1",
+        inboundVersion: 1,
+        responseIndex: 0,
+        text: "Xin chao!",
+        textHash: "hash-owner-1",
+        actor: "AI",
+        claimToken: "action-owner",
+        ownerToken: "action-owner",
+        fencingToken: 3,
+        fencingEpoch: 3,
+      }, {
+        job: { payload: {} } as unknown as Job,
+        ownerToken: "browser-job-owner",
+        fencingEpoch: 8,
+        signal: new AbortController().signal,
+      });
+
+      expect(mockOutboundRepo.transitionStatus).toHaveBeenCalledWith(
+        "action-owner-1",
+        "PENDING",
+        "TYPING",
+        { ownerToken: "action-owner", fencingEpoch: 3 }
+      );
+      expect(mockOutboundRepo.updateStatus).toHaveBeenCalledWith(
+        "action-owner-1",
+        "ABORTED",
+        expect.objectContaining({ ownerToken: "action-owner", fencingEpoch: 3 })
+      );
+    });
+
+    it("fails the browser job if PENDING -> TYPING transition is rejected", async () => {
       const adapter = new MockChannelAdapter("personal-messenger");
       const openConversationSpy = vi.spyOn(adapter, "openConversation");
 
@@ -275,7 +359,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         {} as unknown as IncidentRepository
       );
 
-      await senderWorker.processAction({
+      await expect(senderWorker.processAction({
         actionId: "action-typing-2",
         channelAccountId: "personal-messenger",
         conversationId: "conv-typing-2",
@@ -285,13 +369,84 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         text: "Xin chao!",
         textHash: "hash-typing-2",
         actor: "AI",
-      });
+      })).rejects.toThrow("could not start typing");
 
       // Did not record TYPING_STARTED event because transition failed
       expect(mockEventRepo.recordEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "TYPING_STARTED" })
       );
       expect(openConversationSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("fails the browser job without pressing Enter if TYPING -> SEND_INTENT is rejected", async () => {
+      const adapter = new MockChannelAdapter("personal-messenger");
+      const sendDraftSpy = vi.spyOn(adapter, "sendDraft");
+      const clearComposerSpy = vi.spyOn(adapter, "clearComposer");
+
+      const mockDb = {
+        select: vi.fn().mockReturnValue({
+          from: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+              limit: vi.fn().mockResolvedValue([
+                { id: "personal-messenger", status: "RUNNING", isSuspended: false, isPaused: false },
+              ]),
+            }),
+          }),
+        }),
+      } as unknown as Database;
+
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-send-state-1",
+            inboundVersion: 1,
+            manualMode: false,
+            externalThreadRef: "https://www.facebook.com/messages/t/thread-send-state-1",
+          },
+          customer: { name: "Customer Send State" },
+        }),
+      } as unknown as ConversationRepository;
+
+      const mockOutboundRepo = {
+        transitionStatus: vi.fn()
+          .mockResolvedValueOnce({ id: "action-send-state-1", status: "TYPING" })
+          .mockResolvedValueOnce(null),
+        updateStatus: vi.fn(),
+      } as unknown as OutboundRepository;
+
+      const senderWorker = new SenderWorkerService(
+        mockDb,
+        null,
+        adapter,
+        null,
+        mockConvRepo,
+        null,
+        mockOutboundRepo,
+        { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository,
+        {
+          getSettings: vi.fn().mockResolvedValue({
+            settings: { typingTargetWpmMin: 60000, typingTargetWpmMax: 60000 },
+          }),
+        } as unknown as SettingsRepository,
+        {} as unknown as IncidentRepository
+      );
+
+      await expect(senderWorker.processAction({
+        actionId: "action-send-state-1",
+        channelAccountId: "personal-messenger",
+        conversationId: "conv-send-state-1",
+        externalThreadRef: "https://www.facebook.com/messages/t/thread-send-state-1",
+        inboundVersion: 1,
+        responseIndex: 0,
+        text: "Xin chao!",
+        textHash: "hash-send-state-1",
+        actor: "AI",
+        claimToken: "action-owner",
+        fencingToken: 2,
+      })).rejects.toThrow("could not enter the send state");
+
+      expect(clearComposerSpy).toHaveBeenCalledTimes(1);
+      expect(sendDraftSpy).not.toHaveBeenCalled();
     });
   });
 

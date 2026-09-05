@@ -195,6 +195,10 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         createAction: vi.fn().mockResolvedValue({
           actionId: "action-uuid-1",
           textHash: "hash-1",
+          claimToken: "action-owner-1",
+          ownerToken: "action-owner-1",
+          fencingToken: 4,
+          fencingEpoch: 4,
         }),
       };
 
@@ -264,6 +268,10 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
             conversationId: "conv-1",
             inboundVersion: 3,
             text: "Xin chao quy khach!",
+            claimToken: "action-owner-1",
+            ownerToken: "action-owner-1",
+            fencingToken: 4,
+            fencingEpoch: 4,
           }),
         })
       );

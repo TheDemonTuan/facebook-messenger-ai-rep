@@ -152,8 +152,8 @@ export class SenderWorkerService {
       actor,
     } = data;
 
-    const ownerToken = ctx?.ownerToken || data.ownerToken || data.claimToken || "browser-sender";
-    const fencingEpoch = ctx?.fencingEpoch ?? data.fencingEpoch ?? data.fencingToken ?? 0;
+    const ownerToken = data.ownerToken || data.claimToken || ctx?.ownerToken || "browser-sender";
+    const fencingEpoch = data.fencingEpoch ?? data.fencingToken ?? ctx?.fencingEpoch ?? 0;
 
     console.log(`[Sender Worker] Processing outbound action ${actionId} (conv=${conversationId}, v=${inboundVersion}, actor=${actor})`);
 
@@ -249,8 +249,7 @@ export class SenderWorkerService {
       : await this.outboundRepo.updateStatus(actionId, "TYPING", { ownerToken, fencingEpoch });
 
     if (!typingAction) {
-      console.warn(`[Sender Worker] Failed to transition action ${actionId} to TYPING (may have been cancelled or superseded).`);
-      return;
+      throw new Error(`Outbound action ${actionId} could not start typing because its state or ownership changed`);
     }
 
     await this.eventRepo.recordEvent({
@@ -356,11 +355,10 @@ export class SenderWorkerService {
     }
 
     if (!casSendIntentSuccess) {
-      console.warn(`[Sender Worker] CAS transition TYPING -> SEND_INTENT failed for action ${actionId}. Aborting Enter.`);
       await this.adapter.clearComposer();
       this.activeTypings.delete(conversationId);
       cancelAck();
-      return;
+      throw new Error(`Outbound action ${actionId} could not enter the send state because its state or ownership changed`);
     }
 
     await this.eventRepo.recordEvent({
