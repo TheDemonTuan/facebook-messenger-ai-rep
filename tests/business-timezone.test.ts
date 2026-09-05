@@ -402,7 +402,10 @@ describe("PR 4: Centralized Business Timezone Architecture", () => {
         mockSettingsRepo as never,
         {} as never,
         {} as never,
-        null as never
+        null as never,
+        {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService
       );
 
       await worker.processAction({

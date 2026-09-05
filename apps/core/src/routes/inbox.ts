@@ -16,10 +16,14 @@ import {
   aiRuns,
   outboundActions,
   channelAccounts,
+  participants,
+  inboundMessages,
+  replyEligibilityDecisions,
+  sanitizeApiOutput,
 } from "@messenger/db";
-import { eq, and, desc, sql, ne } from "drizzle-orm";
+import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
-import type { SessionUser } from "@messenger/contracts";
+import { getHumanReadableReason, type SessionUser } from "@messenger/contracts";
 import { requireRole } from "../auth/roles.js";
 
 export interface InboxRoutesOptions {
@@ -114,7 +118,6 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           const fallbackCustomer = {
             id: r.conversation.customerId ?? "00000000-0000-0000-0000-000000000000",
             channelAccountId: r.conversation.channelAccountId,
-            externalCustomerId: r.conversation.externalThreadId,
             name: r.conversation.title || defaultName,
             avatarUrl: null,
             notes: null,
@@ -127,14 +130,16 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           };
         });
 
-        return reply.send({
-          conversations: safeRows,
-          total,
-          limit,
-          offset,
-          hasMore,
-          nextCursor,
-        });
+        return reply.send(
+          sanitizeApiOutput({
+            conversations: safeRows,
+            total,
+            limit,
+            offset,
+            hasMore,
+            nextCursor,
+          })
+        );
       }
     );
 
@@ -162,7 +167,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           }
         }
 
-        const [convMessages, runs, actions, events] = await Promise.all([
+        const [convMessages, runs, actions, events, decisions, inbounds] = await Promise.all([
           db
             .select()
             .from(messages)
@@ -182,11 +187,94 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             .orderBy(desc(outboundActions.createdAt))
             .limit(10),
           eventRepo.getRecentEvents(conversationId, 30),
+          db
+            .select()
+            .from(replyEligibilityDecisions)
+            .where(eq(replyEligibilityDecisions.conversationId, conversationId))
+            .orderBy(desc(replyEligibilityDecisions.evaluatedAt))
+            .limit(50),
+          db
+            .select({ id: inboundMessages.id, sourceMessageId: inboundMessages.sourceMessageId })
+            .from(inboundMessages)
+            .where(eq(inboundMessages.conversationId, conversationId))
+            .limit(100),
         ]);
 
-        const chronologicalMessages = [...convMessages].sort(
-          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        const inboundMap = new Map<string, string>();
+        for (const ib of inbounds) {
+          inboundMap.set(ib.id, ib.sourceMessageId);
+        }
+        const decisionBySourceId = new Map<string, typeof decisions[0]>();
+        for (const d of decisions) {
+          const srcId = inboundMap.get(d.inboundMessageId);
+          if (srcId && !decisionBySourceId.has(srcId)) {
+            decisionBySourceId.set(srcId, d);
+          }
+        }
+
+        const participantIds = Array.from(
+          new Set(
+            convMessages
+              .map((m) => m.senderParticipantId)
+              .filter((id): id is string => Boolean(id && id.trim().length > 0))
+          )
         );
+        const participantMap = new Map<string, { displayName: string | null; avatarUrl: string | null; senderKind: string; isVerified: boolean }>();
+        if (participantIds.length > 0) {
+          try {
+            const parts = await db
+              .select()
+              .from(participants)
+              .where(
+                and(
+                  eq(participants.channelAccountId, channelAccountId),
+                  inArray(participants.participantId, participantIds)
+                )
+              );
+            for (const p of parts) {
+              participantMap.set(p.participantId, {
+                displayName: p.displayName,
+                avatarUrl: p.avatarUrl || p.profileUrl || null,
+                senderKind: p.senderKind,
+                isVerified: p.isVerified,
+              });
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        const chronologicalMessages = [...convMessages]
+          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+          .map((msg) => {
+            const isInbound = msg.direction === "INBOUND";
+            const part = msg.senderParticipantId ? participantMap.get(msg.senderParticipantId) : null;
+            const decision = decisionBySourceId.get(msg.externalMessageId);
+            const defaultSenderName = isInbound
+              ? (part?.displayName || convData.customer?.name || (convData.conversation.threadKind === "GROUP" ? "Thành viên nhóm" : "Khách hàng Messenger"))
+              : (msg.actor === "AI" ? "Trợ lý AI" : (msg.actor === "MANUAL_OWNER" ? "Nhân viên hỗ trợ" : "Hệ thống"));
+            const senderAvatar = isInbound ? (part?.avatarUrl || convData.customer?.avatarUrl || null) : null;
+            const skipReason = decision
+              ? {
+                  decision: decision.decision,
+                  eligible: decision.eligible,
+                  reasonCode: decision.reasonCode,
+                  reason: decision.reason,
+                  humanReadableReason: getHumanReadableReason(decision.reasonCode, decision.reason),
+                  precedenceStep: decision.precedenceStep,
+                  evaluationMode: decision.evaluationMode,
+                }
+              : null;
+
+            return {
+              ...msg,
+              senderName: defaultSenderName,
+              avatarUrl: senderAvatar,
+              senderKind: part?.senderKind || msg.senderKind,
+              isVerified: part?.isVerified ?? false,
+              skipReason,
+            };
+          });
 
         const oldestMessage = convMessages[convMessages.length - 1];
         const nextMessageCursor =
@@ -194,15 +282,17 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             ? new Date(oldestMessage.timestamp).toISOString()
             : null;
 
-        return reply.send({
-          ...convData,
-          messages: chronologicalMessages,
-          nextMessageCursor,
-          hasMoreMessages: Boolean(nextMessageCursor),
-          aiRuns: runs,
-          outboundActions: actions,
-          events,
-        });
+        return reply.send(
+          sanitizeApiOutput({
+            ...convData,
+            messages: chronologicalMessages,
+            nextMessageCursor,
+            hasMoreMessages: Boolean(nextMessageCursor),
+            aiRuns: runs,
+            outboundActions: actions,
+            events,
+          })
+        );
       }
     );
 

@@ -57,6 +57,34 @@ export function sanitizeSettingsForSave(
   if (typeof input.businessTimeZone === "string" && input.businessTimeZone.trim().length > 0) {
     sanitized.businessTimeZone = input.businessTimeZone.trim();
   }
+  if (input.replyMode === "EVERYONE_EXCEPT" || input.replyMode === "ONLY_SELECTED") {
+    sanitized.replyMode = input.replyMode;
+  }
+  if (typeof input.directRepliesEnabled === "boolean") {
+    sanitized.directRepliesEnabled = input.directRepliesEnabled;
+  }
+  if (typeof input.groupRepliesEnabled === "boolean") {
+    sanitized.groupRepliesEnabled = input.groupRepliesEnabled;
+  }
+  if (typeof input.pageRepliesEnabled === "boolean") {
+    sanitized.pageRepliesEnabled = input.pageRepliesEnabled;
+  }
+  if (typeof input.nonPersonRepliesEnabled === "boolean") {
+    sanitized.nonPersonRepliesEnabled = input.nonPersonRepliesEnabled;
+  }
+  if (typeof input.requireGroupMention === "boolean") {
+    sanitized.requireGroupMention = input.requireGroupMention;
+  }
+  if (Array.isArray(input.selectedParticipantIds)) {
+    sanitized.selectedParticipantIds = (input.selectedParticipantIds as unknown[])
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id) => id.trim());
+  }
+  if (Array.isArray(input.excludedParticipantIds)) {
+    sanitized.excludedParticipantIds = (input.excludedParticipantIds as unknown[])
+      .filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      .map((id) => id.trim());
+  }
 
   // Safety invariant: NEVER include aiBaseUrl or aiApiKey in output
   delete (sanitized as Record<string, unknown>).aiBaseUrl;

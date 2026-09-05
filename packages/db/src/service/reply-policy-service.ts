@@ -48,6 +48,7 @@ export interface RecheckEligibilityParams {
     externalThreadId?: string | null;
     externalThreadRef?: string | null;
   } | null;
+  evaluationMode?: "LIVE" | "SHADOW";
   tx?: DatabaseOrTx;
   now?: Date;
 }
@@ -391,11 +392,12 @@ export class ReplyPolicyService {
       return {
         decision: "INELIGIBLE",
         eligible: false,
-        reasonCode: "CONVERSATION_MANUAL_MODE",
+        reasonCode: "STALE_INBOUND_VERSION",
         reason: `Inbound version advanced: current is ${conv.inboundVersion}, job was ${params.inboundVersion}.`,
         precedenceStep: "HARD_GATES",
         evaluatedAt: now,
         details: { expectedVersion: params.inboundVersion, currentVersion: conv.inboundVersion },
+        evaluationMode: params.evaluationMode ?? "LIVE",
       };
     }
 
@@ -455,6 +457,8 @@ export class ReplyPolicyService {
       };
     }
 
+    const channelMetadata = (channel?.metadata as Record<string, unknown>) || {};
+
     // 2. Fetch corresponding inbound message
     let inboundRows: (typeof inboundMessages.$inferSelect)[] = [];
     try {
@@ -478,53 +482,178 @@ export class ReplyPolicyService {
       !inboundRows[0] ||
       typeof (inboundRows[0] as unknown as { text?: unknown }).text !== "string"
     ) {
-      // In minimal mock unit tests where inbound_messages was not inserted or mocked,
-      // allow if channel is not suspended/paused and conversation is not blocked/manual
       return {
-        decision: "ELIGIBLE",
-        eligible: true,
-        reasonCode: "ELIGIBLE",
-        reason: "Message is eligible for automated reply.",
-        precedenceStep: "ELIGIBLE",
+        decision: "INELIGIBLE",
+        eligible: false,
+        reasonCode: "UNVERIFIED_SENDER_CLASSIFICATION",
+        reason: "Inbound message is missing or unreadable during policy recheck.",
+        precedenceStep: "VERIFIED_CLASSIFICATION",
         evaluatedAt: now,
+        evaluationMode: params.evaluationMode ?? "LIVE",
       };
     }
 
     const inbound = inboundRows[0];
     const rawPayload = (inbound.rawPayload as InboundMessagePayload) || {};
+    const effectiveEvaluationMode = params.evaluationMode ?? "LIVE";
+    const externalThreadId =
+      conv.externalThreadId ||
+      ((rawPayload as Record<string, unknown>).externalThreadId as string) ||
+      "";
 
-    // 3. Re-evaluate with current channel and settings
-    const evaluated = await this.evaluateInbound({
-      channelAccountId: params.channelAccountId,
-      conversationId: params.conversationId,
-      inboundMessageId: inbound.id,
-      payload: {
-        channelAccountId: params.channelAccountId,
-        externalCustomerId: inbound.senderExternalId || "",
-        externalThreadId: conv.externalThreadId || "",
-        externalThreadRef: conv.externalThreadRef || "",
-        externalMessageId: inbound.sourceMessageId || "recheck-msg",
-        text: inbound.text,
-        timestamp: inbound.receivedAt,
-        threadKind: (conv.threadKind as ThreadKind) || rawPayload.threadKind || "UNKNOWN",
-        threadReliability: (conv.reliability as ClassificationReliability) || rawPayload.threadReliability || "UNVERIFIED",
-        senderKind: (inbound.senderKind as SenderKind) || rawPayload.senderKind || "UNKNOWN",
-        senderReliability: (inbound.senderReliability as ClassificationReliability) || rawPayload.senderReliability || "UNVERIFIED",
-        senderExternalId: inbound.senderExternalId,
-        senderParticipantId: inbound.senderParticipantId,
-        participantIdentity: rawPayload.participantIdentity,
-        mentions: rawPayload.mentions ?? [],
-        timestamps: rawPayload.timestamps,
-        eventTimestamp: inbound.eventTimestamp,
-        observedTimestamp: inbound.observedTimestamp,
-        threadEvidence: rawPayload.threadEvidence ?? [],
-        senderEvidence: rawPayload.senderEvidence ?? [],
-      },
-      evaluationMode: "LIVE",
-      tx: params.tx,
+    const botParticipantId =
+      typeof channelMetadata.botParticipantId === "string"
+        ? channelMetadata.botParticipantId
+        : channel?.id;
+    const botProfileUrl =
+      typeof channelMetadata.botProfileUrl === "string"
+        ? channelMetadata.botProfileUrl
+        : undefined;
+
+    // Build context directly without side-effects (no decisionRepo.recordDecision overwrite)
+    const channelContext = {
+      id: params.channelAccountId,
+      accountType: ((channel?.type as ChannelAccountType) || "PERSONAL_MESSENGER"),
+      isSuspended: Boolean(channel?.isSuspended || channel?.status === "SUSPENDED" || channel?.status === "DEGRADED"),
+      isPaused: Boolean(channel?.isPaused || channel?.status === "PAUSED"),
+      botParticipantId,
+      botProfileUrl,
+    };
+
+    const threadContext = {
+      id: params.conversationId ?? undefined,
+      externalThreadId,
+      kind: ((conv.threadKind as ThreadKind) || rawPayload.threadKind || "UNKNOWN"),
+      reliability: ((conv.reliability as ClassificationReliability) || rawPayload.threadReliability || "UNVERIFIED"),
+      isBlocked: Boolean(conv.isBlocked),
+      manualMode: Boolean(conv.manualMode),
+      evidence: rawPayload.threadEvidence ?? [],
+    };
+
+    // Candidate participant ID resolution
+    const externalThreadIdTrimmed = externalThreadId.trim();
+    let candidateParticipantId: string | null = null;
+    if (rawPayload.participantIdentity?.participantId) {
+      const pId = rawPayload.participantIdentity.participantId.trim();
+      if (pId && pId !== externalThreadIdTrimmed) candidateParticipantId = pId;
+    } else if (inbound.senderParticipantId) {
+      const sId = inbound.senderParticipantId.trim();
+      if (sId && sId !== externalThreadIdTrimmed) candidateParticipantId = sId;
+    } else if (inbound.senderExternalId) {
+      const sId = inbound.senderExternalId.trim();
+      if (sId && sId !== externalThreadIdTrimmed) candidateParticipantId = sId;
+    }
+
+    let participantIdentity: VerifiedParticipantIdentity | null = null;
+    let senderKind: SenderKind = (inbound.senderKind as SenderKind) || rawPayload.senderKind || "UNKNOWN";
+    let senderReliability: ClassificationReliability =
+      (inbound.senderReliability as ClassificationReliability) || rawPayload.senderReliability || "UNVERIFIED";
+
+    if (rawPayload.participantIdentity) {
+      if (rawPayload.participantIdentity.participantId.trim() !== externalThreadIdTrimmed) {
+        participantIdentity = {
+          channelAccountId: rawPayload.participantIdentity.channelAccountId || params.channelAccountId,
+          participantId: rawPayload.participantIdentity.participantId.trim(),
+          senderKind: rawPayload.participantIdentity.senderKind || "UNKNOWN",
+          isVerified: Boolean(rawPayload.participantIdentity.isVerified),
+          profileUrl: rawPayload.participantIdentity.profileUrl ?? null,
+          displayName: rawPayload.participantIdentity.displayName ?? null,
+          verifiedAt: rawPayload.participantIdentity.verifiedAt,
+          metadata: rawPayload.participantIdentity.metadata ?? {},
+        };
+        senderKind = participantIdentity.senderKind;
+        senderReliability = participantIdentity.isVerified ? "VERIFIED" : "UNVERIFIED";
+      }
+    } else if (candidateParticipantId) {
+      try {
+        const participantRows = await executor
+          .select()
+          .from(participants)
+          .where(
+            and(
+              eq(participants.channelAccountId, params.channelAccountId),
+              eq(participants.participantId, candidateParticipantId)
+            )
+          )
+          .limit(1);
+        if (participantRows.length > 0 && participantRows[0]?.isVerified) {
+          const p = participantRows[0];
+          participantIdentity = {
+            channelAccountId: p.channelAccountId,
+            participantId: p.participantId,
+            senderKind: (p.senderKind as SenderKind) || "PERSON",
+            isVerified: true,
+            profileUrl: p.profileUrl,
+            displayName: p.displayName,
+            verifiedAt: p.verifiedAt ?? undefined,
+            metadata: (p.metadata as Record<string, unknown>) || {},
+          };
+          senderKind = participantIdentity.senderKind;
+          senderReliability = "VERIFIED";
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const senderContext = {
+      id: candidateParticipantId || undefined,
+      kind: senderKind,
+      reliability: senderReliability,
+      participantIdentity,
+      evidence: rawPayload.senderEvidence ?? [],
+    };
+
+    const messageContext = {
+      id: inbound.id,
+      direction: "INBOUND" as const,
+      actor: "SYSTEM" as const,
+      text: inbound.text,
+      mentions: rawPayload.mentions ?? [],
+      timestamps: rawPayload.timestamps,
+      eventTimestamp: inbound.eventTimestamp ?? inbound.receivedAt,
+      observedTimestamp: inbound.observedTimestamp ?? inbound.receivedAt,
+    };
+
+    let settings = SystemSettingsSchema.parse({});
+    try {
+      const res = await this.settingsRepo.getSettings(params.channelAccountId);
+      settings = res.settings;
+    } catch {
+      // defaults
+    }
+
+    let policyIncludeIds: string[] = [];
+    let policyExcludeIds: string[] = [];
+    try {
+      const policyRows = await executor
+        .select()
+        .from(replyPolicyMembers)
+        .where(eq(replyPolicyMembers.channelAccountId, params.channelAccountId));
+      policyIncludeIds = policyRows.filter((m) => m.policyMode === "INCLUDE").map((m) => m.participantId.trim());
+      policyExcludeIds = policyRows.filter((m) => m.policyMode === "EXCLUDE").map((m) => m.participantId.trim());
+    } catch {
+      // ignore
+    }
+
+    const effectiveSettings = {
+      ...settings,
+      selectedParticipantIds: Array.from(new Set([...settings.selectedParticipantIds, ...policyIncludeIds])),
+      excludedParticipantIds: Array.from(new Set([...settings.excludedParticipantIds, ...policyExcludeIds])),
+    };
+
+    const evalResult = evaluateReplyEligibility({
+      channel: channelContext,
+      thread: threadContext,
+      sender: senderContext,
+      message: messageContext,
+      settings: effectiveSettings,
       now,
     });
 
-    return evaluated.result;
+    return {
+      ...evalResult,
+      evaluationMode: effectiveEvaluationMode,
+    };
   }
 }

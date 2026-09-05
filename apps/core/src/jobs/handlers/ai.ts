@@ -114,7 +114,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
       console.warn(
         `[AiHandler] Inbound v${inboundVersion} for conv ${conversationId} became ineligible before AI generation (${policyResult.reasonCode}): ${policyResult.reason}. Cancelling.`
       );
-      if (turnId) {
+      if (turnId && typeof turnRepo.cancelTurn === "function") {
         await turnRepo.cancelTurn(turnId, `Policy ineligible: ${policyResult.reason}`);
       }
       await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");

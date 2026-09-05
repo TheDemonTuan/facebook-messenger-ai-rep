@@ -190,6 +190,7 @@ export const ReplyEligibilityReasonCodeSchema = z.enum([
   "CHANNEL_PAUSED",
   "CONVERSATION_BLOCKED",
   "CONVERSATION_MANUAL_MODE",
+  "STALE_INBOUND_VERSION",
   "DIRECTION_NOT_INBOUND",
   "SELF_MESSAGE",
   // Verified classification

@@ -263,6 +263,36 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
   });
 
   describe("PostgreSQL Job Handlers Execution Flow", () => {
+    const inboundRow = {
+      id: "inbound-1",
+      channelAccountId: "acc-1",
+      conversationId: "conv-101",
+      inboundVersion: 2,
+      text: "Xin chào shop",
+      senderKind: "PERSON",
+      senderReliability: "VERIFIED",
+      rawPayload: {
+        threadKind: "DIRECT",
+        threadReliability: "VERIFIED",
+        senderKind: "PERSON",
+        senderReliability: "VERIFIED",
+        participantIdentity: {
+          channelAccountId: "acc-1",
+          participantId: "user-1",
+          senderKind: "PERSON",
+          isVerified: true,
+        },
+      },
+    };
+
+    const participantRow = {
+      channelAccountId: "acc-1",
+      participantId: "user-1",
+      senderKind: "PERSON",
+      isVerified: true,
+      reliability: "VERIFIED",
+    };
+
     it("Debounce Handler: skips when inboundVersion is stale; creates turn and enqueues AI job when fresh", async () => {
       const conversationRow = {
         id: "conv-101",
@@ -287,6 +317,9 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
                 const tableObj = tbl as { _?: { name?: string }; [key: symbol]: unknown } | null | undefined;
                 const tableName = tableObj?._?.name || (tableObj?.[Symbol.for("drizzle:Name")] as string | undefined);
                 if (tableName === "channel_accounts") return [channelRow];
+                if (tableName === "inbound_messages") return [inboundRow];
+                if (tableName === "participants") return [participantRow];
+                if (tableName === "system_settings" || tableName === "reply_policy_members") return [];
                 return [conversationRow];
               }),
             })),
@@ -391,6 +424,21 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         insert: vi.fn(() => ({
           values: vi.fn(() => ({
             returning: vi.fn().mockResolvedValue([{ id: "run-uuid-1" }]),
+          })),
+        })),
+        select: vi.fn(() => ({
+          from: vi.fn((tbl: unknown) => ({
+            where: vi.fn(() => ({
+              limit: vi.fn(() => {
+                const tableObj = tbl as { _?: { name?: string }; [key: symbol]: unknown } | null | undefined;
+                const tableName = tableObj?._?.name || (tableObj?.[Symbol.for("drizzle:Name")] as string | undefined);
+                if (tableName === "channel_accounts") return [{ id: "acc-1", status: "RUNNING", isPaused: false, isSuspended: false }];
+                if (tableName === "inbound_messages") return [inboundRow];
+                if (tableName === "participants") return [participantRow];
+                if (tableName === "system_settings" || tableName === "reply_policy_members") return [];
+                return [convData.conversation];
+              }),
+            })),
           })),
         })),
       } as unknown as Database;

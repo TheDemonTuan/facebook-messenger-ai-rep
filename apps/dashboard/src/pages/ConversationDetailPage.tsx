@@ -331,12 +331,12 @@ export const ConversationDetailPage: React.FC = () => {
             <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
               Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode)}</strong>
             </div>
-            <details style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b" }}>
-              <summary style={{ cursor: "pointer", color: "#64748b" }}>Chi tiết kỹ thuật</summary>
-              <div style={{ marginTop: "4px", fontSize: "0.72rem", color: "#64748b" }}>
-                <span>Mã luồng: {conv.externalThreadId}</span> • <span>Phiên bản: v{conv.inboundVersion}</span> • <span>Mã nội bộ: {conv.id}</span>
-              </div>
-            </details>
+            <div style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b", display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <span style={{ backgroundColor: "#f1f5f9", padding: "2px 8px", borderRadius: "4px" }}>
+                {conv.threadKind === "GROUP" ? "Nhóm chat Messenger" : "Hội thoại trực tiếp"}
+              </span>
+              <span>Phiên bản tin nhắn: v{conv.inboundVersion}</span>
+            </div>
           </div>
         </div>
 
@@ -575,9 +575,9 @@ export const ConversationDetailPage: React.FC = () => {
           )}
 
           {/* Messages list */}
-          <div style={{ flex: 1, padding: "16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "10px" }}>
+          <div style={{ flex: 1, padding: "16px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "14px" }}>
             {messages.length === 0 ? (
-              <div style={{ margin: "auto", color: "#94a3b8", fontSize: "0.85rem" }}>
+              <div style={{ margin: "auto", color: "#94a3b8", fontSize: "0.85rem", textAlign: "center" }}>
                 Chưa có tin nhắn nào trong hội thoại này
               </div>
             ) : (
@@ -590,8 +590,33 @@ export const ConversationDetailPage: React.FC = () => {
                       display: "flex",
                       flexDirection: "column",
                       alignItems: isInbound ? "flex-start" : "flex-end",
+                      gap: "4px",
                     }}
                   >
+                    {/* Sender snapshot */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.75rem", color: "#64748b" }}>
+                      {isInbound && (
+                        <div style={{ width: "20px", height: "20px", borderRadius: "50%", backgroundColor: "#e2e8f0", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          {msg.avatarUrl ? (
+                            <img src={msg.avatarUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                          ) : (
+                            <UserCheck size={11} color="#64748b" />
+                          )}
+                        </div>
+                      )}
+                      <span style={{ fontWeight: "600", color: isInbound ? "#1e293b" : "#475569" }}>
+                        {msg.senderName || (msg.actor === "AI" ? "Trợ lý AI" : msg.actor === "MANUAL_OWNER" ? "Nhân viên hỗ trợ" : isInbound ? "Khách hàng" : "Hệ thống")}
+                      </span>
+                      {isInbound && msg.isVerified && (
+                        <span title="Người dùng đã xác minh" style={{ color: "#2563eb", display: "inline-flex" }}>
+                          <Check size={12} />
+                        </span>
+                      )}
+                      <span>•</span>
+                      <span>{formatTime(msg.timestamp)}</span>
+                    </div>
+
+                    {/* Message bubble */}
                     <div
                       style={{
                         maxWidth: "80%",
@@ -606,11 +631,33 @@ export const ConversationDetailPage: React.FC = () => {
                     >
                       {msg.text}
                     </div>
-                    <div style={{ fontSize: "0.7rem", color: "#94a3b8", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}>
-                      <span>{msg.actor === "AI" ? "Trợ lý AI" : msg.actor === "MANUAL_OWNER" ? "Nhân viên" : isInbound ? "Khách hàng" : "Hệ thống"}</span>
-                      <span>•</span>
-                      <span>{formatTime(msg.timestamp)}</span>
-                    </div>
+
+                    {/* Readable Skip Reason Badge */}
+                    {msg.skipReason && (
+                      <div
+                        style={{
+                          marginTop: "2px",
+                          maxWidth: "80%",
+                          padding: "6px 10px",
+                          borderRadius: "6px",
+                          backgroundColor: "#fef2f2",
+                          border: "1px solid #fecaca",
+                          color: "#991b1b",
+                          fontSize: "0.75rem",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "2px",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "5px", fontWeight: "600" }}>
+                          <AlertTriangle size={12} color="#dc2626" />
+                          <span>Tự động bỏ qua: {msg.skipReason.humanReadableReason}</span>
+                        </div>
+                        <div style={{ fontSize: "0.7rem", color: "#b91c1c" }}>
+                          Bước kiểm tra: {msg.skipReason.precedenceStep} • Mã: {msg.skipReason.reasonCode} {msg.skipReason.evaluationMode && `• Chế độ: ${msg.skipReason.evaluationMode}`}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })

@@ -541,6 +541,9 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
         eventRepo: mockEventRepo as unknown as EventRepository,
         outboxRepo: { enqueue: vi.fn().mockResolvedValue({ id: "outbox-1" }) } as unknown as OutboxRepository,
         broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) } as unknown as OutboxBroadcaster,
+        replyPolicyService: {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService,
       });
 
       await debounceHandler({

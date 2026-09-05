@@ -162,7 +162,11 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       mockEventRepo,
       { getSettings: vi.fn().mockResolvedValue({ settings: { maxConsecutiveAiReplies: 5 } }) } as unknown as SettingsRepository,
       {} as unknown as IncidentRepository,
-      { updateStatus: vi.fn() } as unknown as JobRepository
+      { updateStatus: vi.fn() } as unknown as JobRepository,
+      undefined,
+      {
+        recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+      } as unknown as ReplyPolicyService
     );
 
     // Action has inboundVersion = 18

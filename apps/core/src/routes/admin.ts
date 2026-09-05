@@ -16,10 +16,18 @@ import {
   aiRuns,
   conversationEvents,
   jobs,
+  participants,
+  replyPolicyMembers,
+  inboundMessages,
+  toSafePersonId,
+  resolveParticipantId,
+  sanitizeApiOutput,
+  ParticipantRepository,
+  PolicyMemberRepository,
   stripSensitiveData,
   sanitizeCustomerOutput,
 } from "@messenger/db";
-import { eq, and, sql, gte, lt, desc } from "drizzle-orm";
+import { eq, and, sql, gte, lt, desc, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import {
   AiApiFormatSchema,
@@ -28,6 +36,7 @@ import {
   isValidAiModel,
   getBusinessDayRange,
   type SessionUser,
+  type SenderKind,
 } from "@messenger/contracts";
 import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
 import { requireRole } from "../auth/roles.js";
@@ -43,6 +52,8 @@ export interface AdminRoutesOptions {
   broadcaster: OutboxBroadcaster;
   requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<SessionUser | null>;
   channelAccountId: string;
+  participantRepo?: ParticipantRepository;
+  policyMemberRepo?: PolicyMemberRepository;
 }
 
 export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsync {
@@ -57,6 +68,9 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     requireAuth,
     channelAccountId,
   } = options;
+
+  const participantRepo = options.participantRepo ?? new ParticipantRepository(db);
+  const policyMemberRepo = options.policyMemberRepo ?? new PolicyMemberRepository(db);
 
   return async function (fastify) {
     fastify.addHook("preHandler", async (request, reply) => {
@@ -142,19 +156,21 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
       const estimatedWaitSeconds = queueList.reduce((acc, curr) => Math.max(acc, curr.estimatedWaitSeconds), 0);
 
-      return reply.send({
-        channelStatus: channel?.status || "RUNNING",
-        channelIsSuspended: channel?.isSuspended || false,
-        channelIsPaused: channel?.isPaused || false,
-        activeConversation: activeConv[0] || null,
-        queueLength: queueList.length,
-        oldestWaitSeconds,
-        estimatedWaitSeconds,
-        todayConversationsCount: todayConvRes[0]?.count || 0,
-        todayMessagesCount: todayMsgRes[0]?.count || 0,
-        openIncidentsCount: openIncidentsRes[0]?.count || 0,
-        businessTimeZone,
-      });
+      return reply.send(
+        sanitizeApiOutput({
+          channelStatus: channel?.status || "RUNNING",
+          channelIsSuspended: channel?.isSuspended || false,
+          channelIsPaused: channel?.isPaused || false,
+          activeConversation: activeConv[0] || null,
+          queueLength: queueList.length,
+          oldestWaitSeconds,
+          estimatedWaitSeconds,
+          todayConversationsCount: todayConvRes[0]?.count || 0,
+          todayMessagesCount: todayMsgRes[0]?.count || 0,
+          openIncidentsCount: openIncidentsRes[0]?.count || 0,
+          businessTimeZone,
+        })
+      );
     });
 
     // 2. Queue list
@@ -169,7 +185,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           .orderBy(desc(jobs.createdAt))
           .limit(jobLimit),
       ]);
-      return reply.send({ items, jobs: jobsList });
+      return reply.send(sanitizeApiOutput({ items, jobs: jobsList }));
     });
 
     fastify.post<{ Params: { conversationId: string } }>(
@@ -269,11 +285,69 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
     // 4. Settings
     fastify.get("/api/settings", async (_request, reply) => {
+      let policyMembers: (typeof replyPolicyMembers.$inferSelect)[] = [];
+      try {
+        if (typeof (policyMemberRepo as unknown as { listMembers?: (id: string) => Promise<typeof replyPolicyMembers.$inferSelect[]> })?.listMembers === "function") {
+          policyMembers = await policyMemberRepo.listMembers(channelAccountId);
+        }
+      } catch {
+        policyMembers = [];
+      }
+
       const [data, aiProvider] = await Promise.all([
         settingsRepo.getSettings(channelAccountId),
         aiConfigRepo.getPublicConfig(channelAccountId),
       ]);
-      return reply.send({ ...data, aiProvider });
+
+      const participantIds = policyMembers.map((m) => m.participantId);
+      let participantRows: (typeof participants.$inferSelect)[] = [];
+      if (participantIds.length > 0 && typeof (db as unknown as { select?: unknown })?.select === "function") {
+        try {
+          participantRows = await db
+            .select()
+            .from(participants)
+            .where(
+              and(
+                eq(participants.channelAccountId, channelAccountId),
+                inArray(participants.participantId, participantIds)
+              )
+            );
+        } catch {
+          participantRows = [];
+        }
+      }
+      const partMap = new Map(participantRows.map((p) => [p.participantId, p]));
+
+      const safeMembers = policyMembers.map((m) => {
+        const p = partMap.get(m.participantId);
+        return {
+          id: toSafePersonId(channelAccountId, m.participantId),
+          name: p?.displayName || "Người dùng",
+          avatarUrl: p?.avatarUrl || p?.profileUrl || null,
+          type: p?.senderKind || "PERSON",
+          policyMode: m.policyMode,
+          notes: m.notes,
+          addedBy: m.addedBy,
+          createdAt: m.createdAt,
+        };
+      });
+
+      const safeSettings = {
+        ...data.settings,
+        selectedParticipantIds: (data.settings?.selectedParticipantIds || []).map((id) =>
+          toSafePersonId(channelAccountId, id)
+        ),
+        excludedParticipantIds: (data.settings?.excludedParticipantIds || []).map((id) =>
+          toSafePersonId(channelAccountId, id)
+        ),
+      };
+
+      return reply.send({
+        settings: safeSettings,
+        revision: data.revision,
+        aiProvider,
+        policyMembers: safeMembers,
+      });
     });
 
     fastify.put<{ Body: { apiFormat?: string; baseUrl?: string; model?: string; apiKey?: string } }>(
@@ -312,7 +386,36 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       reply: { status: (code: number) => { send: (data: unknown) => unknown }; send: (data: unknown) => unknown }
     ) => {
       const user = (request as unknown as { user: SessionUser }).user;
-      const body = (request as unknown as { body: Record<string, unknown> }).body;
+      const body = { ...((request as unknown as { body: Record<string, unknown> }).body || {}) };
+
+      // Map any safe person IDs in selection lists back to internal participant IDs
+      if (Array.isArray(body.selectedParticipantIds)) {
+        body.selectedParticipantIds = body.selectedParticipantIds.map((id: unknown) =>
+          typeof id === "string" ? resolveParticipantId(id, channelAccountId) || id : id
+        );
+      }
+      if (Array.isArray(body.excludedParticipantIds)) {
+        body.excludedParticipantIds = body.excludedParticipantIds.map((id: unknown) =>
+          typeof id === "string" ? resolveParticipantId(id, channelAccountId) || id : id
+        );
+      }
+
+      // Optimistic concurrency check
+      const expectedRevision =
+        typeof body.expectedRevision === "number"
+          ? body.expectedRevision
+          : typeof body.revision === "number"
+          ? body.revision
+          : undefined;
+
+      const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
+      if (expectedRevision !== undefined && currentSettingsData.revision !== expectedRevision) {
+        return reply.status(409).send({
+          error: "Settings conflict: configuration modified by another operator.",
+          currentRevision: currentSettingsData.revision,
+        });
+      }
+
       const parsed = SystemSettingsSchema.partial().safeParse(body);
       if (!parsed.success) {
         return reply.status(400).send({ error: "Invalid settings format", details: parsed.error.issues });
@@ -338,7 +441,21 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       });
 
       await broadcaster.broadcast("settings:updated", { revision: updated.revision });
-      return reply.send(updated);
+
+      const safeSettings = {
+        ...updated.settings,
+        selectedParticipantIds: (updated.settings?.selectedParticipantIds || []).map((id) =>
+          toSafePersonId(channelAccountId, id)
+        ),
+        excludedParticipantIds: (updated.settings?.excludedParticipantIds || []).map((id) =>
+          toSafePersonId(channelAccountId, id)
+        ),
+      };
+
+      return reply.send({
+        settings: safeSettings,
+        revision: updated.revision,
+      });
     };
 
     fastify.post<{ Body: Record<string, unknown> }>(
@@ -352,6 +469,348 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       { preHandler: [requireRole("OWNER")] },
       async (request, reply) => handleUpdateSettings(request, reply)
     );
+
+    // 4b. Searchable People Endpoint (safe names, avatars, type, readable conversation context, duplicate names distinguished via context)
+    const handleSearchPeople = async (
+      request: FastifyRequest<{ Querystring: { q?: string; type?: string; limit?: string } }>,
+      reply: FastifyReply
+    ) => {
+      const q = request.query?.q?.trim().toLowerCase();
+      const typeFilter = request.query?.type?.trim() || "PERSON";
+      const limit = Math.min(Math.max(1, parseInt(request.query?.limit || "20", 10)), 50);
+
+      const conditions = [
+        eq(participants.channelAccountId, channelAccountId),
+        eq(participants.isVerified, true),
+      ];
+
+      if (typeFilter && typeFilter !== "ALL") {
+        conditions.push(eq(participants.senderKind, typeFilter));
+      }
+
+      let filtered: (typeof participants.$inferSelect)[] = [];
+      try {
+        if (participantRepo && typeof participantRepo.searchVerifiedPersons === "function") {
+          filtered = await participantRepo.searchVerifiedPersons(
+            channelAccountId,
+            q,
+            limit,
+            typeFilter as SenderKind
+          );
+        } else {
+          const allParticipants = await db
+            .select()
+            .from(participants)
+            .where(and(...conditions))
+            .orderBy(desc(participants.updatedAt))
+            .limit(limit * 2);
+          filtered = q
+            ? allParticipants.filter((p) => (p.displayName || "").toLowerCase().includes(q))
+            : allParticipants;
+        }
+      } catch {
+        filtered = [];
+      }
+
+      const pIds = filtered.map((p) => p.participantId);
+
+      // Find recent conversation context for these participants
+      const convMap = new Map<string, { title: string | null; lastActive: Date | null }>();
+      if (pIds.length > 0) {
+        try {
+          const recentInbounds = await db
+            .select({
+              senderParticipantId: inboundMessages.senderParticipantId,
+              conversationId: inboundMessages.conversationId,
+              receivedAt: inboundMessages.receivedAt,
+              title: conversations.title,
+              threadKind: conversations.threadKind,
+            })
+            .from(inboundMessages)
+            .innerJoin(conversations, eq(inboundMessages.conversationId, conversations.id))
+            .where(
+              and(
+                eq(inboundMessages.channelAccountId, channelAccountId),
+                inArray(inboundMessages.senderParticipantId, pIds)
+              )
+            )
+            .orderBy(desc(inboundMessages.receivedAt))
+            .limit(100);
+
+          for (const row of recentInbounds) {
+            if (row.senderParticipantId && !convMap.has(row.senderParticipantId)) {
+              convMap.set(row.senderParticipantId, {
+                title: row.title || (row.threadKind === "GROUP" ? "Nhóm chat" : "Hội thoại trực tiếp"),
+                lastActive: row.receivedAt,
+              });
+            }
+          }
+        } catch {
+          // Ignore
+        }
+      }
+
+      // Check current policy membership for these participants
+      let policyRows: (typeof replyPolicyMembers.$inferSelect)[] = [];
+      try {
+        policyRows = await policyMemberRepo.listMembers(channelAccountId);
+      } catch {
+        policyRows = [];
+      }
+      const policyMap = new Map(policyRows.map((m) => [m.participantId, m.policyMode]));
+
+      // Check for duplicate names to distinguish via context
+      const nameCounts = new Map<string, number>();
+      for (const p of filtered) {
+        const name = (p.displayName || "Khách hàng Messenger").trim();
+        nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+      }
+
+      const result = filtered.slice(0, limit).map((p) => {
+        const name = p.displayName || "Khách hàng Messenger";
+        const ctx = convMap.get(p.participantId);
+        const isDuplicate = (nameCounts.get(name.trim()) || 0) > 1;
+
+        let conversationContext = "Khách hàng đã xác minh";
+        if (ctx?.title) {
+          const timeStr = ctx.lastActive ? new Date(ctx.lastActive).toLocaleDateString("vi-VN") : "";
+          conversationContext = timeStr ? `Hội thoại: ${ctx.title} • ${timeStr}` : `Hội thoại: ${ctx.title}`;
+        }
+
+        return {
+          id: toSafePersonId(channelAccountId, p.participantId),
+          name: isDuplicate && ctx?.title ? `${name} (${ctx.title})` : name,
+          rawName: name,
+          avatarUrl: p.avatarUrl || p.profileUrl || null,
+          type: p.senderKind,
+          isVerified: p.isVerified,
+          conversationContext,
+          duplicateContext: isDuplicate ? (ctx?.title ? `Hội thoại: ${ctx.title}` : "Khách hàng khác cùng tên") : undefined,
+          policyMode: policyMap.get(p.participantId) || null,
+        };
+      });
+
+      return reply.send({ people: result });
+    };
+
+    fastify.get("/api/people", handleSearchPeople);
+    fastify.get("/api/settings/people", handleSearchPeople);
+
+    // 4c. Membership CRUD with optimistic settings revision & audit
+    fastify.get("/api/settings/members", async (_request, reply) => {
+      const [members, settingsData] = await Promise.all([
+        policyMemberRepo.listMembers(channelAccountId),
+        settingsRepo.getSettings(channelAccountId),
+      ]);
+
+      const pIds = members.map((m) => m.participantId);
+      let participantRows: (typeof participants.$inferSelect)[] = [];
+      if (pIds.length > 0) {
+        try {
+          participantRows = await db
+            .select()
+            .from(participants)
+            .where(
+              and(
+                eq(participants.channelAccountId, channelAccountId),
+                inArray(participants.participantId, pIds)
+              )
+            );
+        } catch {
+          participantRows = [];
+        }
+      }
+      const partMap = new Map(participantRows.map((p) => [p.participantId, p]));
+
+      const safeMembers = members.map((m) => {
+        const p = partMap.get(m.participantId);
+        return {
+          id: toSafePersonId(channelAccountId, m.participantId),
+          name: p?.displayName || "Người dùng đã xác minh",
+          avatarUrl: p?.avatarUrl || p?.profileUrl || null,
+          type: p?.senderKind || "PERSON",
+          policyMode: m.policyMode,
+          notes: m.notes,
+          addedBy: m.addedBy,
+          createdAt: m.createdAt,
+        };
+      });
+
+      return reply.send({ members: safeMembers, revision: settingsData.revision });
+    });
+    fastify.get("/api/settings/policy-members", async (request) => {
+      const url = new URL(request.url, "http://localhost");
+      return fastify.inject({ method: "GET", url: `/api/settings/members${url.search}`, headers: request.headers as Record<string, string> });
+    });
+
+    fastify.post<{
+      Body: { personId: string; policyMode?: string; notes?: string; expectedRevision?: number };
+    }>(
+      "/api/settings/members",
+      { preHandler: [requireRole("OWNER")] },
+      async (request, reply) => {
+        const user = (request as unknown as { user: SessionUser }).user;
+        const { personId, policyMode = "EXCLUDE", notes, expectedRevision } = request.body || {};
+
+        if (!personId) {
+          return reply.status(400).send({ error: "Missing personId" });
+        }
+
+        const participantId = resolveParticipantId(personId, channelAccountId);
+        if (!participantId) {
+          return reply.status(400).send({ error: "Invalid person identifier" });
+        }
+
+        // Verify channel-scoped VERIFIED PERSON selection
+        const participant = await participantRepo.getParticipant(channelAccountId, participantId);
+        if (!participant || !participant.isVerified || participant.senderKind !== "PERSON") {
+          return reply.status(400).send({
+            error: "Only verified persons (PERSON) can be added to reply policy.",
+          });
+        }
+
+        // Optimistic concurrency check
+        const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
+        if (expectedRevision !== undefined && currentSettingsData.revision !== expectedRevision) {
+          return reply.status(409).send({
+            error: "Settings conflict: configuration modified by another user.",
+            currentRevision: currentSettingsData.revision,
+          });
+        }
+
+        const mode = policyMode === "INCLUDE" ? "INCLUDE" : "EXCLUDE";
+
+        // Save member
+        await policyMemberRepo.addMember({
+          channelAccountId,
+          participantId,
+          policyMode: mode,
+          notes: notes || null,
+          addedBy: user.email,
+        });
+
+        // Update settings arrays & revision
+        const curSettings = currentSettingsData.settings;
+        let newSelected = [...curSettings.selectedParticipantIds];
+        let newExcluded = [...curSettings.excludedParticipantIds];
+
+        if (mode === "EXCLUDE") {
+          if (!newExcluded.includes(participantId)) newExcluded.push(participantId);
+          newSelected = newSelected.filter((id) => id !== participantId);
+        } else {
+          if (!newSelected.includes(participantId)) newSelected.push(participantId);
+          newExcluded = newExcluded.filter((id) => id !== participantId);
+        }
+
+        const updated = await settingsRepo.updateSettings(
+          channelAccountId,
+          {
+            selectedParticipantIds: newSelected,
+            excludedParticipantIds: newExcluded,
+          },
+          user.email,
+          `Thêm người dùng vào danh sách ${mode === "EXCLUDE" ? "loại trừ" : "chỉ định"}`
+        );
+
+        await eventRepo.recordEvent({
+          channelAccountId,
+          type: "SETTING_CHANGED",
+          actor: user.email,
+          payload: {
+            action: "ADD_POLICY_MEMBER",
+            policyMode: mode,
+            revision: updated.revision,
+          },
+        });
+
+        await broadcaster.broadcast("settings:updated", {
+          revision: updated.revision,
+          section: "POLICY_MEMBERS",
+        });
+
+        return reply.send({
+          success: true,
+          revision: updated.revision,
+          member: {
+            id: toSafePersonId(channelAccountId, participantId),
+            name: participant.displayName || "Người dùng đã xác minh",
+            avatarUrl: participant.avatarUrl || participant.profileUrl || null,
+            type: participant.senderKind,
+            policyMode: mode,
+            notes: notes || null,
+          },
+        });
+      }
+    );
+    fastify.post("/api/settings/policy-members", { preHandler: [requireRole("OWNER")] }, async (request) => {
+      const url = new URL(request.url, "http://localhost");
+      return fastify.inject({ method: "POST", url: `/api/settings/members${url.search}`, payload: request.body as object, headers: request.headers as Record<string, string> });
+    });
+
+    fastify.delete<{
+      Params: { personId: string };
+      Querystring: { expectedRevision?: string };
+    }>(
+      "/api/settings/members/:personId",
+      { preHandler: [requireRole("OWNER")] },
+      async (request, reply) => {
+        const user = (request as unknown as { user: SessionUser }).user;
+        const { personId } = request.params;
+        const expectedRevision = request.query?.expectedRevision ? parseInt(request.query.expectedRevision, 10) : undefined;
+
+        const participantId = resolveParticipantId(personId, channelAccountId);
+        if (!participantId) {
+          return reply.status(400).send({ error: "Invalid person identifier" });
+        }
+
+        // Optimistic concurrency check
+        const currentSettingsData = await settingsRepo.getSettings(channelAccountId);
+        if (expectedRevision !== undefined && !isNaN(expectedRevision) && currentSettingsData.revision !== expectedRevision) {
+          return reply.status(409).send({
+            error: "Settings conflict: configuration modified by another user.",
+            currentRevision: currentSettingsData.revision,
+          });
+        }
+
+        await policyMemberRepo.removeMember(channelAccountId, participantId);
+
+        // Update settings arrays & revision
+        const curSettings = currentSettingsData.settings;
+        const newSelected = curSettings.selectedParticipantIds.filter((id) => id !== participantId);
+        const newExcluded = curSettings.excludedParticipantIds.filter((id) => id !== participantId);
+
+        const updated = await settingsRepo.updateSettings(
+          channelAccountId,
+          {
+            selectedParticipantIds: newSelected,
+            excludedParticipantIds: newExcluded,
+          },
+          user.email,
+          "Xóa người dùng khỏi danh sách chính sách"
+        );
+
+        await eventRepo.recordEvent({
+          channelAccountId,
+          type: "SETTING_CHANGED",
+          actor: user.email,
+          payload: {
+            action: "REMOVE_POLICY_MEMBER",
+            revision: updated.revision,
+          },
+        });
+
+        await broadcaster.broadcast("settings:updated", {
+          revision: updated.revision,
+          section: "POLICY_MEMBERS",
+        });
+
+        return reply.send({ success: true, revision: updated.revision });
+      }
+    );
+    fastify.delete<{ Params: { personId: string } }>("/api/settings/policy-members/:personId", { preHandler: [requireRole("OWNER")] }, async (request) => {
+      const url = new URL(request.url, "http://localhost");
+      return fastify.inject({ method: "DELETE", url: `/api/settings/members/${request.params.personId}${url.search}`, headers: request.headers as Record<string, string> });
+    });
 
     fastify.post<{ Body: { apiFormat?: string; baseUrl?: string; model?: string; apiKey?: string } }>(
       "/api/settings/test-ai",
@@ -597,13 +1056,15 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const total = totalRes[0]?.count || 0;
         const hasMore = offset + items.length < total;
 
-        return reply.send({
-          items,
-          total,
-          limit,
-          offset,
-          hasMore,
-        });
+        return reply.send(
+          sanitizeApiOutput({
+            items,
+            total,
+            limit,
+            offset,
+            hasMore,
+          })
+        );
       }
     );
 

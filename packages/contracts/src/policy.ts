@@ -81,8 +81,62 @@ export const ReplyEligibilityResultSchema = z.object({
   precedenceStep: ReplyPrecedenceStepSchema,
   evaluatedAt: z.coerce.date(),
   details: z.record(z.string(), z.unknown()).optional(),
+  evaluationMode: z.enum(["LIVE", "SHADOW"]).optional(),
 });
 export type ReplyEligibilityResult = z.infer<typeof ReplyEligibilityResultSchema>;
+
+export function getHumanReadableReason(reasonCode: string, fallback?: string): string {
+  switch (reasonCode) {
+    case "AUTO_REPLY_DISABLED":
+      return "Đã tắt tự động phản hồi trong cài đặt.";
+    case "INTAKE_PAUSED":
+      return "Đang tạm dừng tiếp nhận tin nhắn mới.";
+    case "CHANNEL_SUSPENDED":
+      return "Kênh kết nối Messenger đang bị tạm khóa / đình chỉ.";
+    case "CHANNEL_PAUSED":
+      return "Kênh kết nối Messenger đang tạm dừng.";
+    case "CONVERSATION_BLOCKED":
+      return "Cuộc trò chuyện này đã bị chặn.";
+    case "CONVERSATION_MANUAL_MODE":
+      return "Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.";
+    case "STALE_INBOUND_VERSION":
+      return "Phiên bản tin nhắn đã cũ, đã có tin nhắn mới hơn.";
+    case "DIRECTION_NOT_INBOUND":
+      return "Tin nhắn không phải gửi đến từ khách hàng.";
+    case "SELF_MESSAGE":
+      return "Tin nhắn xuất phát từ chính tài khoản bot.";
+    case "UNKNOWN_THREAD_KIND":
+      return "Loại hội thoại không xác định (tự động bỏ qua).";
+    case "UNVERIFIED_THREAD_CLASSIFICATION":
+      return "Phân loại hội thoại chưa được xác minh an toàn.";
+    case "UNKNOWN_SENDER_KIND":
+      return "Loại người gửi không xác định (tự động bỏ qua).";
+    case "UNVERIFIED_SENDER_CLASSIFICATION":
+      return "Danh tính người gửi chưa được xác minh an toàn.";
+    case "UNVERIFIED_PARTICIPANT_IDENTITY":
+      return "Định danh người gửi chưa được xác minh hợp lệ.";
+    case "DIRECT_REPLIES_DISABLED":
+      return "Đã tắt tự động trả lời tin nhắn trực tiếp.";
+    case "GROUP_REPLIES_DISABLED":
+      return "Đã tắt tự động trả lời trong nhóm chat.";
+    case "PERSON_EXCLUDED":
+      return "Người gửi nằm trong danh sách loại trừ phản hồi.";
+    case "PERSON_NOT_SELECTED":
+      return "Người gửi không nằm trong danh sách được chỉ định trả lời.";
+    case "PAGE_REPLIES_DISABLED":
+      return "Đã tắt tự động trả lời tin nhắn từ Trang Facebook.";
+    case "NON_PERSON_REPLIES_DISABLED":
+      return "Đã tắt tự động trả lời tin nhắn phi cá nhân / bot.";
+    case "GROUP_MENTION_REQUIRED":
+      return "Tin nhắn trong nhóm cần được gắn thẻ (@mention) chính xác tên bot.";
+    case "GROUP_MENTION_UNVERIFIED":
+      return "Thẻ gắn trong nhóm chưa được xác minh hợp lệ.";
+    case "ELIGIBLE":
+      return "Đủ điều kiện phản hồi tự động.";
+    default:
+      return fallback || reasonCode;
+  }
+}
 
 export function matchesParticipantList(list: string[], channelId: string, participantId: string): boolean {
   if (!list || list.length === 0 || !participantId) {

@@ -79,11 +79,16 @@ export class ConversationRepository {
         };
       }
 
-      // 2. Scoped duplicate query by conversation + nullable sender + text hash/time
+      // 2. Sender resolution includes payload.senderParticipantId when trusted/valid
       const externalThreadIdTrimmed = payload.externalThreadId.trim();
       let senderParticipantId: string | null = null;
       if (payload.participantIdentity?.participantId) {
         const cleanPId = payload.participantIdentity.participantId.trim();
+        if (cleanPId && cleanPId !== externalThreadIdTrimmed) {
+          senderParticipantId = cleanPId;
+        }
+      } else if (payload.senderParticipantId) {
+        const cleanPId = payload.senderParticipantId.trim();
         if (cleanPId && cleanPId !== externalThreadIdTrimmed) {
           senderParticipantId = cleanPId;
         }
@@ -93,23 +98,46 @@ export class ConversationRepository {
           senderParticipantId = cleanSenderId;
         }
       }
-      const dedupeWindowMs = options?.dedupeWindowMs ?? 5000;
-      const windowStart = new Date(Date.now() - dedupeWindowMs);
 
-      // Check if conversation already exists to scope duplicate check
-      const existingConvRows = await tx
-        .select({ id: conversations.id, inboundVersion: conversations.inboundVersion })
+      // Advisory transaction lock serialized on thread hash for new threads before conversation exists
+      try {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext(${payload.channelAccountId || ""}), hashtext(${payload.externalThreadId || ""}))`
+        );
+      } catch {
+        // Fallback if DB mock does not support advisory lock
+      }
+
+      // Acquire conversation row lock before scoped jitter dedupe to serialize concurrent identical inbound
+      const convQuery = tx
+        .select({
+          id: conversations.id,
+          inboundVersion: conversations.inboundVersion,
+          manualMode: conversations.manualMode,
+          status: conversations.status,
+          isBlocked: conversations.isBlocked,
+        })
         .from(conversations)
         .where(
           and(
             eq(conversations.channelAccountId, payload.channelAccountId),
             eq(conversations.externalThreadId, payload.externalThreadId)
           )
-        )
-        .limit(1);
+        );
 
-      if (existingConvRows.length > 0 && existingConvRows[0]) {
-        const convId = existingConvRows[0].id;
+      const lockedConvQuery =
+        "for" in convQuery && typeof convQuery.for === "function"
+          ? convQuery.for("update")
+          : convQuery;
+
+      const existingConv = await lockedConvQuery.limit(1);
+
+      // Scoped duplicate check executed under conversation lock
+      const dedupeWindowMs = options?.dedupeWindowMs ?? 5000;
+      const windowStart = new Date(Date.now() - dedupeWindowMs);
+
+      if (existingConv.length > 0 && existingConv[0]) {
+        const convId = existingConv[0].id;
         const scopedConditions = [
           eq(messages.channelAccountId, payload.channelAccountId),
           eq(messages.conversationId, convId),
@@ -224,30 +252,6 @@ export class ConversationRepository {
           });
       }
 
-      // 4. Upsert conversation (row-locked to serialize concurrent inbounds for the same thread)
-      const convQuery = tx
-        .select({
-          id: conversations.id,
-          inboundVersion: conversations.inboundVersion,
-          manualMode: conversations.manualMode,
-          status: conversations.status,
-          isBlocked: conversations.isBlocked,
-        })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.channelAccountId, payload.channelAccountId),
-            eq(conversations.externalThreadId, payload.externalThreadId)
-          )
-        );
-
-      const lockedConvQuery =
-        "for" in convQuery && typeof convQuery.for === "function"
-          ? convQuery.for("update")
-          : convQuery;
-
-      const existingConv = await lockedConvQuery.limit(1);
-
       let conversationId: string;
       let newInboundVersion: number;
       let isManual: boolean;
@@ -257,14 +261,17 @@ export class ConversationRepository {
         newInboundVersion = existingConv[0].inboundVersion + 1;
         isManual = existingConv[0].manualMode;
 
-        const nextStatus: ConversationStatus = isManual ? "MANUAL" : "DEBOUNCING";
+        // Preserve current conversation status before eligibility check (never set DEBOUNCING prematurely)
+        const initialStatus: ConversationStatus = isManual
+          ? "MANUAL"
+          : (existingConv[0].isBlocked ? "BLOCKED" : (existingConv[0].status as ConversationStatus));
 
         await tx
           .update(conversations)
           .set({
             inboundVersion: newInboundVersion,
             lastInboundAt: payload.timestamp,
-            status: nextStatus,
+            status: initialStatus,
             unreadCount: sql`${conversations.unreadCount} + 1`,
             externalThreadRef: payload.externalThreadRef,
             ...(threadKind !== "UNKNOWN" ? { threadKind } : {}),
@@ -284,7 +291,7 @@ export class ConversationRepository {
             customerId,
             externalThreadId: payload.externalThreadId,
             externalThreadRef: payload.externalThreadRef,
-            status: "DEBOUNCING",
+            status: "WAITING_CUSTOMER",
             threadKind,
             title: threadTitle,
             reliability: threadReliability,
@@ -443,7 +450,8 @@ export class ConversationRepository {
         tx,
       });
 
-      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual;
+      const isBlocked = Boolean(existingConv[0]?.isBlocked);
+      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked;
 
       if (isEligibleLive) {
         const debounceMs = options?.debounceMs ?? 3000;
@@ -503,10 +511,20 @@ export class ConversationRepository {
               updatedAt: new Date(),
             },
           });
+
+        // Record transactional audit event for debounce started
+        await tx.insert(conversationEvents).values({
+          channelAccountId: payload.channelAccountId,
+          conversationId,
+          type: "DEBOUNCE_STARTED",
+          inboundVersion: newInboundVersion,
+          actor: "BROWSER_AGENT",
+          payload: { debounceMs },
+        });
       } else {
         const nextStatus: ConversationStatus = isManual
           ? "MANUAL"
-          : (existingConv[0]?.isBlocked ? "BLOCKED" : "WAITING_CUSTOMER");
+          : (isBlocked ? "BLOCKED" : "WAITING_CUSTOMER");
         await tx
           .update(conversations)
           .set({ status: nextStatus, updatedAt: new Date() })
@@ -540,6 +558,7 @@ export class ConversationRepository {
           eligible: evalResult.result.eligible,
           decision: evalResult.result.decision,
           reasonCode: evalResult.result.reasonCode,
+          evaluationMode: evalResult.record.evaluationMode,
         },
       });
 

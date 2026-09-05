@@ -135,6 +135,9 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         outboxRepo: mockOutboxRepo,
         eventRepo: mockEventRepo,
         broadcaster: mockBroadcaster,
+        replyPolicyService: {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService,
       } as unknown as DebounceHandlerDeps);
 
       await debounceHandler({
@@ -240,6 +243,9 @@ describe("Queue Routing, Inbound Atomic Ingestion & Dashboard-API Alignment", ()
         broadcaster: { broadcast: vi.fn().mockResolvedValue(undefined) },
         aiGenerator: mockAiGenerator,
         jobRepo: mockJobRepo,
+        replyPolicyService: {
+          recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
+        } as unknown as ReplyPolicyService,
       } as unknown as AiHandlerDeps);
 
       await aiHandler({

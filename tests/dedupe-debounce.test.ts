@@ -115,6 +115,36 @@ describe("Deduplication and Debounce Invariants", () => {
       isSuspended: false,
     };
 
+    const inboundRow = {
+      id: "inbound-1",
+      channelAccountId: "personal-messenger",
+      conversationId: "conv-123",
+      inboundVersion: 3,
+      text: "Xin chào",
+      senderKind: "PERSON",
+      senderReliability: "VERIFIED",
+      rawPayload: {
+        threadKind: "DIRECT",
+        threadReliability: "VERIFIED",
+        senderKind: "PERSON",
+        senderReliability: "VERIFIED",
+        participantIdentity: {
+          channelAccountId: "personal-messenger",
+          participantId: "user-1",
+          senderKind: "PERSON",
+          isVerified: true,
+        },
+      },
+    };
+
+    const participantRow = {
+      channelAccountId: "personal-messenger",
+      participantId: "user-1",
+      senderKind: "PERSON",
+      isVerified: true,
+      reliability: "VERIFIED",
+    };
+
     const mockDb = {
       select: vi.fn(() => ({
         from: vi.fn((tbl: unknown) => ({
@@ -123,6 +153,9 @@ describe("Deduplication and Debounce Invariants", () => {
               const tableObj = tbl as { _?: { name?: string }; [key: symbol]: unknown } | null | undefined;
               const tableName = tableObj?._?.name || (tableObj?.[Symbol.for("drizzle:Name")] as string | undefined);
               if (tableName === "channel_accounts") return [channelRow];
+              if (tableName === "inbound_messages") return [inboundRow];
+              if (tableName === "participants") return [participantRow];
+              if (tableName === "settings" || tableName === "reply_policy_members") return [];
               return [conversationRow];
             }),
           })),

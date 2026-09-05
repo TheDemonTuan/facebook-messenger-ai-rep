@@ -106,4 +106,31 @@ export class ParticipantRepository {
       verifiedAt: new Date(),
     });
   }
+
+  async searchVerifiedPersons(
+    channelAccountId: string,
+    query?: string,
+    limit: number = 20,
+    senderKind?: SenderKind | "ALL"
+  ) {
+    const conditions = [
+      eq(participants.channelAccountId, channelAccountId),
+      eq(participants.isVerified, true),
+    ];
+    if (senderKind && senderKind !== "ALL") {
+      conditions.push(eq(participants.senderKind, senderKind as SenderKind));
+    }
+    const rows = await this.db
+      .select()
+      .from(participants)
+      .where(and(...conditions))
+      .orderBy(desc(participants.updatedAt))
+      .limit(limit * 2);
+
+    if (!query) {
+      return rows.slice(0, limit);
+    }
+    const q = query.trim().toLowerCase();
+    return rows.filter((p) => (p.displayName || "").toLowerCase().includes(q)).slice(0, limit);
+  }
 }

@@ -31,9 +31,9 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
     convRepo,
     outboundRepo,
     jobRepo: _jobRepo,
-    eventRepo,
+    eventRepo: _eventRepo,
     settingsRepo,
-    outboxRepo,
+    outboxRepo: _outboxRepo,
     broadcaster,
     requireAuth,
     channelAccountId,
@@ -68,40 +68,13 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
           return reply.send(result);
         }
 
-        const isEligibleLive = Boolean(result.eligibility?.eligible && result.decision?.evaluationMode === "LIVE");
-
-        if (isEligibleLive) {
-          // Record audit event
-          await eventRepo.recordEvent({
-            channelAccountId: payload.channelAccountId,
-            conversationId: result.conversationId,
-            type: "DEBOUNCE_STARTED",
-            inboundVersion: result.inboundVersion,
-            actor: "BROWSER_AGENT",
-            payload: { debounceMs },
-          });
-        }
-
-        await outboxRepo.enqueue({
-          channelAccountId: payload.channelAccountId,
-          conversationId: result.conversationId,
-          eventType: "inbound:received",
-          payload: {
-            conversationId: result.conversationId,
-            inboundVersion: result.inboundVersion,
-            text: payload.text,
-            eligible: result.eligibility?.eligible,
-            decision: result.eligibility?.decision,
-            reasonCode: result.eligibility?.reasonCode,
-          },
-        });
-
         await broadcaster.broadcast("inbound:received", {
           conversationId: result.conversationId,
           inboundVersion: result.inboundVersion,
           eligible: result.eligibility?.eligible,
           decision: result.eligibility?.decision,
           reasonCode: result.eligibility?.reasonCode,
+          evaluationMode: result.decision?.evaluationMode,
         });
 
         return reply.send(result);
