@@ -62,20 +62,35 @@ export const QueuePage: React.FC = () => {
     return jobs.filter((j) => j.status === jobStatusFilter);
   }, [jobs, jobStatusFilter]);
 
+  const formatJobType = (jobType: string) => {
+    switch (jobType) {
+      case "PROCESS_INBOUND":
+        return "Xử lý tin nhắn đến";
+      case "GENERATE_AI_REPLY":
+        return "Tạo câu trả lời AI";
+      case "SEND_OUTBOUND":
+        return "Gửi tin nhắn phản hồi";
+      case "CHECKPOINT_PROBE":
+        return "Kiểm tra phiên làm việc";
+      default:
+        return jobType;
+    }
+  };
+
   const getJobStatusBadge = (status: JobStatus) => {
     switch (status) {
       case "READY":
-        return <span style={{ backgroundColor: "#dbeafe", color: "#1e40af", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>READY</span>;
+        return <span style={{ backgroundColor: "#dbeafe", color: "#1e40af", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Sẵn sàng</span>;
       case "RUNNING":
-        return <span style={{ backgroundColor: "#fef3c7", color: "#92400e", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>RUNNING</span>;
+        return <span style={{ backgroundColor: "#fef3c7", color: "#92400e", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Đang xử lý</span>;
       case "RETRY_WAIT":
-        return <span style={{ backgroundColor: "#ffedd5", color: "#9a3412", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>RETRY_WAIT</span>;
+        return <span style={{ backgroundColor: "#ffedd5", color: "#9a3412", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Chờ thử lại</span>;
       case "SUCCEEDED":
-        return <span style={{ backgroundColor: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>SUCCEEDED</span>;
+        return <span style={{ backgroundColor: "#dcfce7", color: "#166534", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Hoàn thành</span>;
       case "FAILED":
-        return <span style={{ backgroundColor: "#fee2e2", color: "#991b1b", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>FAILED</span>;
+        return <span style={{ backgroundColor: "#fee2e2", color: "#991b1b", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Thất bại</span>;
       case "CANCELLED":
-        return <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>CANCELLED</span>;
+        return <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "3px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>Đã hủy</span>;
       default:
         return <span>{status}</span>;
     }
@@ -88,10 +103,7 @@ export const QueuePage: React.FC = () => {
       return (
         <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
           <span style={{ color: "#b45309", fontWeight: "600", fontSize: "0.8rem", display: "flex", alignItems: "center", gap: "4px" }}>
-            <Timer size={13} /> Active Lease ({remainingSec}s)
-          </span>
-          <span style={{ fontSize: "0.72rem", color: "#64748b" }}>
-            epoch: {job.fencingEpoch}
+            <Timer size={13} /> Đang giữ quyền ({remainingSec}s)
           </span>
         </div>
       );
@@ -112,10 +124,10 @@ export const QueuePage: React.FC = () => {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
         <div>
           <h1 style={{ margin: "0 0 4px 0", fontSize: "1.5rem", fontWeight: "bold" }}>
-            Quản lý Hàng đợi (Queue & PostgreSQL Jobs)
+            Quản lý hàng đợi xử lý
           </h1>
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-            Kiểm soát tác vụ nền PostgreSQL FOR UPDATE SKIP LOCKED và điều phối lượt hội thoại
+            Theo dõi và điều phối các tác vụ xử lý tin nhắn tự động
           </div>
         </div>
         <button
@@ -155,7 +167,7 @@ export const QueuePage: React.FC = () => {
             cursor: "pointer",
           }}
         >
-          <Database size={16} /> PostgreSQL Jobs ({jobs.length})
+          <Database size={16} /> Tác vụ xử lý ({jobs.length})
         </button>
         <button
           onClick={() => setActiveTab("TURNS")}
@@ -199,22 +211,30 @@ export const QueuePage: React.FC = () => {
         <div>
           {/* Status filters */}
           <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "12px" }}>
-            {["ALL", "READY", "RUNNING", "RETRY_WAIT", "SUCCEEDED", "FAILED", "CANCELLED"].map((st) => (
+            {[
+              { id: "ALL", label: "Tất cả" },
+              { id: "READY", label: "Sẵn sàng" },
+              { id: "RUNNING", label: "Đang xử lý" },
+              { id: "RETRY_WAIT", label: "Chờ thử lại" },
+              { id: "SUCCEEDED", label: "Hoàn thành" },
+              { id: "FAILED", label: "Thất bại" },
+              { id: "CANCELLED", label: "Đã hủy" },
+            ].map((st) => (
               <button
-                key={st}
-                onClick={() => setJobStatusFilter(st)}
+                key={st.id}
+                onClick={() => setJobStatusFilter(st.id)}
                 style={{
                   padding: "4px 10px",
                   borderRadius: "4px",
                   border: "1px solid #cbd5e1",
-                  backgroundColor: jobStatusFilter === st ? "#1e293b" : "#ffffff",
-                  color: jobStatusFilter === st ? "#ffffff" : "#475569",
+                  backgroundColor: jobStatusFilter === st.id ? "#1e293b" : "#ffffff",
+                  color: jobStatusFilter === st.id ? "#ffffff" : "#475569",
                   fontSize: "0.78rem",
                   fontWeight: "600",
                   cursor: "pointer",
                 }}
               >
-                {st}
+                {st.label}
               </button>
             ))}
           </div>
@@ -222,18 +242,18 @@ export const QueuePage: React.FC = () => {
           {filteredJobs.length === 0 ? (
             <div style={{ padding: "40px", backgroundColor: "#ffffff", borderRadius: "8px", textAlign: "center", color: "#64748b", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
               <CheckCircle size={32} color="#10b981" style={{ margin: "0 auto 8px auto" }} />
-              <div>Không có tác vụ PostgreSQL nào theo bộ lọc đã chọn!</div>
+              <div>Không có tác vụ nào theo bộ lọc đã chọn!</div>
             </div>
           ) : (
             <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", overflowX: "auto", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.85rem" }}>
                 <thead>
                   <tr style={{ backgroundColor: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>
-                    <th style={{ padding: "10px 14px" }}>Job ID / Type</th>
+                    <th style={{ padding: "10px 14px" }}>Tác vụ</th>
                     <th style={{ padding: "10px 14px" }}>Trạng thái</th>
-                    <th style={{ padding: "10px 14px" }}>Lease / Khóa</th>
-                    <th style={{ padding: "10px 14px" }}>Attempts</th>
-                    <th style={{ padding: "10px 14px" }}>Ưu tiên</th>
+                    <th style={{ padding: "10px 14px" }}>Thời hạn xử lý</th>
+                    <th style={{ padding: "10px 14px" }}>Số lần thử</th>
+                    <th style={{ padding: "10px 14px" }}>Độ ưu tiên</th>
                     <th style={{ padding: "10px 14px" }}>Thời gian</th>
                     <th style={{ padding: "10px 14px" }}>Chi tiết</th>
                   </tr>
@@ -246,10 +266,7 @@ export const QueuePage: React.FC = () => {
                       <React.Fragment key={job.id}>
                         <tr style={{ borderBottom: "1px solid #f1f5f9", backgroundColor: isExpanded ? "#f8fafc" : "transparent" }}>
                           <td style={{ padding: "10px 14px" }}>
-                            <div style={{ fontWeight: "600", color: "#0f172a" }}>{job.jobType}</div>
-                            <div style={{ fontSize: "0.72rem", color: "#94a3b8", fontFamily: "monospace" }}>
-                              {job.id.slice(0, 8)}...
-                            </div>
+                            <div style={{ fontWeight: "600", color: "#0f172a" }}>{formatJobType(job.jobType)}</div>
                           </td>
                           <td style={{ padding: "10px 14px" }}>{getJobStatusBadge(job.status)}</td>
                           <td style={{ padding: "10px 14px" }}>{renderLeaseInfo(job)}</td>
@@ -292,15 +309,26 @@ export const QueuePage: React.FC = () => {
                                     <div><strong>Lỗi gần nhất:</strong> {job.lastError}</div>
                                   </div>
                                 )}
-                                <div style={{ fontSize: "0.75rem", color: "#475569" }}>
-                                  <strong>Idempotency Key:</strong> {job.idempotencyKey || "None"} • <strong>Owner Token:</strong> {job.ownerToken || "None"} • <strong>Available At:</strong> {new Date(job.availableAt).toISOString()}
+                                <div style={{ fontSize: "0.8rem", color: "#334155" }}>
+                                  <strong>Loại tác vụ:</strong> {formatJobType(job.jobType)}
+                                  {job.availableAt && ` • Thời gian khả dụng: ${new Date(job.availableAt).toLocaleTimeString("vi-VN")}`}
                                 </div>
-                                <div>
-                                  <strong style={{ fontSize: "0.75rem", color: "#334155" }}>Payload:</strong>
-                                  <pre style={{ margin: "4px 0 0 0", padding: "8px", backgroundColor: "#0f172a", color: "#e2e8f0", borderRadius: "6px", fontSize: "0.75rem", overflowX: "auto" }}>
-                                    {JSON.stringify(job.payload, null, 2)}
-                                  </pre>
-                                </div>
+                                <details style={{ marginTop: "4px" }}>
+                                  <summary style={{ fontSize: "0.8rem", color: "#2563eb", cursor: "pointer", fontWeight: "600" }}>
+                                    Chi tiết kỹ thuật
+                                  </summary>
+                                  <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "6px" }}>
+                                    <div style={{ fontSize: "0.75rem", color: "#475569" }}>
+                                      <strong>Mã tác vụ:</strong> {job.id} • <strong>Khóa trùng lặp:</strong> {job.idempotencyKey || "Không có"} • <strong>Mã sở hữu:</strong> {job.ownerToken || "Không có"} • <strong>Chu kỳ:</strong> {job.fencingEpoch}
+                                    </div>
+                                    <div>
+                                      <strong style={{ fontSize: "0.75rem", color: "#334155" }}>Dữ liệu tác vụ:</strong>
+                                      <pre style={{ margin: "4px 0 0 0", padding: "8px", backgroundColor: "#0f172a", color: "#e2e8f0", borderRadius: "6px", fontSize: "0.75rem", overflowX: "auto" }}>
+                                        {JSON.stringify(job.payload, null, 2)}
+                                      </pre>
+                                    </div>
+                                  </div>
+                                </details>
                               </div>
                             </td>
                           </tr>
@@ -328,11 +356,10 @@ export const QueuePage: React.FC = () => {
               <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "0.9rem" }}>
                 <thead>
                   <tr style={{ backgroundColor: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>
-                    <th style={{ padding: "12px 16px" }}>Vị trí</th>
+                    <th style={{ padding: "12px 16px" }}>Thứ tự</th>
                     <th style={{ padding: "12px 16px" }}>Khách hàng</th>
-                    <th style={{ padding: "12px 16px" }}>Version</th>
-                    <th style={{ padding: "12px 16px" }}>Tính chất</th>
-                    <th style={{ padding: "12px 16px" }}>Ready At</th>
+                    <th style={{ padding: "12px 16px" }}>Mức độ ưu tiên</th>
+                    <th style={{ padding: "12px 16px" }}>Thời gian sẵn sàng</th>
                     <th style={{ padding: "12px 16px" }}>Ước tính chờ</th>
                     <th style={{ padding: "12px 16px" }}>Thao tác</th>
                   </tr>
@@ -344,15 +371,14 @@ export const QueuePage: React.FC = () => {
                         #{item.position}
                       </td>
                       <td style={{ padding: "12px 16px", fontWeight: "600" }}>{item.customerName || "Khách hàng"}</td>
-                      <td style={{ padding: "12px 16px" }}>v{item.inboundVersion}</td>
                       <td style={{ padding: "12px 16px" }}>
                         {item.isSticky ? (
                           <span style={{ backgroundColor: "#dbeafe", color: "#1e40af", padding: "2px 6px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "bold" }}>
-                            STICKY (Turn {item.stickyTurns})
+                            Ưu tiên khách đang chat (Lượt {item.stickyTurns})
                           </span>
                         ) : (
                           <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "2px 6px", borderRadius: "4px", fontSize: "0.75rem" }}>
-                            FIFO
+                            Theo thứ tự gửi
                           </span>
                         )}
                       </td>

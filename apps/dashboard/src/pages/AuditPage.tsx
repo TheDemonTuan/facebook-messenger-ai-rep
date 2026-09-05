@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import { Search, Loader2, AlertCircle, Shield } from "lucide-react";
 
@@ -41,15 +42,52 @@ export const AuditPage: React.FC = () => {
     loadAudit(filterConvId.trim());
   };
 
+  const formatEventType = (type: string) => {
+    switch (type) {
+      case "SETTINGS_UPDATE":
+        return "Cập nhật cài đặt";
+      case "CHANNEL_PAUSED":
+        return "Tạm dừng kênh";
+      case "CHANNEL_RESUMED":
+        return "Tiếp tục kênh";
+      case "TAKEOVER_STARTED":
+        return "Tiếp quản thủ công";
+      case "TAKEOVER_RELEASED":
+        return "Chuyển lại cho AI";
+      case "MANUAL_MESSAGE_SENT":
+        return "Gửi tin thủ công";
+      case "INCIDENT_CREATED":
+        return "Phát sinh sự cố";
+      case "INCIDENT_RESOLVED":
+        return "Giải quyết sự cố";
+      case "ACTION_RECONCILED":
+        return "Xác nhận gửi tin";
+      case "AI_RUN":
+        return "AI xử lý";
+      case "INBOUND_MESSAGE":
+        return "Tin nhắn đến";
+      default:
+        return type.replace(/_/g, " ").toLowerCase();
+    }
+  };
+
+  const formatActor = (actor?: string | null) => {
+    if (!actor || actor === "SYSTEM") return "Hệ thống";
+    if (actor === "AI") return "Trợ lý AI";
+    if (actor === "OWNER") return "Chủ sở hữu";
+    if (actor === "OPERATOR") return "Quản trị viên";
+    return actor;
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
         <div>
           <h1 style={{ margin: "0 0 4px 0", fontSize: "1.5rem", fontWeight: "bold", color: "#0f172a" }}>
-            Nhật ký kiểm toán (Audit Trail)
+            Nhật ký hoạt động
           </h1>
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-            Lịch sử append-only các sự kiện hệ thống, thay đổi cấu hình, takeover và xử lý tin nhắn
+            Lịch sử ghi nhận các sự kiện hệ thống, thay đổi cài đặt và quá trình xử lý tin nhắn
           </div>
         </div>
       </div>
@@ -58,7 +96,7 @@ export const AuditPage: React.FC = () => {
       <form onSubmit={handleSearch} style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
         <input
           type="text"
-          placeholder="Lọc theo Conversation ID..."
+          placeholder="Tìm theo mã hội thoại..."
           value={filterConvId}
           onChange={(e) => setFilterConvId(e.target.value)}
           style={{
@@ -136,10 +174,10 @@ export const AuditPage: React.FC = () => {
               <tr style={{ backgroundColor: "#f8fafc", borderBottom: "1px solid #e2e8f0", color: "#64748b" }}>
                 <th style={{ padding: "10px 14px" }}>Thời gian</th>
                 <th style={{ padding: "10px 14px" }}>Loại sự kiện</th>
-                <th style={{ padding: "10px 14px" }}>Tác nhân (Actor)</th>
-                <th style={{ padding: "10px 14px" }}>Conversation ID</th>
-                <th style={{ padding: "10px 14px" }}>Version</th>
-                <th style={{ padding: "10px 14px" }}>Chi tiết Payload</th>
+                <th style={{ padding: "10px 14px" }}>Người thực hiện</th>
+                <th style={{ padding: "10px 14px" }}>Hội thoại</th>
+                <th style={{ padding: "10px 14px" }}>Phiên bản</th>
+                <th style={{ padding: "10px 14px" }}>Chi tiết sự kiện</th>
               </tr>
             </thead>
             <tbody>
@@ -148,16 +186,34 @@ export const AuditPage: React.FC = () => {
                   <td style={{ padding: "10px 14px", color: "#64748b", fontSize: "0.8rem", whiteSpace: "nowrap" }}>
                     {new Date(ev.createdAt).toLocaleString("vi-VN")}
                   </td>
-                  <td style={{ padding: "10px 14px", fontWeight: "600", color: "#1e293b" }}>{ev.type}</td>
-                  <td style={{ padding: "10px 14px", color: "#334155" }}>{ev.actor || "SYSTEM"}</td>
-                  <td style={{ padding: "10px 14px", color: "#64748b", fontFamily: "monospace", fontSize: "0.8rem" }}>
-                    {ev.conversationId ? `${ev.conversationId.slice(0, 8)}...` : "—"}
+                  <td style={{ padding: "10px 14px", fontWeight: "600", color: "#1e293b" }}>{formatEventType(ev.type)}</td>
+                  <td style={{ padding: "10px 14px", color: "#334155" }}>{formatActor(ev.actor)}</td>
+                  <td style={{ padding: "10px 14px", color: "#64748b", fontSize: "0.8rem" }}>
+                    {ev.conversationId ? (
+                      <Link
+                        to={`/inbox/${ev.conversationId}`}
+                        style={{ color: "#2563eb", textDecoration: "none", fontWeight: "600" }}
+                      >
+                        Xem hội thoại
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
                   </td>
                   <td style={{ padding: "10px 14px" }}>{ev.inboundVersion !== null ? `v${ev.inboundVersion}` : "—"}</td>
                   <td style={{ padding: "10px 14px" }}>
-                    <pre style={{ margin: 0, fontSize: "0.72rem", backgroundColor: "#f8fafc", padding: "4px 8px", borderRadius: "4px", maxWidth: "350px", overflowX: "auto" }}>
-                      {JSON.stringify(ev.payload || {})}
-                    </pre>
+                    {ev.payload && Object.keys(ev.payload).length > 0 ? (
+                      <details>
+                        <summary style={{ cursor: "pointer", fontSize: "0.75rem", color: "#2563eb", fontWeight: "500" }}>
+                          Chi tiết kỹ thuật
+                        </summary>
+                        <pre style={{ margin: "4px 0 0 0", fontSize: "0.72rem", backgroundColor: "#0f172a", color: "#e2e8f0", padding: "6px 8px", borderRadius: "4px", maxWidth: "350px", overflowX: "auto" }}>
+                          {JSON.stringify(ev.payload, null, 2)}
+                        </pre>
+                      </details>
+                    ) : (
+                      <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>—</span>
+                    )}
                   </td>
                 </tr>
               ))}

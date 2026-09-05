@@ -93,7 +93,7 @@ export const InboxPage: React.FC = () => {
     if (conv.manualMode) {
       return (
         <span style={{ backgroundColor: "#fef3c7", color: "#92400e", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700", display: "inline-flex", alignItems: "center", gap: "3px" }}>
-          <UserCheck size={12} /> THỦ CÔNG
+          <UserCheck size={12} /> HỖ TRỢ TRỰC TIẾP
         </span>
       );
     }
@@ -102,7 +102,7 @@ export const InboxPage: React.FC = () => {
       case "DEBOUNCING":
         return (
           <span style={{ backgroundColor: "#dbeafe", color: "#1e40af", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>
-            ĐANG CHỜ XỬ LÝ
+            ĐANG CHỜ PHẢN HỒI
           </span>
         );
       case "READING":
@@ -112,19 +112,19 @@ export const InboxPage: React.FC = () => {
       case "SENDING":
         return (
           <span style={{ backgroundColor: "#e0e7ff", color: "#3730a3", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700", display: "inline-flex", alignItems: "center", gap: "3px" }}>
-            <Bot size={12} /> BOT ĐANG TRẢ LỜI
+            <Bot size={12} /> AI ĐANG TRẢ LỜI
           </span>
         );
       case "ERROR":
         return (
           <span style={{ backgroundColor: "#fee2e2", color: "#991b1b", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem", fontWeight: "700" }}>
-            LỖI
+            CẦN KIỂM TRA
           </span>
         );
       default:
         return (
           <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem" }}>
-            CHỜ KHÁCH HỎI
+            ĐÃ TRẢ LỜI
           </span>
         );
     }
@@ -146,7 +146,7 @@ export const InboxPage: React.FC = () => {
           {[
             { id: "all", label: "Tất cả" },
             { id: "queued", label: "Trong hàng đợi" },
-            { id: "manual", label: "Thủ công (Takeover)" },
+            { id: "manual", label: "Đang hỗ trợ trực tiếp" },
             { id: "error", label: "Sự cố / Lỗi" },
           ].map((item) => (
             <button
@@ -251,17 +251,15 @@ export const InboxPage: React.FC = () => {
                       {item.customer.name || "Khách hàng Messenger"}
                     </span>
                     {getStatusBadge(item.conversation)}
-                    <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-                      v{item.conversation.inboundVersion}
-                    </span>
                   </div>
 
                   <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                    <span>ID: {item.conversation.id.slice(0, 8)}...</span>
-                    {item.conversation.lastInboundAt && (
+                    {item.conversation.lastInboundAt ? (
                       <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                         <Clock size={12} /> Tin cuối: {new Date(item.conversation.lastInboundAt).toLocaleString("vi-VN")}
                       </span>
+                    ) : (
+                      <span>Chưa có tin nhắn</span>
                     )}
                   </div>
                 </div>

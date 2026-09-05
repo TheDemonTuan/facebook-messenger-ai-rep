@@ -183,8 +183,8 @@ export const ConversationDetailPage: React.FC = () => {
     if (!conversationId) return;
     const confirmMsg =
       resolution === "MARK_SENT"
-        ? "Xác nhận đối soát: Tin nhắn đã thực sự đến tay khách hàng trên Messenger (Đánh dấu MARK_SENT)?"
-        : "CẢNH BÁO: Bạn chắc chắn tin nhắn chưa đến tay khách và đồng ý gửi lại? (Tránh gửi lặp)";
+        ? "Xác nhận: Tin nhắn đã thực sự đến tay khách hàng trên Messenger?"
+        : "CẢNH BÁO: Bạn chắc chắn tin nhắn chưa đến tay khách và đồng ý gửi lại? (Tránh gửi lặp tin nhắn)";
 
     if (!confirm(confirmMsg)) return;
 
@@ -237,6 +237,72 @@ export const ConversationDetailPage: React.FC = () => {
     (a) => a.status === "SEND_UNCERTAIN" || a.status === "UNCONFIRMED"
   );
 
+  const formatConversationStatus = (status: string, manualMode?: boolean) => {
+    if (manualMode) return "Hỗ trợ trực tiếp";
+    switch (status) {
+      case "WAITING":
+        return "Đang chờ tin nhắn";
+      case "DEBOUNCING":
+        return "Đang chờ phản hồi";
+      case "READING":
+      case "THINKING":
+      case "DRAFT_READY":
+      case "TYPING":
+      case "SENDING":
+        return "AI đang soạn tin";
+      case "ERROR":
+        return "Cần kiểm tra";
+      default:
+        return "Đang chờ tin nhắn";
+    }
+  };
+
+  const formatActionStatus = (status: string) => {
+    switch (status) {
+      case "SENT":
+        return "Đã gửi";
+      case "SEND_UNCERTAIN":
+        return "Cần xác nhận";
+      case "QUEUED":
+        return "Đang chờ gửi";
+      case "IN_PROGRESS":
+        return "Đang gửi";
+      case "FAILED":
+        return "Gửi thất bại";
+      case "CANCELLED":
+        return "Đã hủy";
+      case "SKIPPED":
+        return "Bỏ qua";
+      default:
+        return status || "Chưa rõ";
+    }
+  };
+
+  const formatEventType = (type: string) => {
+    switch (type) {
+      case "INBOUND_MESSAGE":
+        return "Khách gửi tin";
+      case "OUTBOUND_MESSAGE":
+        return "Gửi phản hồi";
+      case "AI_RUN":
+        return "AI xử lý";
+      case "TAKEOVER_STARTED":
+        return "Bắt đầu hỗ trợ trực tiếp";
+      case "TAKEOVER_RELEASED":
+        return "Chuyển lại cho AI";
+      case "TAKEOVER_CANCEL_ACK":
+        return "Đã dừng AI phản hồi";
+      case "ACTION_RECONCILED":
+        return "Xác nhận gửi tin";
+      case "INCIDENT_CREATED":
+        return "Phát sinh sự cố";
+      case "INCIDENT_RESOLVED":
+        return "Đã xử lý sự cố";
+      default:
+        return type.replace(/_/g, " ").toLowerCase();
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: "14px", maxWidth: "100%" }}>
       {/* Header Bar */}
@@ -261,9 +327,15 @@ export const ConversationDetailPage: React.FC = () => {
             <div style={{ fontWeight: "bold", fontSize: "1.1rem", color: "#0f172a" }}>
               {customer.name || "Khách hàng Messenger"}
             </div>
-            <div style={{ fontSize: "0.78rem", color: "#64748b", marginTop: "2px" }}>
-              Thread: {conv.externalThreadId} • Inbound Version: <strong>v{conv.inboundVersion}</strong> • Trạng thái: {conv.status}
+            <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
+              Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode)}</strong>
             </div>
+            <details style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b" }}>
+              <summary style={{ cursor: "pointer", color: "#64748b" }}>Chi tiết kỹ thuật</summary>
+              <div style={{ marginTop: "4px", fontSize: "0.72rem", color: "#64748b" }}>
+                <span>Mã luồng: {conv.externalThreadId}</span> • <span>Phiên bản: v{conv.inboundVersion}</span> • <span>Mã nội bộ: {conv.id}</span>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -287,7 +359,7 @@ export const ConversationDetailPage: React.FC = () => {
                 cursor: takeoverCtx.state === "RESUMING" ? "not-allowed" : "pointer",
               }}
             >
-              <Play size={15} /> Khôi phục Bot tự động (Resume AI)
+              <Play size={15} /> Bật lại AI tự động
             </button>
           ) : (
             <button
@@ -307,7 +379,7 @@ export const ConversationDetailPage: React.FC = () => {
                 cursor: takeoverCtx.state === "WAITING_CANCEL_ACK" ? "not-allowed" : "pointer",
               }}
             >
-              <UserCheck size={15} /> Tiếp quản thủ công (Takeover)
+              <UserCheck size={15} /> Tiếp quản thủ công
             </button>
           )}
 
@@ -347,7 +419,7 @@ export const ConversationDetailPage: React.FC = () => {
           }}
         >
           <Loader2 size={18} className="animate-spin" />
-          <span>Đang hủy lượt gõ của Bot và chờ xác nhận (Waiting cancel ack)... Vui lòng đợi trong giây lát trước khi gửi tin.</span>
+          <span>Đang tạm dừng phản hồi tự động... Vui lòng đợi trong giây lát trước khi gửi tin.</span>
         </div>
       )}
 
@@ -367,7 +439,7 @@ export const ConversationDetailPage: React.FC = () => {
           }}
         >
           <UserCheck size={18} />
-          <span>Bạn đang tiếp quản cuộc hội thoại này (Manual Takeover). Bot AI đã ngừng gửi tin nhắn tự động.</span>
+          <span>Bạn đang hỗ trợ trực tiếp cuộc hội thoại này. AI đã tạm dừng phản hồi tự động.</span>
         </div>
       )}
 
@@ -384,11 +456,11 @@ export const ConversationDetailPage: React.FC = () => {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "700", marginBottom: "6px" }}>
-            <ShieldAlert size={18} /> CẢNH BÁO SEND_UNCERTAIN (Không thử lại tự động)
+            <ShieldAlert size={18} /> Cần xác nhận kết quả gửi tin
           </div>
           <div>
-            Có <strong>{uncertainActions.length}</strong> tin nhắn rơi vào trạng thái chưa được xác nhận sau khi bấm phím Enter.
-            Hệ thống tuân thủ nguyên tắc <em>No Blind Retry</em> để tránh spam khách hàng. Vui lòng đối soát và bấm xác nhận bên dưới:
+            Có <strong>{uncertainActions.length}</strong> tin nhắn chưa chắc chắn đã đến tay khách hàng.
+            Hệ thống tạm dừng để tránh gửi lặp tin. Vui lòng kiểm tra trên Facebook Messenger và bấm xác nhận bên dưới:
           </div>
           <div style={{ marginTop: "10px", display: "flex", flexDirection: "column", gap: "8px" }}>
             {uncertainActions.map((action) => (
@@ -406,8 +478,8 @@ export const ConversationDetailPage: React.FC = () => {
                   gap: "8px",
                 }}
               >
-                <span style={{ fontFamily: "monospace", fontSize: "0.8rem", color: "#334155" }}>
-                  Action: {action.actionId.slice(0, 10)}... • "{action.text.slice(0, 35)}..."
+                <span style={{ fontSize: "0.85rem", color: "#334155" }}>
+                  Nội dung: "{action.text.slice(0, 50)}..."
                 </span>
                 <div style={{ display: "flex", gap: "6px" }}>
                   <button
@@ -427,7 +499,7 @@ export const ConversationDetailPage: React.FC = () => {
                       cursor: "pointer",
                     }}
                   >
-                    <Check size={12} /> Đánh dấu Đã Gửi (Mark Sent)
+                    <Check size={12} /> Đã gửi thành công
                   </button>
                   <button
                     onClick={() => handleReconcileAction(action.actionId, "RETRY")}
@@ -446,7 +518,7 @@ export const ConversationDetailPage: React.FC = () => {
                       cursor: "pointer",
                     }}
                   >
-                    <RotateCcw size={12} /> Xác nhận Gửi Lại (Retry)
+                    <RotateCcw size={12} /> Thử gửi lại
                   </button>
                 </div>
               </div>
@@ -534,7 +606,7 @@ export const ConversationDetailPage: React.FC = () => {
                       {msg.text}
                     </div>
                     <div style={{ fontSize: "0.7rem", color: "#94a3b8", marginTop: "2px", display: "flex", alignItems: "center", gap: "4px" }}>
-                      <span>{msg.actor === "AI" ? "Bot AI" : msg.actor === "MANUAL_OWNER" ? "Nhân viên" : isInbound ? "Khách hàng" : "Hệ thống"}</span>
+                      <span>{msg.actor === "AI" ? "Trợ lý AI" : msg.actor === "MANUAL_OWNER" ? "Nhân viên" : isInbound ? "Khách hàng" : "Hệ thống"}</span>
                       <span>•</span>
                       <span>{new Date(msg.timestamp).toLocaleTimeString("vi-VN")}</span>
                     </div>
@@ -563,8 +635,8 @@ export const ConversationDetailPage: React.FC = () => {
               disabled={!canSendManualMessage(takeoverCtx) || sendingManual}
               placeholder={
                 canSendManualMessage(takeoverCtx)
-                  ? "Nhập tin nhắn phản hồi thủ công tới khách hàng..."
-                  : "Bấm 'Tiếp quản thủ công (Takeover)' phía trên để mở khung chat"
+                  ? "Nhập tin nhắn phản hồi tới khách hàng..."
+                  : "Bấm 'Tiếp quản thủ công' phía trên để mở khung chat"
               }
               style={{
                 flex: 1,
@@ -604,11 +676,11 @@ export const ConversationDetailPage: React.FC = () => {
           {/* Outbound Actions List */}
           <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", padding: "16px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
             <h3 style={{ margin: "0 0 12px 0", fontSize: "0.95rem", fontWeight: "700", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
-              <Cpu size={16} color="#2563eb" /> Outbound Actions gần nhất
+              <Cpu size={16} color="#2563eb" /> Tin nhắn đã gửi gần nhất
             </h3>
 
             {actions.length === 0 ? (
-              <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>Chưa có outbound action nào</div>
+              <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>Chưa có tin nhắn nào được gửi</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "250px", overflowY: "auto" }}>
                 {actions.map((act) => (
@@ -623,7 +695,7 @@ export const ConversationDetailPage: React.FC = () => {
                     }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <span style={{ fontWeight: "600", color: "#334155" }}>v{act.inboundVersion} • #{act.responseIndex}</span>
+                      <span style={{ fontWeight: "600", color: "#334155" }}>Tin #{act.responseIndex + 1}</span>
                       <span
                         style={{
                           fontWeight: "700",
@@ -634,7 +706,7 @@ export const ConversationDetailPage: React.FC = () => {
                           color: act.status === "SENT" ? "#166534" : act.status === "SEND_UNCERTAIN" ? "#991b1b" : "#475569",
                         }}
                       >
-                        {act.status}
+                        {formatActionStatus(act.status)}
                       </span>
                     </div>
                     <div style={{ color: "#475569", marginTop: "4px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -649,16 +721,16 @@ export const ConversationDetailPage: React.FC = () => {
           {/* Audit Events */}
           <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", padding: "16px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
             <h3 style={{ margin: "0 0 12px 0", fontSize: "0.95rem", fontWeight: "700", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
-              <Clock size={16} color="#64748b" /> Nhật ký sự kiện phiên
+              <Clock size={16} color="#64748b" /> Hoạt động gần đây
             </h3>
 
             {events.length === 0 ? (
-              <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>Chưa có sự kiện nào</div>
+              <div style={{ fontSize: "0.8rem", color: "#94a3b8" }}>Chưa có hoạt động nào</div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "200px", overflowY: "auto" }}>
                 {events.slice(0, 15).map((ev) => (
                   <div key={ev.id} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", borderBottom: "1px solid #f1f5f9", paddingBottom: "4px" }}>
-                    <span style={{ fontWeight: "600", color: "#334155" }}>{ev.type}</span>
+                    <span style={{ fontWeight: "600", color: "#334155" }}>{formatEventType(ev.type)}</span>
                     <span style={{ color: "#94a3b8" }}>{new Date(ev.createdAt).toLocaleTimeString("vi-VN")}</span>
                   </div>
                 ))}

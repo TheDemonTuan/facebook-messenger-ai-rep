@@ -74,10 +74,10 @@ export const LoginPage: React.FC = () => {
             <ShieldCheck size={32} />
           </div>
           <h1 style={{ margin: "0 0 6px 0", fontSize: "1.45rem", fontWeight: "700", color: "#0f172a" }}>
-            Cloudflare Access Identity
+            Đăng nhập hệ thống
           </h1>
           <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>
-            Hệ thống Facebook Messenger AI Rep • Xác thực danh tính Zero Trust
+            Trợ lý Facebook Messenger • Xác thực tài khoản an toàn
           </p>
         </div>
 
@@ -114,9 +114,9 @@ export const LoginPage: React.FC = () => {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px", fontWeight: "600", color: "#1e293b", marginBottom: "4px" }}>
-              <Sparkles size={14} color="#f97316" /> Xác thực không mật khẩu
+              <Sparkles size={14} color="#f97316" /> Xác thực nhanh chóng
             </div>
-            Quyền truy cập được xác minh trực tiếp qua Cloudflare Zero Trust Gateway. Không yêu cầu mật khẩu hoặc mã OTP tĩnh.
+            Quyền truy cập được xác minh trực tiếp và bảo mật an toàn cho tài khoản của bạn.
           </div>
 
           <div>
@@ -129,7 +129,7 @@ export const LoginPage: React.FC = () => {
                 marginBottom: "6px",
               }}
             >
-              Email danh tính (Cloudflare / Dev Identity)
+              Email tài khoản
             </label>
             <input
               type="email"
@@ -177,7 +177,7 @@ export const LoginPage: React.FC = () => {
               </>
             ) : (
               <>
-                <span>Xác nhận danh tính Cloudflare</span>
+                <span>Đăng nhập hệ thống</span>
                 <ArrowRight size={18} />
               </>
             )}
@@ -185,7 +185,7 @@ export const LoginPage: React.FC = () => {
         </form>
 
         <div style={{ marginTop: "24px", textAlign: "center", fontSize: "0.75rem", color: "#94a3b8" }}>
-          Single-Agent Architecture • PostgreSQL Fencing Token
+          Hệ thống trợ lý tự động Facebook Messenger
         </div>
       </div>
     </div>

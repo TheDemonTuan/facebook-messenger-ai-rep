@@ -60,7 +60,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       if (overview.channelIsPaused) {
         await apiFetch("/api/channel/resume", { method: "POST" });
       } else {
-        if (confirm("Tạm dừng xử lý tin nhắn? (Tin nhắn mới vẫn được lưu vào DB nhưng AI không tự động xử lý)")) {
+        if (confirm("Tạm dừng xử lý tin nhắn? (Tin nhắn mới vẫn được tiếp nhận an toàn nhưng AI sẽ không tự động phản hồi)")) {
           await apiFetch("/api/channel/pause", { method: "POST" });
         }
       }
@@ -87,8 +87,38 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { label: "Sự cố", path: "/incidents", icon: AlertTriangle, badge: overview?.openIncidentsCount, badgeColor: "#ef4444" },
     { label: "AI Logs", path: "/ai-logs", icon: FileText },
     { label: "Cài đặt", path: "/settings", icon: Settings },
-    { label: "Audit Trail", path: "/audit", icon: Shield },
+    { label: "Nhật ký hoạt động", path: "/audit", icon: Shield },
   ];
+
+  const formatChannelStatus = (status?: string) => {
+    switch (status) {
+      case "RUNNING":
+        return "Đang hoạt động";
+      case "PAUSED":
+        return "Tạm dừng";
+      case "SUSPENDED":
+        return "Tạm khóa";
+      case "DEGRADED":
+        return "Chập chờn";
+      case "ERROR":
+        return "Gặp sự cố";
+      default:
+        return status || "Chưa xác định";
+    }
+  };
+
+  const getRoleLabel = (role?: string) => {
+    switch (role) {
+      case "OWNER":
+        return "Chủ sở hữu";
+      case "OPERATOR":
+        return "Quản trị viên";
+      case "VIEWER":
+        return "Người xem";
+      default:
+        return role || "Người vận hành";
+    }
+  };
 
   const getStatusColor = (status?: string) => {
     switch (status) {
@@ -141,7 +171,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <span>Facebook AI Rep</span>
             </div>
             <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginTop: "2px" }}>
-              PostgreSQL State Machine
+              Trợ lý tin nhắn tự động
             </div>
           </div>
           <button
@@ -210,10 +240,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: "0.8rem", fontWeight: "600", color: "#f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                {user?.email || "Cloudflare Operator"}
+                {user?.email || "Quản trị viên"}
               </div>
               <div style={{ fontSize: "0.7rem", color: "#38bdf8", marginTop: "2px", fontWeight: "600" }}>
-                {user?.role || "OPERATOR"}
+                {getRoleLabel(user?.role)}
               </div>
             </div>
             <button
@@ -285,7 +315,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               }}
             >
               <Radio size={12} color={sseConnected ? "#16a34a" : "#d97706"} />
-              <span>{sseConnected ? "SSE Trực tiếp" : "Đang kết nối lại..."}</span>
+              <span>{sseConnected ? "Trực tiếp" : "Đang kết nối lại..."}</span>
             </div>
           </div>
 
@@ -310,7 +340,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     backgroundColor: getStatusColor(overview.channelStatus),
                   }}
                 />
-                <span>Kênh: {overview.channelStatus}</span>
+                <span>Kênh: {formatChannelStatus(overview.channelStatus)}</span>
               </div>
             )}
 

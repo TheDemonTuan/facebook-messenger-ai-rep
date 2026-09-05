@@ -85,8 +85,8 @@ export const IncidentsPage: React.FC = () => {
   const handleResolveCheckpointOrDom = async (id: string, actionType: "CHECKPOINT" | "DOM") => {
     const note =
       actionType === "CHECKPOINT"
-        ? "Đã xử lý Checkpoint qua trình duyệt, khôi phục kênh"
-        : "Đã kiểm tra DOM và khôi phục kênh";
+        ? "Đã xác minh tài khoản Facebook, tiếp tục phục vụ"
+        : "Đã kiểm tra giao diện, tiếp tục phục vụ";
 
     setActionInProgress(id);
     try {
@@ -124,6 +124,36 @@ export const IncidentsPage: React.FC = () => {
   const resolvedCount = useMemo(() => incidents.filter((i) => i.status === "RESOLVED").length, [incidents]);
   const availableTypes = useMemo(() => Array.from(new Set(incidents.map((i) => i.type))), [incidents]);
 
+  const formatIncidentStatus = (status: string) => {
+    switch (status) {
+      case "OPEN":
+        return "Cần xử lý";
+      case "RESOLVED":
+        return "Đã xử lý";
+      default:
+        return status;
+    }
+  };
+
+  const formatIncidentType = (type: string) => {
+    switch (type) {
+      case "SEND_UNCERTAIN":
+        return "Chưa rõ kết quả gửi";
+      case "CHECKPOINT":
+      case "FACEBOOK_CHECKPOINT":
+        return "Xác minh Facebook";
+      case "DOM_CHANGED":
+      case "DOM_DEGRADED":
+        return "Giao diện thay đổi";
+      case "RATE_LIMITED":
+        return "Giới hạn gửi tin";
+      case "SESSION_EXPIRED":
+        return "Hết hạn phiên đăng nhập";
+      default:
+        return type.replace(/_/g, " ").toLowerCase();
+    }
+  };
+
   const filteredIncidents = useMemo(() => {
     return incidents.filter((item) => {
       if (tabFilter === "OPEN" && item.status !== "OPEN") return false;
@@ -146,10 +176,10 @@ export const IncidentsPage: React.FC = () => {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "12px" }}>
         <div>
           <h1 style={{ margin: "0 0 4px 0", fontSize: "1.5rem", fontWeight: "bold" }}>
-            Quản lý Sự cố & Giám sát An toàn (Circuit Breakers)
+            Quản lý sự cố & Giám sát an toàn
           </h1>
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-            Xử lý fail-closed cho SEND_UNCERTAIN, Checkpoint Facebook và sự cố DOM mà không thử lại mù quáng (No Blind Retry)
+            Theo dõi và xử lý các vấn đề gửi tin nhắn, xác minh tài khoản Facebook hoặc lỗi kết nối
           </div>
         </div>
 
@@ -244,7 +274,7 @@ export const IncidentsPage: React.FC = () => {
             >
               <option value="ALL">Tất cả loại sự cố</option>
               {availableTypes.map((t) => (
-                <option key={t} value={t}>{t}</option>
+                <option key={t} value={t}>{formatIncidentType(t)}</option>
               ))}
             </select>
           )}
@@ -272,7 +302,7 @@ export const IncidentsPage: React.FC = () => {
           <CheckCircle size={36} color="#10b981" style={{ margin: "0 auto 12px auto" }} />
           <h3 style={{ margin: "0 0 6px 0", color: "#1e293b", fontSize: "1.1rem" }}>Không có sự cố nào cần xử lý</h3>
           <p style={{ margin: 0, fontSize: "0.85rem" }}>
-            Tất cả các cơ chế an toàn, fail-closed và kết nối kênh đều đang hoạt động bình thường.
+            Tất cả các cơ chế bảo vệ và kết nối kênh đều đang hoạt động ổn định.
           </p>
         </div>
       ) : (
@@ -324,11 +354,11 @@ export const IncidentsPage: React.FC = () => {
                             color: isOpen ? "#991b1b" : "#166534",
                           }}
                         >
-                          {incident.status}
+                          {formatIncidentStatus(incident.status)}
                         </span>
 
                         <span style={{ fontSize: "0.75rem", fontWeight: "700", color: "#2563eb", backgroundColor: "#eff6ff", padding: "2px 6px", borderRadius: "4px" }}>
-                          {incident.type}
+                          {formatIncidentType(incident.type)}
                         </span>
 
                         <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
@@ -410,7 +440,7 @@ export const IncidentsPage: React.FC = () => {
                             cursor: "pointer",
                           }}
                         >
-                          <Check size={14} /> Đã gỡ Checkpoint & Tiếp tục
+                          <Check size={14} /> Đã xác minh tài khoản & Tiếp tục
                         </button>
                       </div>
                     )}
@@ -434,7 +464,7 @@ export const IncidentsPage: React.FC = () => {
                             cursor: "pointer",
                           }}
                         >
-                          <Check size={14} /> Đã khắc phục DOM & Tiếp tục
+                          <Check size={14} /> Đã kiểm tra giao diện & Tiếp tục
                         </button>
                       </div>
                     )}
@@ -506,21 +536,27 @@ export const IncidentsPage: React.FC = () => {
                 {isExpanded && (
                   <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderTop: "1px solid #e2e8f0" }}>
                     <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <div style={{ fontSize: "0.8rem", color: "#475569" }}>
-                        <strong>Incident ID:</strong> {incident.id}
-                        {incident.conversationId && ` • Conversation: ${incident.conversationId}`}
-                        {incident.resolvedBy && ` • Đã giải quyết bởi: ${incident.resolvedBy}`}
-                        {incident.resolutionNote && ` • Ghi chú: ${incident.resolutionNote}`}
-                      </div>
-
-                      {incident.metadata && (
-                        <div>
-                          <strong style={{ fontSize: "0.78rem", color: "#334155" }}>Metadata kỹ thuật:</strong>
-                          <pre style={{ margin: "4px 0 0 0", padding: "10px", backgroundColor: "#0f172a", color: "#e2e8f0", borderRadius: "6px", fontSize: "0.75rem", overflowX: "auto" }}>
-                            {JSON.stringify(incident.metadata, null, 2)}
-                          </pre>
+                      {(incident.resolvedBy || incident.resolutionNote) && (
+                        <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                          {incident.resolvedBy && <div><strong>Người giải quyết:</strong> {incident.resolvedBy}</div>}
+                          {incident.resolutionNote && <div><strong>Ghi chú xử lý:</strong> {incident.resolutionNote}</div>}
                         </div>
                       )}
+
+                      <details style={{ marginTop: "4px" }}>
+                        <summary style={{ cursor: "pointer", fontSize: "0.78rem", fontWeight: "600", color: "#64748b" }}>
+                          Chi tiết kỹ thuật
+                        </summary>
+                        <div style={{ marginTop: "6px", fontSize: "0.75rem", color: "#64748b" }}>
+                          <span>Mã sự cố: {incident.id}</span>
+                          {incident.conversationId && <span> • Mã hội thoại: {incident.conversationId}</span>}
+                        </div>
+                        {incident.metadata && (
+                          <pre style={{ margin: "6px 0 0 0", padding: "10px", backgroundColor: "#0f172a", color: "#e2e8f0", borderRadius: "6px", fontSize: "0.75rem", overflowX: "auto" }}>
+                            {JSON.stringify(incident.metadata, null, 2)}
+                          </pre>
+                        )}
+                      </details>
                     </div>
                   </div>
                 )}

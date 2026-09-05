@@ -133,7 +133,19 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   const bodyText = (await page.locator("body").innerText()).toLowerCase();
   assert(!bodyText.includes("novnc"), `${name}: public noVNC control is visible`);
 
+  await page.goto(`${baseURL}/overview`);
+  const overviewText = await page.locator("main").innerText();
+  assert(overviewText.includes("Tổng quan hệ thống"), `${name}: missing overview title`);
+  assert(overviewText.includes("Hội thoại hôm nay"), `${name}: missing friendly conversation metric`);
+
   await page.goto(`${baseURL}/settings`);
+  const settingsText = await page.locator("main").innerText();
+  assert(settingsText.includes("Loại dịch vụ AI"), `${name}: missing customer-friendly AI provider format label`);
+  assert(settingsText.includes("Địa chỉ dịch vụ"), `${name}: missing customer-friendly address label`);
+  assert(settingsText.includes("Tên mô hình"), `${name}: missing customer-friendly model label`);
+  assert(settingsText.includes("Mật khẩu kết nối"), `${name}: missing customer-friendly write-only credential label`);
+  assert(!settingsText.includes("Base URL"), `${name}: raw 'Base URL' exposed in Settings view`);
+
   await page.locator("select").filter({ has: page.locator('option[value="OPENAI_COMPATIBLE"]') }).selectOption("ANTHROPIC_COMPATIBLE");
   await page.locator('input[type="url"]').fill("https://api.anthropic.example/v1");
   await page.locator('input[placeholder*="claude-sonnet"]').fill("claude-sonnet-test");
@@ -143,8 +155,27 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.getByRole("button", { name: "Lưu cấu hình" }).click();
   await page.getByText(/Đã lưu cấu hình mới thành công/).waitFor();
 
+  await page.goto(`${baseURL}/incidents`);
+  const incidentsText = await page.locator("main").innerText();
+  assert(incidentsText.includes("Quản lý sự cố & Giám sát an toàn"), `${name}: missing customer-friendly incident title`);
+  assert(!incidentsText.includes("fail-closed"), `${name}: raw internal jargon 'fail-closed' exposed`);
+  assert(!incidentsText.includes("Circuit Breakers"), `${name}: raw 'Circuit Breakers' jargon exposed`);
+
+  await page.goto(`${baseURL}/queue`);
+  const queueText = await page.locator("main").innerText();
+  assert(!queueText.includes("fencingEpoch"), `${name}: raw technical token 'fencingEpoch' visible in normal queue view`);
+
+  await page.goto(`${baseURL}/audit`);
+  const auditText = await page.locator("main").innerText();
+  assert(auditText.includes("Nhật ký hoạt động"), `${name}: missing friendly audit title`);
+  assert(!auditText.includes("Audit Trail"), `${name}: raw 'Audit Trail' jargon exposed`);
+
   await page.goto(`${baseURL}/inbox/${conversationId}`);
   await page.getByText("Khách thử nghiệm").first().waitFor();
+  const convDetailText = await page.locator("main").innerText();
+  assert(convDetailText.includes("Chi tiết kỹ thuật"), `${name}: missing collapsible technical details block`);
+  assert(!convDetailText.includes("Inbound Version:"), `${name}: raw 'Inbound Version:' exposed in default detail view`);
+
   await page.getByRole("button", { name: /tiếp quản thủ công/i }).click();
   const composer = page.locator('input[placeholder*="Nhập tin nhắn"]').first();
   await composer.fill("Phản hồi thủ công đã kiểm tra");
@@ -177,7 +208,7 @@ async function main(): Promise<void> {
   const preview = spawn(
     process.execPath,
     ["run", "--filter=@messenger/dashboard", "preview", "--", "--host", "127.0.0.1", "--port", "4173"],
-    { stdio: "inherit", shell: process.platform === "win32" }
+    { stdio: "ignore", shell: process.platform === "win32" }
   );
 
   let browser: Browser | undefined;
@@ -189,10 +220,21 @@ async function main(): Promise<void> {
   } finally {
     await browser?.close();
     preview.kill();
+    if (process.platform === "win32" && preview.pid) {
+      try {
+        spawn("taskkill", ["/pid", preview.pid.toString(), "/t", "/f"]);
+      } catch {
+        // Ignored
+      }
+    }
   }
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+main()
+  .then(() => {
+    process.exit(0);
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });

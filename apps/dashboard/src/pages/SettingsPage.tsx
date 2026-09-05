@@ -186,11 +186,11 @@ export const SettingsPage: React.FC = () => {
         <div>
           <h1 style={{ margin: "0 0 4px 0", fontSize: "1.5rem", fontWeight: "bold" }}>Cài đặt hệ thống</h1>
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-            Cấu hình thời gian phản hồi, mô hình AI và quy tắc điều phối hội thoại
+            Cấu hình dịch vụ AI, thời gian phản hồi và quy tắc điều phối hội thoại
           </div>
         </div>
         <div style={{ fontSize: "0.85rem", color: "#64748b", display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#f1f5f9", padding: "6px 12px", borderRadius: "6px" }}>
-          <History size={16} /> Revision hiện tại: <span style={{ fontWeight: "bold", color: "#2563eb" }}>#{data?.revision || 1}</span>
+          <History size={16} /> Phiên bản hiện tại: <span style={{ fontWeight: "bold", color: "#2563eb" }}>#{data?.revision || 1}</span>
         </div>
       </div>
 
@@ -215,10 +215,10 @@ export const SettingsPage: React.FC = () => {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginBottom: "14px" }}>
             <div>
               <h2 style={{ fontSize: "1.05rem", fontWeight: "700", margin: "0 0 2px 0", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Cpu size={18} color="#2563eb" /> Mô hình AI & Kiểm tra sức khỏe (Health)
+                <Cpu size={18} color="#2563eb" /> Dịch vụ AI & Kiểm tra kết nối
               </h2>
               <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                Gateway hiện được quản trị bằng biến môi trường trên VPS. API Key và URL đầy đủ không được gửi xuống trình duyệt.
+                Thông tin kết nối được bảo mật an toàn trên máy chủ.
               </span>
             </div>
             <button
@@ -266,7 +266,7 @@ export const SettingsPage: React.FC = () => {
                 {aiTestResult.healthy !== false && aiTestResult.status !== "error" ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
                 <span>
                   Trạng thái: <strong>{aiTestResult.healthy !== false && aiTestResult.status !== "error" ? "Sẵn sàng (Healthy)" : "Lỗi kết nối"}</strong>
-                  {aiTestResult.model && ` • Model: ${aiTestResult.model}`}
+                  {aiTestResult.model && ` • Mô hình: ${aiTestResult.model}`}
                   {aiTestResult.error && ` (${aiTestResult.error})`}
                 </span>
               </div>
@@ -280,7 +280,7 @@ export const SettingsPage: React.FC = () => {
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
             <div>
-              <label style={labelStyle}>Định dạng API</label>
+              <label style={labelStyle}>Loại dịch vụ AI</label>
               <select
                 value={aiProvider.apiFormat}
                 onChange={(e) => setAiProvider({ ...aiProvider, apiFormat: e.target.value as AiProviderSettings["apiFormat"] })}
@@ -291,7 +291,7 @@ export const SettingsPage: React.FC = () => {
               </select>
             </div>
             <div>
-              <label style={labelStyle}>Model</label>
+              <label style={labelStyle}>Tên mô hình</label>
               <input
                 type="text"
                 value={aiProvider.model}
@@ -302,8 +302,8 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
 
-          <div>
-            <label style={labelStyle}>Base URL tùy chỉnh</label>
+          <div style={{ marginTop: "16px" }}>
+            <label style={labelStyle}>Địa chỉ dịch vụ</label>
             <input
               type="url"
               value={aiProvider.baseUrl}
@@ -312,24 +312,22 @@ export const SettingsPage: React.FC = () => {
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              {aiProvider.apiFormat === "OPENAI_COMPATIBLE"
-                ? "Hệ thống gọi POST {Base URL}/chat/completions."
-                : "Hệ thống gọi POST {Base URL}/messages theo chuẩn Claude API."}
+              Địa chỉ kết nối đến nhà cung cấp dịch vụ AI.
             </span>
           </div>
 
-          <div>
-            <label style={labelStyle}>API key</label>
+          <div style={{ marginTop: "16px" }}>
+            <label style={labelStyle}>Mật khẩu kết nối</label>
             <input
               type="password"
               value={aiApiKey}
               onChange={(e) => setAiApiKey(e.target.value)}
-              placeholder={aiProvider.apiKeyConfigured ? "Đã cấu hình — để trống để giữ nguyên" : "Nhập API key"}
+              placeholder={aiProvider.apiKeyConfigured ? "Đã cấu hình — để trống để giữ nguyên" : "Nhập mật khẩu kết nối"}
               autoComplete="new-password"
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              API key được mã hóa phía server và không bao giờ được trả lại trình duyệt.
+              Mật khẩu kết nối được mã hóa trên máy chủ và bảo mật tuyệt đối.
             </span>
           </div>
         </div>
@@ -337,11 +335,11 @@ export const SettingsPage: React.FC = () => {
         {/* 2. Debounce & Queue Pacing */}
         <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "20px" }}>
           <h2 style={{ fontSize: "1.05rem", fontWeight: "700", margin: "0 0 14px 0", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Clock size={18} color="#2563eb" /> Debounce & Điều phối hàng đợi
+            <Clock size={18} color="#2563eb" /> Thời gian gom tin & Điều phối hội thoại
           </h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px" }}>
             <div>
-              <label style={labelStyle}>Debounce Inbound (ms)</label>
+              <label style={labelStyle}>Thời gian chờ gom tin nhắn (mili-giây)</label>
               <input
                 type="number"
                 value={formData.debounceMs || 3000}
@@ -350,11 +348,11 @@ export const SettingsPage: React.FC = () => {
                 min={500}
                 max={30000}
               />
-              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Thời gian gộp tin nhắn của khách (500ms - 30000ms)</span>
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Thời gian chờ khách nhắn tiếp trước khi AI phản hồi (500ms - 30000ms)</span>
             </div>
 
             <div>
-              <label style={labelStyle}>Sticky Window (ms)</label>
+              <label style={labelStyle}>Thời gian ưu tiên giữ lượt (mili-giây)</label>
               <input
                 type="number"
                 value={formData.stickyWindowMs || 45000}
@@ -363,11 +361,11 @@ export const SettingsPage: React.FC = () => {
                 min={5000}
                 max={300000}
               />
-              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Cửa sổ giữ phiên hội thoại ưu tiên (5s - 300s)</span>
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Thời gian ưu tiên trả lời tiếp khách đang trò chuyện (5s - 300s)</span>
             </div>
 
             <div>
-              <label style={labelStyle}>Tối đa lượt Sticky (Turns)</label>
+              <label style={labelStyle}>Số lượt trả lời ưu tiên liên tiếp</label>
               <input
                 type="number"
                 value={formData.stickyMaxTurns || 3}
@@ -380,7 +378,7 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div>
-              <label style={labelStyle}>Tối đa thời gian Sticky (ms)</label>
+              <label style={labelStyle}>Tổng thời gian ưu tiên tối đa (mili-giây)</label>
               <input
                 type="number"
                 value={formData.stickyMaxDurationMs || 120000}
@@ -389,7 +387,7 @@ export const SettingsPage: React.FC = () => {
                 min={10000}
                 max={600000}
               />
-              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Sau thời gian này buộc yield cho hàng đợi</span>
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Sau thời gian này sẽ nhường lượt cho khách trong hàng đợi</span>
             </div>
           </div>
         </div>
@@ -401,7 +399,7 @@ export const SettingsPage: React.FC = () => {
           </h2>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", marginBottom: "16px" }}>
             <div>
-              <label style={labelStyle}>Tốc độ gõ tối thiểu (WPM)</label>
+              <label style={labelStyle}>Tốc độ gõ tối thiểu (từ/phút)</label>
               <input
                 type="number"
                 value={formData.typingTargetWpmMin || 80}
@@ -412,7 +410,7 @@ export const SettingsPage: React.FC = () => {
               />
             </div>
             <div>
-              <label style={labelStyle}>Tốc độ gõ tối đa (WPM)</label>
+              <label style={labelStyle}>Tốc độ gõ tối đa (từ/phút)</label>
               <input
                 type="number"
                 value={formData.typingTargetWpmMax || 140}
@@ -431,7 +429,7 @@ export const SettingsPage: React.FC = () => {
                 checked={formData.autoReplyEnabled ?? true}
                 onChange={(e) => setFormData({ ...formData, autoReplyEnabled: e.target.checked })}
               />
-              <span>Tự động phản hồi tin nhắn (Auto Reply)</span>
+              <span>Tự động phản hồi tin nhắn</span>
             </label>
 
             <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
@@ -440,7 +438,7 @@ export const SettingsPage: React.FC = () => {
                 checked={formData.busyMode ?? false}
                 onChange={(e) => setFormData({ ...formData, busyMode: e.target.checked })}
               />
-              <span>Chế độ bận (Busy Mode - tăng pacing)</span>
+              <span>Chế độ bận (Giãn cách thời gian trả lời khi đông khách)</span>
             </label>
 
             <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
@@ -457,11 +455,11 @@ export const SettingsPage: React.FC = () => {
         {/* 4. Persona & Business Profile */}
         <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "20px" }}>
           <h2 style={{ fontSize: "1.05rem", fontWeight: "700", margin: "0 0 14px 0", color: "#1e293b" }}>
-            Persona & Thông tin kinh doanh
+            Tính cách trợ lý & Thông tin cửa hàng
           </h2>
           <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
             <div>
-              <label style={labelStyle}>System Persona (Tính cách trợ lý AI)</label>
+              <label style={labelStyle}>Tính cách và vai trò của trợ lý AI</label>
               <textarea
                 value={formData.aiSystemPersona || ""}
                 onChange={(e) => setFormData({ ...formData, aiSystemPersona: e.target.value })}
@@ -472,7 +470,7 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div>
-              <label style={labelStyle}>Business Profile (Dữ liệu sản phẩm / dịch vụ)</label>
+              <label style={labelStyle}>Thông tin cửa hàng, sản phẩm và dịch vụ</label>
               <textarea
                 value={formData.businessProfile || ""}
                 onChange={(e) => setFormData({ ...formData, businessProfile: e.target.value })}
@@ -486,12 +484,12 @@ export const SettingsPage: React.FC = () => {
 
         {/* 5. Revision Reason & Submit */}
         <div>
-          <label style={labelStyle}>Lý do cập nhật (Audit Reason)</label>
+          <label style={labelStyle}>Ghi chú lý do thay đổi</label>
           <input
             type="text"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Ví dụ: Điều chỉnh debounce theo lưu lượng cao điểm"
+            placeholder="Ví dụ: Cập nhật thời gian phản hồi vào giờ cao điểm"
             style={{ ...inputStyle, marginBottom: "16px" }}
           />
 
@@ -514,7 +512,7 @@ export const SettingsPage: React.FC = () => {
             }}
           >
             {saving ? <Loader2 size={18} className="animate-spin" /> : <Save size={18} />}
-            {saving ? "Đang lưu cấu hình..." : "Lưu cấu hình hệ thống"}
+            {saving ? "Đang lưu cấu hình..." : "Lưu cấu hình"}
           </button>
         </div>
       </form>

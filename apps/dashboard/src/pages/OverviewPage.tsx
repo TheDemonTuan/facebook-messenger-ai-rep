@@ -78,6 +78,24 @@ export const OverviewPage: React.FC = () => {
     border: "1px solid #e2e8f0",
   };
 
+  const formatConvStatus = (status: string) => {
+    switch (status) {
+      case "QUEUED":
+      case "DEBOUNCING":
+        return "Đang chờ phản hồi";
+      case "READING":
+      case "THINKING":
+      case "DRAFT_READY":
+      case "TYPING":
+      case "SENDING":
+        return "AI đang soạn tin";
+      case "ERROR":
+        return "Cần kiểm tra";
+      default:
+        return "Chờ tin nhắn mới";
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
@@ -86,7 +104,7 @@ export const OverviewPage: React.FC = () => {
             Tổng quan hệ thống
           </h1>
           <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-            Trạng thái kênh Messenger AI, hàng đợi phục vụ đơn luồng và chỉ số hoạt động
+            Trạng thái kênh Messenger, hàng đợi và chỉ số hoạt động chăm sóc khách hàng
           </div>
         </div>
         <button
@@ -140,16 +158,16 @@ export const OverviewPage: React.FC = () => {
           </div>
           <div>
             <div style={{ fontSize: "0.78rem", color: "#64748b", fontWeight: "700", textTransform: "uppercase" }}>
-              Phiên đang được phục vụ (Single Agent Turn)
+              Hội thoại đang được AI hỗ trợ
             </div>
             {data.activeConversation ? (
               <div style={{ marginTop: "2px", fontSize: "1rem", fontWeight: "bold", color: "#1e3a8a" }}>
-                Thread ID: {data.activeConversation.externalThreadId} • Trạng thái:{" "}
-                <span style={{ textDecoration: "underline" }}>{data.activeConversation.status}</span>
+                Đang xử lý phản hồi • Trạng thái:{" "}
+                <span style={{ textDecoration: "underline" }}>{formatConvStatus(data.activeConversation.status)}</span>
               </div>
             ) : (
               <div style={{ marginTop: "2px", fontSize: "0.9rem", color: "#64748b" }}>
-                Hiện không có hội thoại nào đang active claim. Bot đang chờ tin nhắn mới.
+                Hiện không có hội thoại nào cần xử lý gấp. Hệ thống sẵn sàng tiếp nhận tin nhắn mới.
               </div>
             )}
           </div>
@@ -201,12 +219,12 @@ export const OverviewPage: React.FC = () => {
             <MessageSquare size={20} color="#8b5cf6" />
           </div>
           <div style={{ fontSize: "1.8rem", fontWeight: "bold", color: "#0f172a" }}>{data.todayMessagesCount}</div>
-          <div style={{ fontSize: "0.8rem", color: "#64748b" }}>Bao gồm Inbound & Outbound</div>
+          <div style={{ fontSize: "0.8rem", color: "#64748b" }}>Bao gồm tin nhắn gửi và nhận</div>
         </div>
 
         <div style={cardStyle}>
           <div style={{ display: "flex", justifyContent: "space-between", color: "#64748b" }}>
-            <span style={{ fontSize: "0.85rem", fontWeight: "600" }}>Sự cố đang mở</span>
+            <span style={{ fontSize: "0.85rem", fontWeight: "600" }}>Sự cố cần xử lý</span>
             <AlertTriangle size={20} color={data.openIncidentsCount > 0 ? "#ef4444" : "#10b981"} />
           </div>
           <div style={{ fontSize: "1.8rem", fontWeight: "bold", color: data.openIncidentsCount > 0 ? "#dc2626" : "#0f172a" }}>
