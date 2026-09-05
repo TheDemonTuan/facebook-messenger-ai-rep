@@ -46,7 +46,7 @@ export class CoreJobService {
   constructor(deps: CoreJobServiceDeps) {
     this.runner = new JobRunner({
       jobRepo: deps.jobRepo,
-      queues: ["default", "ai", "system"],
+      queues: ["default", "debounce", "ai", "system"],
       concurrency: 2,
       pollIntervalMs: 200,
       leaseDurationSeconds: 60,
@@ -72,6 +72,7 @@ export class CoreJobService {
       outboxRepo: deps.outboxRepo,
       broadcaster: deps.broadcaster,
       aiGenerator: deps.aiGenerator,
+      jobRepo: deps.jobRepo,
     });
 
     this.handleReconcile = createReconcileHandler({

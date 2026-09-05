@@ -8,6 +8,7 @@ import type {
   IncidentRepository,
   EventRepository,
   OutboxRepository,
+  JobRepository,
 } from "@messenger/db";
 import { aiRuns, aiDrafts } from "@messenger/db";
 import type { AiReplyGenerator } from "@messenger/ai";
@@ -31,6 +32,7 @@ export interface AiHandlerDeps {
   outboxRepo: OutboxRepository;
   broadcaster: OutboxBroadcaster;
   aiGenerator: AiReplyGenerator;
+  jobRepo?: JobRepository;
 }
 
 export function createAiHandler(deps: AiHandlerDeps) {
@@ -45,6 +47,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
     outboxRepo,
     broadcaster,
     aiGenerator,
+    jobRepo,
   } = deps;
 
   return async function handleAi(context: JobExecutionContext): Promise<void> {
@@ -218,7 +221,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
 
     for (let i = 0; i < messagesToDraft.length; i++) {
       const msgText = messagesToDraft[i]!;
-      await outboundRepo.createAction({
+      const action = await outboundRepo.createAction({
         channelAccountId,
         conversationId,
         turnId: turnId || undefined,
@@ -229,6 +232,32 @@ export function createAiHandler(deps: AiHandlerDeps) {
         claimToken: context.ownerToken,
         fencingToken: context.fencingEpoch,
       });
+
+      if (jobRepo && action) {
+        await jobRepo.enqueue({
+          channelAccountId,
+          queue: "browser",
+          jobType: "BROWSER_SEND",
+          priority: 10,
+          payload: {
+            actionId: action.actionId,
+            channelAccountId,
+            conversationId,
+            turnId: turnId || undefined,
+            externalThreadRef: conversation.externalThreadRef,
+            inboundVersion,
+            responseIndex: i,
+            text: msgText,
+            textHash: action.textHash,
+            actor: "AI",
+            claimToken: context.ownerToken,
+            ownerToken: context.ownerToken,
+            fencingToken: context.fencingEpoch,
+            fencingEpoch: context.fencingEpoch,
+          },
+          idempotencyKey: `browser-send:${action.actionId}`,
+        });
+      }
     }
 
     // 7. Update turn and conversation status

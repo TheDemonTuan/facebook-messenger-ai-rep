@@ -1,6 +1,6 @@
 import { eq, desc } from "drizzle-orm";
 import type { Database } from "../client.js";
-import { incidents, channelAccounts } from "../schema/index.js";
+import { incidents, channelAccounts, outboxEvents } from "../schema/index.js";
 import type { IncidentType, IncidentStatus } from "@messenger/contracts";
 
 export interface CreateIncidentParams {
@@ -46,6 +46,18 @@ export class IncidentRepository {
           })
           .where(eq(channelAccounts.id, params.channelAccountId));
       }
+
+      await tx.insert(outboxEvents).values({
+        channelAccountId: params.channelAccountId,
+        conversationId: params.conversationId || null,
+        eventType: "incident:created",
+        payload: {
+          incidentId: incident.id,
+          type: incident.type,
+          title: incident.title,
+          conversationId: incident.conversationId,
+        },
+      });
 
       return incident;
     });

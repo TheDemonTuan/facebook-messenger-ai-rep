@@ -65,6 +65,7 @@ export function shouldRefetchQueue(eventType: string): boolean {
  */
 export function shouldRefetchIncidents(eventType: string): boolean {
   return [
+    "incident:created",
     "incident:resolved",
     "outbound:uncertain",
     "channel:status",
@@ -78,6 +79,7 @@ export function shouldRefetchOverview(eventType: string): boolean {
   return [
     "channel:status",
     "queue:updated",
+    "incident:created",
     "incident:resolved",
     "conversation:status",
     "conversation:takeover",

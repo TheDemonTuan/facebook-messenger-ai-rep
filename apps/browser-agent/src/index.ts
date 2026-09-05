@@ -83,8 +83,18 @@ async function main() {
   await adapter.observeInbound(async (inbound) => {
     console.log(`[Browser Agent] Inbound received from ${inbound.externalCustomerId}: "${inbound.text.slice(0, 30)}..."`);
 
-    // Ingest into PostgreSQL
-    const result = await convRepo.ingestInboundMessage(inbound);
+    let debounceMs = 3000;
+    try {
+      const s = await settingsRepo.getSettings(inbound.channelAccountId);
+      if (s?.settings?.debounceMs) {
+        debounceMs = s.settings.debounceMs;
+      }
+    } catch (err) {
+      console.warn("[Browser Agent] Failed to read debounceMs from settings, defaulting to 3000ms:", err);
+    }
+
+    // Ingest into PostgreSQL atomically with debounce job enqueued/updated
+    const result = await convRepo.ingestInboundMessage(inbound, { debounceMs });
     if (result.isDuplicate) {
       console.log(`[Browser Agent] Deduplicated message ${inbound.externalMessageId}`);
       return;

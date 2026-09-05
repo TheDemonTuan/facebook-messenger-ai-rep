@@ -105,6 +105,7 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
     // 7. Enqueue AI job into jobs table
     await jobRepo.enqueue({
       channelAccountId,
+      queue: "ai",
       jobType: "ai",
       priority: 10,
       payload: {

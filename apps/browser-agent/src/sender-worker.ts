@@ -90,7 +90,7 @@ export class SenderWorkerService {
 
     this.jobRunner = new JobRunner({
       jobRepo: this.jobRepo,
-      queues: ["browser", "browser-actions", "default"],
+      queues: ["browser", "browser-actions"],
       concurrency: 1, // Single sender execution per channel
       pollIntervalMs: 250,
       leaseDurationSeconds: 60,

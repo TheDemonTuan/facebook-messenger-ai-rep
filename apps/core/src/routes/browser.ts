@@ -58,20 +58,21 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
 
         const payload = parsed.data;
 
-        // Ingest into database (deduplication, bumps version, records message)
-        const result = await convRepo.ingestInboundMessage(payload);
-        if (result.isDuplicate) {
-          return reply.send(result);
-        }
-
         // Get debounce window from settings
         const { settings } = await settingsRepo.getSettings(payload.channelAccountId);
         const debounceMs = settings.debounceMs || 3000;
         const availableAt = new Date(Date.now() + debounceMs);
 
+        // Ingest into database (deduplication, bumps version, records message, atomically sets up debounce job)
+        const result = await convRepo.ingestInboundMessage(payload, { debounceMs });
+        if (result.isDuplicate) {
+          return reply.send(result);
+        }
+
         // Schedule debounce job in PostgreSQL jobs table
         await jobRepo.enqueue({
           channelAccountId: payload.channelAccountId,
+          queue: "debounce",
           jobType: "debounce",
           availableAt,
           payload: {

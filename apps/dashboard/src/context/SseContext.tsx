@@ -53,6 +53,7 @@ export const SseProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           "outbound:uncertain",
           "outbound:aborted",
           "action:reconciled",
+          "incident:created",
           "incident:resolved",
           "settings:updated",
           "outbox:inbound_received",

@@ -268,18 +268,23 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         return reply.status(400).send({ error: "Invalid settings format", details: parsed.error.issues });
       }
 
+      const reason =
+        typeof body?.reason === "string" && body.reason.trim().length > 0
+          ? body.reason.trim()
+          : "Updated settings from core control plane";
+
       const updated = await settingsRepo.updateSettings(
         channelAccountId,
         parsed.data,
         user.email,
-        "Updated settings from core control plane"
+        reason
       );
 
       await eventRepo.recordEvent({
         channelAccountId,
         type: "SETTING_CHANGED",
         actor: user.email,
-        payload: { revision: updated.revision },
+        payload: { revision: updated.revision, reason },
       });
 
       await broadcaster.broadcast("settings:updated", { revision: updated.revision });
@@ -304,7 +309,12 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       async (request, reply) => {
         const { baseURL, apiKey, model } = request.body || {};
         const health = await checkAiHealth({ baseURL, apiKey, model });
-        return reply.send(health);
+        return reply.send({
+          ...health,
+          healthy: health.healthy ?? health.ok,
+          status: health.status ?? (health.ok ? "healthy" : "unhealthy"),
+          model: model || health.model,
+        });
       }
     );
 

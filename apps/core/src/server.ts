@@ -170,6 +170,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
       convRepo,
       queueRepo,
       outboundRepo,
+      jobRepo,
       eventRepo,
       outboxRepo,
       broadcaster,

@@ -6,6 +6,7 @@ import type {
   OutboundRepository,
   EventRepository,
   OutboxRepository,
+  JobRepository,
 } from "@messenger/db";
 import {
   conversations,
@@ -26,6 +27,7 @@ export interface InboxRoutesOptions {
   convRepo: ConversationRepository;
   queueRepo: QueueRepository;
   outboundRepo: OutboundRepository;
+  jobRepo?: JobRepository;
   eventRepo: EventRepository;
   outboxRepo: OutboxRepository;
   broadcaster: OutboxBroadcaster;
@@ -39,6 +41,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
     convRepo,
     queueRepo,
     outboundRepo,
+    jobRepo,
     eventRepo,
     outboxRepo,
     broadcaster,
@@ -338,6 +341,29 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           actionId: action.actionId,
         });
 
+        if (jobRepo) {
+          await jobRepo.enqueue({
+            channelAccountId,
+            queue: "browser",
+            jobType: "BROWSER_SEND",
+            priority: 20,
+            payload: {
+              actionId: action.actionId,
+              channelAccountId,
+              conversationId,
+              externalThreadRef: convData.conversation.externalThreadRef,
+              inboundVersion: currentVersion,
+              responseIndex: 0,
+              text: text.trim(),
+              textHash: action.textHash,
+              actor: "MANUAL_OWNER",
+              claimToken: "manual-send-token",
+              fencingToken: 1,
+            },
+            idempotencyKey: `browser-send:${action.actionId}`,
+          });
+        }
+
         return reply.send({ success: true, actionId: action.actionId });
       }
     );
@@ -399,6 +425,28 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             actor: user.email,
             payload: { actionId, retryApproved: true },
           });
+
+          if (jobRepo) {
+            const convData = await convRepo.getConversationById(conversationId);
+            await jobRepo.enqueue({
+              channelAccountId,
+              queue: "browser",
+              jobType: "BROWSER_SEND",
+              priority: 20,
+              payload: {
+                actionId: action.actionId,
+                channelAccountId,
+                conversationId: action.conversationId,
+                externalThreadRef: convData?.conversation.externalThreadRef || "",
+                inboundVersion: action.inboundVersion,
+                responseIndex: action.responseIndex,
+                text: action.text,
+                textHash: action.textHash,
+                actor: action.actor,
+              },
+              idempotencyKey: `browser-send:${action.actionId}:retry-${Date.now()}`,
+            });
+          }
 
           await broadcaster.broadcast("action:reconciled", { actionId, resolution: "RETRY" });
           return reply.send({ success: true, actionId, status: "PENDING" });

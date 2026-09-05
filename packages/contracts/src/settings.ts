@@ -14,8 +14,8 @@ export const SystemSettingsSchema = z.object({
     "Bạn là nhân viên CSKH duy nhất, nhiệt tình, lịch sự, ngắn gọn và trung thực. Chỉ trả lời dựa trên thông tin được cung cấp, không bịa thông tin về giá, đơn hàng, chính sách nếu chưa có dữ liệu rõ ràng. Nếu thiếu dữ kiện cần thiết, hãy lịch sự hỏi đúng 1 câu tối thiểu."
   ),
   businessProfile: z.string().default("Shop tư vấn và hỗ trợ khách hàng trực tuyến."),
-  typingTargetWpmMin: z.number().int().min(20).max(150).default(55),
-  typingTargetWpmMax: z.number().int().min(20).max(150).default(65),
+  typingTargetWpmMin: z.number().int().min(20).max(300).default(55),
+  typingTargetWpmMax: z.number().int().min(20).max(300).default(65),
   busyMode: z.boolean().default(false),
   autoReplyEnabled: z.boolean().default(true),
   pauseIntakeProcessing: z.boolean().default(false),

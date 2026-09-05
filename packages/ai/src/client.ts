@@ -39,19 +39,39 @@ export function getAiClient(config?: AiClientConfig): OpenAI {
   return client;
 }
 
+export interface AiHealthCheckResult {
+  ok: boolean;
+  healthy: boolean;
+  status: "healthy" | "unhealthy";
+  message: string;
+  model?: string;
+  latencyMs?: number;
+  error?: string;
+}
+
 export async function checkAiHealth(config?: {
   baseURL?: string;
   apiKey?: string;
   model?: string;
-}): Promise<{ ok: boolean; message: string }> {
+}): Promise<AiHealthCheckResult> {
   const env = getEnv();
   const client = getAiClient(config);
   const model = config?.model || env.XAI_MODEL || env.DEFAULT_AI_MODEL;
+  const start = Date.now();
+
   try {
     // Attempt smoke call or list models
     const models = await client.models.list();
     const count = models.data?.length || 0;
-    return { ok: true, message: `Connected to AI gateway (${count} models available)` };
+    const latencyMs = Date.now() - start;
+    return {
+      ok: true,
+      healthy: true,
+      status: "healthy",
+      model,
+      latencyMs,
+      message: `Connected to AI gateway (${count} models available)`,
+    };
   } catch (err: unknown) {
     const error = err as Error;
     // If /v1/models is not supported, run a minimal completion test
@@ -62,12 +82,38 @@ export async function checkAiHealth(config?: {
         max_tokens: 5,
       });
       if (completion.choices?.[0]) {
-        return { ok: true, message: `Connected to AI gateway via smoke test (model: ${model})` };
+        const latencyMs = Date.now() - start;
+        return {
+          ok: true,
+          healthy: true,
+          status: "healthy",
+          model,
+          latencyMs,
+          message: `Connected to AI gateway via smoke test (model: ${model})`,
+        };
       }
     } catch (innerErr: unknown) {
       const inner = innerErr as Error;
-      return { ok: false, message: `AI connection check failed: ${inner.message || error.message}` };
+      const latencyMs = Date.now() - start;
+      return {
+        ok: false,
+        healthy: false,
+        status: "unhealthy",
+        model,
+        latencyMs,
+        message: `AI connection check failed: ${inner.message || error.message}`,
+        error: inner.message || error.message,
+      };
     }
-    return { ok: false, message: `AI connection check failed: ${error.message}` };
+    const latencyMs = Date.now() - start;
+    return {
+      ok: false,
+      healthy: false,
+      status: "unhealthy",
+      model,
+      latencyMs,
+      message: `AI connection check failed: ${error.message}`,
+      error: error.message,
+    };
   }
 }

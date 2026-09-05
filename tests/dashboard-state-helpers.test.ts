@@ -361,9 +361,11 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
     it("routes queue and incident events accurately", () => {
       expect(shouldRefetchQueue("queue:updated")).toBe(true);
       expect(shouldRefetchQueue("outbox:debounce")).toBe(true);
+      expect(shouldRefetchIncidents("incident:created")).toBe(true);
       expect(shouldRefetchIncidents("incident:resolved")).toBe(true);
       expect(shouldRefetchIncidents("outbound:uncertain")).toBe(true);
       expect(shouldRefetchOverview("channel:status")).toBe(true);
+      expect(shouldRefetchOverview("incident:created")).toBe(true);
     });
   });
 });
