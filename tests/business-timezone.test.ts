@@ -4,6 +4,9 @@ import path from "node:path";
 import {
   isValidTimeZone,
   resolveBusinessTimeZone,
+  getTimezoneOffsetMs,
+  getZonedDateParts,
+  getUtcDateFromZonedParts,
   getBusinessDayRange,
   formatCustomerFriendlyTimeZone,
   DEFAULT_BUSINESS_TIMEZONE,
@@ -155,6 +158,50 @@ describe("PR 4: Centralized Business Timezone Architecture", () => {
     });
   });
 
+  describe("Subsecond Precision Regression: getTimezoneOffsetMs and getUtcDateFromZonedParts", () => {
+    it("eliminates subsecond distortion in getTimezoneOffsetMs for arbitrary milliseconds", () => {
+      // Instants with fractional milliseconds (.000, .001, .123, .456, .789, .999)
+      const msOffsets = [0, 1, 123, 456, 789, 999];
+
+      for (const ms of msOffsets) {
+        const dHcm = new Date(`2026-06-01T12:00:00.${ms.toString().padStart(3, "0")}Z`);
+        const offsetHcm = getTimezoneOffsetMs(dHcm, "Asia/Ho_Chi_Minh");
+        // UTC+7 is exactly 25,200,000 ms; must not have subsecond jitter like 25,199,544
+        expect(offsetHcm).toBe(7 * 3600 * 1000);
+        expect(offsetHcm % 1000).toBe(0);
+
+        const dNyWinter = new Date(`2026-01-15T00:00:00.${ms.toString().padStart(3, "0")}Z`);
+        const offsetNyWinter = getTimezoneOffsetMs(dNyWinter, "America/New_York");
+        // EST (UTC-5) is exactly -18,000,000 ms
+        expect(offsetNyWinter).toBe(-5 * 3600 * 1000);
+        expect(Math.abs(offsetNyWinter % 1000)).toBe(0);
+
+        const dNySummer = new Date(`2026-07-15T00:00:00.${ms.toString().padStart(3, "0")}Z`);
+        const offsetNySummer = getTimezoneOffsetMs(dNySummer, "America/New_York");
+        // EDT (UTC-4) is exactly -14,400,000 ms
+        expect(offsetNySummer).toBe(-4 * 3600 * 1000);
+        expect(Math.abs(offsetNySummer % 1000)).toBe(0);
+      }
+    });
+
+    it("getZonedDateParts and getUtcDateFromZonedParts preserve subsecond precision without distortion", () => {
+      const original = new Date("2026-06-01T12:00:00.789Z");
+      const parts = getZonedDateParts(original, "Asia/Ho_Chi_Minh");
+
+      expect(parts.year).toBe(2026);
+      expect(parts.month).toBe(6);
+      expect(parts.day).toBe(1);
+      expect(parts.hour).toBe(19);
+      expect(parts.minute).toBe(0);
+      expect(parts.second).toBe(0);
+      expect(parts.millisecond).toBe(789);
+
+      const roundTrip = getUtcDateFromZonedParts(parts, "Asia/Ho_Chi_Minh");
+      expect(roundTrip.getTime()).toBe(original.getTime());
+      expect(roundTrip.toISOString()).toBe("2026-06-01T12:00:00.789Z");
+    });
+  });
+
   describe("4. Dynamic Timezone Reaching DOM Parser & Adapter", () => {
     const timestampsHtml = fs.readFileSync(
       path.resolve(__dirname, "fixtures/messenger-dom-timestamps.html"),
@@ -190,28 +237,191 @@ describe("PR 4: Centralized Business Timezone Architecture", () => {
       expect(diffMs).toBe(11 * 3600 * 1000);
     });
 
-    it("PlaywrightMessengerAdapter accepts initial timeZone option and updates dynamically via setTimeZone", () => {
+    it("PlaywrightMessengerAdapter setTimeZone returns whether context recreation is required", () => {
       const adapter = new PlaywrightMessengerAdapter({
         profileDir: "./test-profile",
         timeZone: "America/New_York",
       });
 
       expect(adapter.timeZone).toBe("America/New_York");
+      expect(adapter.getActiveContextTimeZone()).toBe("America/New_York");
 
-      adapter.setTimeZone("Asia/Ho_Chi_Minh");
+      // Before context is initialized, setTimeZone updates activeContextTimeZone and returns false
+      const req1 = adapter.setTimeZone("Asia/Ho_Chi_Minh");
+      expect(req1).toBe(false);
       expect(adapter.timeZone).toBe("Asia/Ho_Chi_Minh");
+      expect(adapter.getActiveContextTimeZone()).toBe("Asia/Ho_Chi_Minh");
 
       // Rejects invalid timezone without crashing
-      adapter.setTimeZone("Invalid/Zone");
+      const reqInvalid = adapter.setTimeZone("Invalid/Zone");
+      expect(reqInvalid).toBe(false);
       expect(adapter.timeZone).toBe("Asia/Ho_Chi_Minh");
+
+      // Simulate running context
+      const mockContext = { close: vi.fn().mockResolvedValue(undefined) };
+      (adapter as unknown as { context: unknown }).context = mockContext;
+
+      // Calling setTimeZone with same timezone returns false (no recreation required)
+      expect(adapter.setTimeZone("Asia/Ho_Chi_Minh")).toBe(false);
+
+      // Calling setTimeZone with different timezone returns true (context recreation required)
+      const reqRecreate = adapter.setTimeZone("America/New_York");
+      expect(reqRecreate).toBe(true);
+      expect(adapter.timeZone).toBe("America/New_York");
+      // But activeContextTimeZone remains the old one until context recreation runs!
+      expect(adapter.getActiveContextTimeZone()).toBe("Asia/Ho_Chi_Minh");
     });
 
-    it("MockChannelAdapter supports dynamic setTimeZone for unit tests", () => {
+    it("PlaywrightMessengerAdapter controlled reinitializeContext aligns context and parsing timezone safely", async () => {
+      const adapter = new PlaywrightMessengerAdapter({
+        profileDir: "./test-profile",
+        timeZone: "Asia/Ho_Chi_Minh",
+      });
+
+      const mockClosePage = vi.fn().mockResolvedValue(undefined);
+      const mockCloseContext = vi.fn().mockResolvedValue(undefined);
+      const mockInit = vi.fn().mockResolvedValue(undefined);
+
+      (adapter as unknown as { senderPage: unknown }).senderPage = { close: mockClosePage };
+      (adapter as unknown as { observerPage: unknown }).observerPage = { close: mockClosePage };
+      (adapter as unknown as { context: unknown }).context = { close: mockCloseContext };
+      adapter.init = mockInit;
+
+      expect(adapter.getActiveContextTimeZone()).toBe("Asia/Ho_Chi_Minh");
+      expect(adapter.setTimeZone("America/New_York")).toBe(true);
+      expect(adapter.getActiveContextTimeZone()).toBe("Asia/Ho_Chi_Minh");
+
+      // Trigger controlled context reinitialization
+      await adapter.reinitializeContext();
+
+      // Verified senderPage, observerPage and context were safely closed
+      expect(mockClosePage).toHaveBeenCalledTimes(2);
+      expect(mockCloseContext).toHaveBeenCalledTimes(1);
+      expect(mockInit).toHaveBeenCalledTimes(1);
+
+      // Now activeContextTimeZone is aligned with target timezone
+      expect(adapter.getActiveContextTimeZone()).toBe("America/New_York");
+      expect(adapter.timeZone).toBe("America/New_York");
+    });
+
+    it("MockChannelAdapter tracks setTimeZone recreation requirement and reinitializeContext", async () => {
       const adapter = new MockChannelAdapter();
       expect(adapter.timeZone).toBe("Asia/Ho_Chi_Minh");
+      expect(adapter.activeContextTimeZone).toBe("Asia/Ho_Chi_Minh");
 
-      adapter.setTimeZone("America/New_York");
+      // Same zone -> returns false
+      expect(adapter.setTimeZone("Asia/Ho_Chi_Minh")).toBe(false);
+
+      // Different zone -> returns true
+      expect(adapter.setTimeZone("America/New_York")).toBe(true);
       expect(adapter.timeZone).toBe("America/New_York");
+      expect(adapter.activeContextTimeZone).toBe("Asia/Ho_Chi_Minh");
+
+      // Reinitialize aligns active context
+      await adapter.reinitializeContext();
+      expect(adapter.activeContextTimeZone).toBe("America/New_York");
+      expect(adapter.contextRecreationCount).toBe(1);
+    });
+
+    it("SenderWorkerService realigns browser context timezone before opening conversation", async () => {
+      const { SenderWorkerService } = await import("../apps/browser-agent/src/sender-worker.js");
+      const mockAdapter = new MockChannelAdapter();
+      mockAdapter.activeContextTimeZone = "Asia/Ho_Chi_Minh";
+      mockAdapter.timeZone = "Asia/Ho_Chi_Minh";
+
+      let timezoneDuringOpen = "";
+      mockAdapter.openConversation = vi.fn(async () => {
+        timezoneDuringOpen = mockAdapter.activeContextTimeZone;
+        return true;
+      });
+      mockAdapter.capturePreSendMarker = vi.fn(async () => ({
+        threadRef: "thread-1",
+        lastMessageId: "msg-0",
+        messageCount: 1,
+        markerTimestamp: new Date(),
+      }));
+      mockAdapter.typeDraft = vi.fn(async () => ({ completed: true, aborted: false }));
+      mockAdapter.sendDraft = vi.fn(async () => ({ sent: true }));
+      mockAdapter.verifySent = vi.fn(async () => ({ verified: true, messageRef: "msg-deliv" }));
+
+      const mockSettingsRepo = {
+        getSettings: vi.fn().mockResolvedValue({
+          settings: {
+            businessTimeZone: "America/New_York",
+            typingTargetWpmMin: 100,
+            typingTargetWpmMax: 150,
+          },
+          revision: 1,
+        }),
+      };
+
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "personal-messenger",
+                  status: "RUNNING",
+                  isSuspended: false,
+                  isPaused: false,
+                },
+              ]),
+            })),
+          })),
+        })),
+      };
+
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: { id: "conv-1", externalThreadId: "thread-1", status: "QUEUED", manualMode: false, inboundVersion: 1 },
+          customer: { id: "cust-1", name: "Customer" },
+        }),
+        updateStatus: vi.fn().mockResolvedValue(undefined),
+      };
+
+      const mockOutboundRepo = {
+        transitionStatus: vi.fn().mockResolvedValue({ id: "act-1", status: "TYPING" }),
+        updateStatus: vi.fn().mockResolvedValue({ id: "act-1", status: "SENT" }),
+        confirmSent: vi.fn().mockResolvedValue({ id: "act-1", status: "CONFIRMED" }),
+      };
+
+      const mockEventRepo = {
+        recordEvent: vi.fn().mockResolvedValue({ id: "ev-1" }),
+      };
+
+      const worker = new SenderWorkerService(
+        mockDb as never,
+        null,
+        mockAdapter,
+        null,
+        mockConvRepo as never,
+        null,
+        mockOutboundRepo as never,
+        mockEventRepo as never,
+        mockSettingsRepo as never,
+        {} as never,
+        {} as never,
+        null as never
+      );
+
+      await worker.processAction({
+        actionId: "act-1",
+        conversationId: "conv-1",
+        channelAccountId: "personal-messenger",
+        responseIndex: 1,
+        inboundVersion: 1,
+        text: "Hello!",
+        textHash: "hash-1",
+        ownerToken: "token-1",
+        fencingEpoch: 1,
+        externalThreadRef: "https://www.facebook.com/messages/t/thread-1",
+        actor: "AI",
+      });
+
+      // Verify that when openConversation was called, the timezone was ALREADY aligned to America/New_York
+      expect(timezoneDuringOpen).toBe("America/New_York");
+      expect(mockAdapter.contextRecreationCount).toBe(1);
     });
   });
 

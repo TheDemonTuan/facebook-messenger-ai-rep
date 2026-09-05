@@ -98,7 +98,11 @@ async function main() {
     try {
       const s = await settingsRepo.getSettings(inbound.channelAccountId);
       if (s?.settings?.businessTimeZone && typeof adapter.setTimeZone === "function") {
-        adapter.setTimeZone(s.settings.businessTimeZone);
+        const needsRecreation = adapter.setTimeZone(s.settings.businessTimeZone);
+        if (needsRecreation && typeof adapter.reinitializeContext === "function") {
+          console.log(`[Browser Agent] Timezone changed to ${s.settings.businessTimeZone}, reinitializing context...`);
+          await adapter.reinitializeContext();
+        }
       }
       if (s?.settings?.debounceMs) {
         debounceMs = s.settings.debounceMs;

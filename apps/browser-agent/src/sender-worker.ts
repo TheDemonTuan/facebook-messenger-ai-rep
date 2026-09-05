@@ -225,6 +225,16 @@ export class SenderWorkerService {
       return;
     }
 
+    // Align dynamic business timezone before opening thread/processing
+    const settings = await this.settingsRepo.getSettings(channelAccountId);
+    if (settings?.settings?.businessTimeZone && typeof this.adapter.setTimeZone === "function") {
+      const needsRecreation = this.adapter.setTimeZone(settings.settings.businessTimeZone);
+      if (needsRecreation && typeof this.adapter.reinitializeContext === "function") {
+        console.log(`[Sender Worker] Aligning browser context timezone to ${settings.settings.businessTimeZone}...`);
+        await this.adapter.reinitializeContext();
+      }
+    }
+
     // 3. Validate thread navigation in sender page
     const threadOpened = await this.adapter.openConversation(externalThreadRef);
     if (!threadOpened) {
@@ -283,10 +293,6 @@ export class SenderWorkerService {
     });
 
     // 6. Type draft with human-like pacing & abortable signal
-    const settings = await this.settingsRepo.getSettings(channelAccountId);
-    if (settings?.settings?.businessTimeZone && typeof this.adapter.setTimeZone === "function") {
-      this.adapter.setTimeZone(settings.settings.businessTimeZone);
-    }
     const typingResult = await this.adapter.typeDraft(text, {
       targetWpmMin: settings.settings.typingTargetWpmMin,
       targetWpmMax: settings.settings.typingTargetWpmMax,

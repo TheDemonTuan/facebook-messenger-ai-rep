@@ -25,6 +25,9 @@ export interface PlaywrightAdapterOptions {
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
   timeZone: string;
+  private activeContextTimeZone: string;
+  private targetTimeZone: string;
+  private reinitPromise: Promise<void> | null = null;
   readonly botParticipantId?: string;
   readonly botProfileUrl?: string;
   private profileDir: string;
@@ -47,15 +50,124 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
     this.profileDir = path.resolve(options.profileDir);
     this.headless = options.headless ?? true;
-    this.timeZone = options.timeZone ? resolveBusinessTimeZone(options.timeZone) : DEFAULT_BUSINESS_TIMEZONE;
+    const resolved = options.timeZone ? resolveBusinessTimeZone(options.timeZone) : DEFAULT_BUSINESS_TIMEZONE;
+    this.timeZone = resolved;
+    this.targetTimeZone = resolved;
+    this.activeContextTimeZone = resolved;
     this.botParticipantId = options.botParticipantId;
     this.botProfileUrl = options.botProfileUrl;
   }
 
-  setTimeZone(timeZone: string): void {
-    if (isValidTimeZone(timeZone)) {
-      this.timeZone = timeZone.trim();
+  /**
+   * Sets desired business timezone.
+   * Returns true if context recreation is required because the BrowserContext is
+   * currently running with an immutable timezoneId that differs from the new timezone.
+   */
+  setTimeZone(timeZone: string): boolean {
+    if (!isValidTimeZone(timeZone)) {
+      return false;
     }
+    const normalized = resolveBusinessTimeZone(timeZone);
+    this.targetTimeZone = normalized;
+    this.timeZone = normalized;
+
+    // If context is running and active timezone differs from target, recreation is required
+    if (this.context && this.activeContextTimeZone !== normalized) {
+      return true;
+    }
+
+    // If context not initialized yet, target becomes active when initialized without recreation
+    if (!this.context) {
+      this.activeContextTimeZone = normalized;
+    }
+
+    return false;
+  }
+
+  /**
+   * Gets the active browser context timezone currently emulated by Chromium.
+   */
+  getActiveContextTimeZone(): string {
+    return this.activeContextTimeZone;
+  }
+
+  /**
+   * Controlled browser/context reinitialization.
+   * Safely closes existing pages and context, flushing session state to disk,
+   * then relaunches persistent context with timezoneId matching target timezone.
+   */
+  async reinitializeContext(targetTimeZone?: string): Promise<void> {
+    if (targetTimeZone) {
+      this.setTimeZone(targetTimeZone);
+    }
+    if (this.reinitPromise) {
+      return this.reinitPromise;
+    }
+    this.reinitPromise = this.performReinitializeContext();
+    try {
+      await this.reinitPromise;
+    } finally {
+      this.reinitPromise = null;
+    }
+  }
+
+  private async performReinitializeContext(): Promise<void> {
+    const wasObserving = this.isObserving;
+    const savedCallback = this.inboundCallback;
+
+    console.log(`[BrowserAdapter] Controlled context reinitialization starting: aligning timezone to ${this.targetTimeZone}...`);
+
+    // 1. Pause polling observer cleanly
+    if (this.observeTimer) {
+      clearTimeout(this.observeTimer);
+      this.observeTimer = null;
+    }
+    this.isObserving = false;
+
+    // 2. Safely close sender and observer pages first
+    if (this.senderPage) {
+      try {
+        await this.senderPage.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing senderPage during context reinitialization:", err);
+      } finally {
+        this.senderPage = null;
+      }
+    }
+
+    if (this.observerPage) {
+      try {
+        await this.observerPage.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing observerPage during context reinitialization:", err);
+      } finally {
+        this.observerPage = null;
+      }
+    }
+
+    // 3. Safely close persistent context (Playwright flushes session cookies/storage to profileDir)
+    if (this.context) {
+      try {
+        await this.context.close();
+      } catch (err) {
+        console.warn("[BrowserAdapter] Warning closing context during reinitialization:", err);
+      } finally {
+        this.context = null;
+      }
+    }
+
+    // 4. Update activeContextTimeZone to match target timezone
+    this.activeContextTimeZone = this.targetTimeZone;
+    this.timeZone = this.targetTimeZone;
+
+    // 5. Reinitialize browser context with the new timezoneId
+    await this.init();
+
+    // 6. Resume observation if it was active before reinitialization
+    if (wasObserving && savedCallback) {
+      await this.observeInbound(savedCallback);
+    }
+    console.log(`[BrowserAdapter] Controlled context reinitialization complete (activeContextTimeZone=${this.activeContextTimeZone}).`);
   }
 
   onDegradedDom(callback: (reason: string) => Promise<void>): void {
@@ -88,7 +200,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
       locale: "vi-VN",
-      timezoneId: this.timeZone,
+      timezoneId: this.activeContextTimeZone,
       permissions: ["notifications"],
       args: [
         "--disable-blink-features=AutomationControlled",
@@ -343,7 +455,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       });
       return parseMessengerBubblesFromHtml(html, {
         observedAt: new Date(),
-        timeZone: this.timeZone,
+        timeZone: this.activeContextTimeZone,
         botChannelAccountId: this.channelAccountId,
         botParticipantId: this.botParticipantId,
         botProfileUrl: this.botProfileUrl,

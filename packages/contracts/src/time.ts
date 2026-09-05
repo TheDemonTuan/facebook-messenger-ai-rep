@@ -7,6 +7,7 @@ export interface ZonedDateParts {
   hour: number;
   minute: number;
   second: number;
+  millisecond?: number;
 }
 
 export interface BusinessDayRange {
@@ -66,7 +67,15 @@ export function getTimezoneOffsetMs(
   const zMin = parseInt(formatted.find((p) => p.type === "minute")!.value, 10);
   const zSec = parseInt(formatted.find((p) => p.type === "second")!.value, 10);
 
-  const candidateZonedNominalUtc = Date.UTC(zYear, zMonth - 1, zDay, zHour, zMin, zSec);
+  const candidateZonedNominalUtc = Date.UTC(
+    zYear,
+    zMonth - 1,
+    zDay,
+    zHour,
+    zMin,
+    zSec,
+    date.getUTCMilliseconds()
+  );
   return candidateZonedNominalUtc - date.getTime();
 }
 
@@ -96,16 +105,25 @@ export function getZonedDateParts(
     hour: parseInt(formatted.find((p) => p.type === "hour")!.value, 10),
     minute: parseInt(formatted.find((p) => p.type === "minute")!.value, 10),
     second: parseInt(formatted.find((p) => p.type === "second")!.value, 10),
+    millisecond: date.getUTCMilliseconds(),
   };
 }
 
 /**
  * Two-pass conversion from zoned nominal date/time parts to exact UTC Date.
- * Pass 1 estimates the offset at the nominal UTC timestamp;
+ * Pass 1 estimates the offset at the nominal target UTC timestamp;
  * Pass 2 recalculates the offset at the candidate date to resolve DST boundary shifts correctly.
  */
 export function getUtcDateFromZonedParts(
-  parts: { year: number; month: number; day: number; hour: number; minute: number; second?: number },
+  parts: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    second?: number;
+    millisecond?: number;
+  },
   timeZone: string = DEFAULT_BUSINESS_TIMEZONE
 ): Date {
   const tz = resolveBusinessTimeZone(timeZone);
@@ -115,7 +133,8 @@ export function getUtcDateFromZonedParts(
     parts.day,
     parts.hour,
     parts.minute,
-    parts.second ?? 0
+    parts.second ?? 0,
+    parts.millisecond ?? 0
   );
 
   // Pass 1: Estimate offset using nominal target UTC
