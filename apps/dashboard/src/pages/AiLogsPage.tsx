@@ -64,14 +64,6 @@ function formatProviderVi(apiFormat?: string, endpoint?: string): string {
   return "Dịch vụ AI chuẩn OpenAI";
 }
 
-function formatEndpointVi(apiFormat?: string, endpoint?: string): string {
-  if (endpoint) return endpoint;
-  if (apiFormat === "ANTHROPIC_COMPATIBLE") {
-    return "POST {baseUrl}/messages";
-  }
-  return "POST {baseUrl}/chat/completions";
-}
-
 function formatDurationVi(ms?: number): string {
   if (ms == null || ms < 0) return "Chưa có thông tin";
   if (ms < 1000) return `${ms} mili-giây`;
@@ -81,15 +73,15 @@ function formatDurationVi(ms?: number): string {
 function formatUsageVi(total?: number, prompt?: number, completion?: number): string {
   if (total == null || total === 0) {
     if ((prompt && prompt > 0) || (completion && completion > 0)) {
-      return `Đầu vào: ${prompt || 0}, Phản hồi: ${completion || 0}`;
+      return `Nội dung gửi đi: ${prompt || 0}, nội dung nhận về: ${completion || 0}`;
     }
-    return "0 ký hiệu/token";
+    return "Chưa có số liệu";
   }
   const parts: string[] = [];
-  if (prompt != null && prompt > 0) parts.push(`Đầu vào: ${prompt}`);
-  if (completion != null && completion > 0) parts.push(`Phản hồi: ${completion}`);
+  if (prompt != null && prompt > 0) parts.push(`gửi đi: ${prompt}`);
+  if (completion != null && completion > 0) parts.push(`nhận về: ${completion}`);
   const details = parts.length > 0 ? ` (${parts.join(", ")})` : "";
-  return `${total} từ/token${details}`;
+  return `${total} đơn vị xử lý${details}`;
 }
 
 function formatStatusVi(status: string): { label: string; color: string; bgColor: string } {
@@ -290,12 +282,6 @@ export const AiLogsPage: React.FC = () => {
               {formatProviderVi(req.apiFormat, req.endpoint)}
             </span>
           </div>
-          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
-            <span style={{ color: "#475569" }}>Cổng kết nối (Endpoint):</span>
-            <span style={{ fontWeight: "600", color: "#1e293b", wordBreak: "break-all" }}>
-              {req.method || "POST"} {formatEndpointVi(req.apiFormat, req.endpoint)}
-            </span>
-          </div>
           <div style={{ display: "flex", justifyContent: "space-between" }}>
             <span style={{ color: "#475569" }}>Mô hình xử lý:</span>
             <span style={{ fontWeight: "600", color: "#1e293b" }}>
@@ -308,7 +294,7 @@ export const AiLogsPage: React.FC = () => {
         {payload?.system && (
           <div style={{ marginBottom: "12px" }}>
             <div style={{ fontWeight: "600", color: "#334155", fontSize: "0.8rem", marginBottom: "4px" }}>
-              Hướng dẫn hệ thống (System Prompt):
+              Hướng dẫn dành cho AI:
             </div>
             <div
               style={{
@@ -870,7 +856,6 @@ export const AiLogsPage: React.FC = () => {
             ) : (
               runs.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
-                const convShortId = run.conversationId ? run.conversationId.slice(0, 8) : "";
                 return (
                   <div
                     key={run.id}
@@ -897,11 +882,7 @@ export const AiLogsPage: React.FC = () => {
 
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: "4px" }}>
                       <span>Thời gian: {formatDurationVi(run.latencyMs)}</span>
-                      <span>Dung lượng: {run.totalTokens || 0} từ</span>
-                    </div>
-
-                    <div style={{ fontSize: "0.72rem", color: "#94a3b8" }}>
-                      Cuộc trò chuyện: #{convShortId}
+                      <span>Dung lượng: {formatUsageVi(run.totalTokens)}</span>
                     </div>
 
                     {run.errorMessage && (
@@ -956,7 +937,7 @@ export const AiLogsPage: React.FC = () => {
                     {getStatusBadge(selectedRun.status)}
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    Thời gian: {new Date(selectedRun.createdAt).toLocaleString("vi-VN")} | Cuộc trò chuyện: #{selectedRun.conversationId?.slice(0, 8)}
+                    Thời gian: {new Date(selectedRun.createdAt).toLocaleString("vi-VN")}
                   </div>
                 </div>
 

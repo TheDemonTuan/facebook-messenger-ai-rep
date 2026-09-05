@@ -128,7 +128,7 @@ export const SettingsPage: React.FC = () => {
       setAiApiKey("");
       setFormData(sanitizeSettingsForSave(updated.settings));
       setReason("");
-      setSaveSuccess(`Đã lưu cấu hình mới thành công (Revision #${updated.revision})`);
+      setSaveSuccess("Đã lưu cấu hình mới thành công");
       setTimeout(() => setSaveSuccess(null), 4000);
     } catch (err: unknown) {
       setError((err as Error).message || "Không thể lưu cấu hình");
@@ -190,7 +190,7 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
         <div style={{ fontSize: "0.85rem", color: "#64748b", display: "flex", alignItems: "center", gap: "6px", backgroundColor: "#f1f5f9", padding: "6px 12px", borderRadius: "6px" }}>
-          <History size={16} /> Phiên bản hiện tại: <span style={{ fontWeight: "bold", color: "#2563eb" }}>#{data?.revision || 1}</span>
+          <History size={16} /> Cấu hình đang được áp dụng
         </div>
       </div>
 
@@ -286,8 +286,8 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => setAiProvider({ ...aiProvider, apiFormat: e.target.value as AiProviderSettings["apiFormat"] })}
                 style={inputStyle}
               >
-                <option value="OPENAI_COMPATIBLE">OpenAI-compatible</option>
-                <option value="ANTHROPIC_COMPATIBLE">Anthropic-compatible (Claude API)</option>
+                <option value="OPENAI_COMPATIBLE">Dịch vụ theo chuẩn OpenAI</option>
+                <option value="ANTHROPIC_COMPATIBLE">Dịch vụ theo chuẩn Claude</option>
               </select>
             </div>
             <div>
