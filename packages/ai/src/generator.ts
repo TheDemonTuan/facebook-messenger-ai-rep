@@ -3,7 +3,7 @@ import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
 import { validateAiOutput } from "./guards.js";
 import { getAiClient } from "./client.js";
-import { getEnv } from "@messenger/config";
+import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 import type { AiStructuredOutput } from "@messenger/contracts";
 
 function sha256(text: string): string {
@@ -34,7 +34,8 @@ export interface GenerationResult {
 export class AiReplyGenerator {
   async generateReply(context: ConversationContext): Promise<GenerationResult> {
     const env = getEnv();
-    const model = context.settings.aiModel || env.XAI_MODEL;
+    const { model: defaultModel } = getEffectiveAiConfig(env);
+    const model = context.settings.aiModel || defaultModel;
     const client = getAiClient({
       timeoutMs: context.settings.aiTimeoutMs,
     });

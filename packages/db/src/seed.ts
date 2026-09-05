@@ -1,7 +1,7 @@
 import { getDb, closeDb } from "./client.js";
 import { channelAccounts, settings, settingRevisions, users } from "./schema/index.js";
 import { SystemSettingsSchema } from "@messenger/contracts";
-import { getEnv } from "@messenger/config";
+import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 
 export async function seedDatabase(channelAccountId?: string) {
   const env = getEnv();
@@ -24,8 +24,9 @@ export async function seedDatabase(channelAccountId?: string) {
     .onConflictDoNothing();
 
   // 2. Ensure initial settings exist (server-side AI only)
+  const { model: defaultAiModel } = getEffectiveAiConfig(env);
   const defaultSettings = SystemSettingsSchema.parse({
-    aiModel: env.XAI_MODEL || "grok-4.5",
+    aiModel: defaultAiModel,
   });
   const existing = await db.query.settings.findFirst({
     where: (t, { eq }) => eq(t.channelAccountId, accountId),

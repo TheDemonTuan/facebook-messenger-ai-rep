@@ -2,7 +2,7 @@ import { eq } from "drizzle-orm";
 import type { Database } from "../client.js";
 import { settings, settingRevisions } from "../schema/index.js";
 import { SystemSettingsSchema, type SystemSettings } from "@messenger/contracts";
-import { getEnv } from "@messenger/config";
+import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 
 export class SettingsRepository {
   constructor(private db: Database) {}
@@ -11,7 +11,7 @@ export class SettingsRepository {
     try {
       const env = getEnv();
       return {
-        aiModel: env.XAI_MODEL || "grok-4.5",
+        aiModel: getEffectiveAiConfig(env).model,
       };
     } catch {
       return {};

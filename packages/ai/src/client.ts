@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { getEnv } from "@messenger/config";
+import { getEnv, getEffectiveAiConfig } from "@messenger/config";
 
 export interface AiClientConfig {
   timeoutMs?: number;
@@ -13,16 +13,14 @@ export function resetAiClientCache(): void {
 
 export function getAiClient(config?: AiClientConfig): OpenAI {
   const env = getEnv();
-  // Server-side xAI configuration only
-  const baseURL = env.XAI_BASE_URL;
-  const rawApiKey = env.XAI_API_KEY || "";
+  const { apiKey: rawApiKey, baseURL } = getEffectiveAiConfig(env);
   const timeout = config?.timeoutMs || 30000;
 
   if (env.NODE_ENV === "production" && (!rawApiKey || rawApiKey.trim() === "")) {
-    throw new Error("Missing XAI_API_KEY: Server-side AI configuration is required in production.");
+    throw new Error("Missing AI_API_KEY (or OMNIROUTE_API_KEY / XAI_API_KEY): Server-side AI configuration is required in production.");
   }
 
-  const apiKey = rawApiKey || "xai-dummy-dev-key";
+  const apiKey = rawApiKey || "dummy-dev-key";
 
   if (
     cachedClient &&
@@ -58,7 +56,8 @@ export async function checkAiHealth(config?: {
   timeoutMs?: number;
 }): Promise<AiHealthCheckResult> {
   const env = getEnv();
-  const model = config?.model || env.XAI_MODEL;
+  const { model: defaultModel } = getEffectiveAiConfig(env);
+  const model = config?.model || defaultModel;
   const start = Date.now();
 
   let client: OpenAI;

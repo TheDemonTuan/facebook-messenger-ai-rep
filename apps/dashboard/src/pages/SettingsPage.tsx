@@ -258,16 +258,16 @@ export const SettingsPage: React.FC = () => {
           )}
 
           <div>
-            <label style={labelStyle}>Mô hình AI (Model Identifier)</label>
+            <label style={labelStyle}>Mô hình AI (OmniRoute / Custom Gateway / OpenAI / Grok)</label>
             <input
               type="text"
               value={formData.aiModel || ""}
               onChange={(e) => setFormData({ ...formData, aiModel: e.target.value })}
-              placeholder="grok-4.5"
+              placeholder="auto/best-chat, gpt-4o, grok-4.5..."
               style={inputStyle}
             />
             <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              Tên model AI gửi tới Gateway (mặc định cấu hình từ môi trường máy chủ)
+              Tên model AI gửi tới Gateway AI (hỗ trợ OmniRoute, OpenAI, Grok, hoặc Gateway tùy chỉnh)
             </span>
           </div>
         </div>

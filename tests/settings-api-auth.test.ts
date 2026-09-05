@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { SystemSettingsSchema, type SystemSettings } from "../packages/contracts/src/settings.js";
 import { getAiClient, resetAiClientCache } from "../packages/ai/src/client.js";
-import { EnvSchema, validateCoreProductionEnv } from "../packages/config/src/index.js";
+import { EnvSchema, validateCoreProductionEnv, getEffectiveAiConfig } from "../packages/config/src/index.js";
 import Fastify from "fastify";
 import { createAdminRoutes } from "../apps/core/src/routes/admin.js";
 import type {
@@ -47,6 +47,26 @@ describe("Settings API & Server-Side xAI Configuration", () => {
       INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
     });
     expect(() => validateCoreProductionEnv(prodWithKey)).not.toThrow();
+  });
+
+  it("supports custom AI gateways like OmniRoute without requiring xAI keys", () => {
+    const prodWithOmniroute = EnvSchema.parse({
+      NODE_ENV: "production",
+      OMNIROUTE_API_KEY: "sk-omniroute-test-key",
+      OMNIROUTE_BASE_URL: "https://omniroute-api.example.com/v1",
+      DEFAULT_AI_MODEL: "auto/best-chat",
+      CLOUDFLARE_ACCESS_TEAM_NAME: "test-team",
+      CLOUDFLARE_ACCESS_AUD: "test-aud-12345",
+      ADMIN_EMAIL: "owner@example.com",
+      SESSION_SECRET: "super-secret-session-key-must-be-at-least-32-chars-long!",
+      INTERNAL_HMAC_SECRET: "internal-hmac-secret-must-be-at-least-32-chars-long!",
+    });
+    expect(() => validateCoreProductionEnv(prodWithOmniroute)).not.toThrow();
+
+    const config = getEffectiveAiConfig(prodWithOmniroute);
+    expect(config.apiKey).toBe("sk-omniroute-test-key");
+    expect(config.baseURL).toBe("https://omniroute-api.example.com/v1");
+    expect(config.model).toBe("auto/best-chat");
   });
 
   it("getAiClient uses server-side xAI env and caches client", () => {
