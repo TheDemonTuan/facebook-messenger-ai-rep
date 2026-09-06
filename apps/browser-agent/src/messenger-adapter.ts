@@ -442,7 +442,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           return links.map((a) => {
             const href = a.getAttribute("href") || "";
             const match = href.match(/\/messages\/(?:e2ee\/)?t\/([^/?#]+)/i);
-            const threadId = match ? match[1] : "";
+            const threadId = match?.[1] || "";
             const rawText = (a as HTMLElement).innerText || "";
             const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
             const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
