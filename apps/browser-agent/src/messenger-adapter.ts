@@ -754,14 +754,27 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
           return clone.outerHTML;
         });
+        const directProfileId = await page
+          .locator('div[role="main"] a[aria-label="Profile"], div[role="main"] a[aria-label="Trang cá nhân"]')
+          .first()
+          .getAttribute("href")
+          .then((href) => href?.match(/^\/([0-9]+)\/?(?:[?#].*)?$/)?.[1] ?? null)
+          .catch(() => null);
+        const hasGroupControls = await page
+          .locator('div[role="main"] [aria-label*="Chat members"], div[role="main"] [aria-label*="Group options"], div[role="main"] [aria-label*="Thành viên"], div[role="main"] [aria-label*="Tùy chọn nhóm"]')
+          .count()
+          .then((count) => count > 0)
+          .catch(() => false);
         const parsed = parseMessengerBubblesFromHtml(html, {
+          threadKindHint: hasGroupControls ? "GROUP" : (directProfileId ? "DIRECT" : undefined),
+          threadReliabilityHint: hasGroupControls || directProfileId ? "VERIFIED" : undefined,
           observedAt: new Date(),
           timeZone: this.activeContextTimeZone,
           botChannelAccountId: this.channelAccountId,
           botParticipantId: this.botParticipantId,
           botProfileUrl: this.botProfileUrl,
           threadTitleHint: hints?.threadTitle,
-          senderParticipantIdHint: hints?.participantId ?? undefined,
+          senderParticipantIdHint: directProfileId || hints?.participantId || undefined,
         });
 
         if (
@@ -769,7 +782,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           parsed.threadClassification?.kind === "DIRECT" &&
           parsed.threadClassification.reliability === "VERIFIED"
         ) {
-          const senderId = hints.participantId || hints.threadId;
+          const senderId = directProfileId || hints.participantId || hints.threadId;
           for (const bubble of parsed.bubbles) {
             if (bubble.isOutgoing || bubble.senderReliability === "VERIFIED") continue;
             bubble.senderId = senderId;
