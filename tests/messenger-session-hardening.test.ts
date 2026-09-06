@@ -11,6 +11,27 @@ import { parseMessengerBubblesFromHtml } from "../packages/channel/src/dom-parse
 import { getIncidentSafetyPolicy, isCheckpoint } from "../apps/dashboard/src/helpers/incident-helpers.js";
 import type { IncidentItem } from "../apps/dashboard/src/types.js";
 
+type AdapterInternals = {
+  observerPage?: unknown;
+  page?: unknown;
+  isInitializedBaseline?: boolean;
+  lastSeenSnippets: Map<string, string>;
+  initializedThreadIds: Set<string>;
+  ensureObserverPage?: unknown;
+  inspectSessionState?: unknown;
+  clearSessionIssue?: unknown;
+  readBubblesFromPage?: unknown;
+  inboundCallback?: unknown;
+  lastSeenMessageIds: Set<string>;
+  confirmedOutboundMessageIds: Set<string>;
+  lastSeenActiveSignatures: Map<string, number>;
+  senderPage?: unknown;
+  processInboundBubbles: (...args: unknown[]) => Promise<number>;
+};
+
+const internals = (adapter: PlaywrightMessengerAdapter): AdapterInternals =>
+  adapter as unknown as AdapterInternals;
+
 describe("Messenger session hardening", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -140,7 +161,7 @@ describe("Messenger session hardening", () => {
       },
     });
 
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       observerPage: page,
       page,
       isInitializedBaseline: true,
@@ -199,9 +220,9 @@ describe("Messenger session hardening", () => {
       channelAccountId: "account-1",
     });
     const callback = vi.fn().mockResolvedValue(undefined);
-    Object.assign(adapter as any, { inboundCallback: callback });
+    Object.assign(internals(adapter), { inboundCallback: callback });
 
-    await (adapter as any).processInboundBubbles(
+    await internals(adapter).processInboundBubbles(
       {
         ok: true,
         isDegraded: false,
@@ -256,13 +277,13 @@ describe("Messenger session hardening", () => {
     };
     const callback = vi.fn().mockResolvedValue(undefined);
 
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       inboundCallback: callback,
       lastSeenMessageIds: new Set(["mid.reused-row"]),
       lastSeenActiveSignatures: new Map([["thread-1:in:tin cũ", 1]]),
     });
 
-    await (adapter as any).processInboundBubbles(
+    await internals(adapter).processInboundBubbles(
       {
         ok: true,
         bubbles: [existingBubble, newBubbleWithReusedId],
@@ -293,7 +314,7 @@ describe("Messenger session hardening", () => {
       url: () => "https://www.facebook.com/messages/t/thread-1",
       locator: vi.fn().mockReturnValue({ first: () => composer }),
     };
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       senderPage: page,
       readBubblesFromPage: vi.fn().mockResolvedValue({
         ok: true,
@@ -317,8 +338,8 @@ describe("Messenger session hardening", () => {
     );
 
     expect(result).toEqual({ verified: true, messageRef: "mid.reused-latest" });
-    expect((adapter as any).lastSeenMessageIds.has("mid.reused-latest")).toBe(true);
-    expect((adapter as any).confirmedOutboundMessageIds.has("mid.reused-latest")).toBe(true);
+    expect(internals(adapter).lastSeenMessageIds.has("mid.reused-latest")).toBe(true);
+    expect(internals(adapter).confirmedOutboundMessageIds.has("mid.reused-latest")).toBe(true);
   });
 
   it("does not emit a confirmed outgoing id when the DOM later misclassifies it as incoming", async () => {
@@ -327,13 +348,13 @@ describe("Messenger session hardening", () => {
       channelAccountId: "account-1",
     });
     const callback = vi.fn().mockResolvedValue(undefined);
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       inboundCallback: callback,
       lastSeenMessageIds: new Set(["mid.confirmed"]),
       confirmedOutboundMessageIds: new Set(["mid.confirmed"]),
     });
 
-    await (adapter as any).processInboundBubbles(
+    await internals(adapter).processInboundBubbles(
       {
         ok: true,
         isDegraded: false,
@@ -369,7 +390,7 @@ describe("Messenger session hardening", () => {
         first: () => ({ evaluate: vi.fn().mockResolvedValue(false) }),
       }),
     };
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       senderPage: page,
       readBubblesFromPage: vi.fn().mockResolvedValue({
         ok: true,
@@ -406,7 +427,7 @@ describe("Messenger session hardening", () => {
         first: () => ({ evaluate: vi.fn().mockResolvedValue(true) }),
       }),
     };
-    Object.assign(adapter as any, {
+    Object.assign(internals(adapter), {
       senderPage: page,
       readBubblesFromPage: vi.fn().mockResolvedValue({
         ok: true,

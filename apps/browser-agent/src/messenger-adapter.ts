@@ -73,7 +73,7 @@ export function extractCleanSnippetText(rawSnippet: string, customerName?: strin
   text = text.replace(/\b(?:đánh dấu là chưa đọc|đánh dấu là đã đọc|mark as unread|mark as read)\b/giu, "").trim();
 
   // Clean any leftover trailing punctuation from separators
-  text = text.replace(/[\s:·•\-]+$/, "").trim();
+  text = text.replace(/[\s:·•-]+$/, "").trim();
 
   return text;
 }
@@ -348,7 +348,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     await this.context.addInitScript(() => {
       try {
         window.open = () => null;
-      } catch {}
+      } catch {
+        // Browser pages can lock this property.
+      }
       try {
         document.addEventListener(
           "click",
@@ -360,7 +362,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           },
           true
         );
-      } catch {}
+      } catch {
+        // Ignore document access failures during early navigation.
+      }
     });
 
     const pages = this.context.pages();
