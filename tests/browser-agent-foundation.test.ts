@@ -424,7 +424,6 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
   describe("7. Post-Enter Uncertainty / Crash Fail-Closed (No Retry)", () => {
     it("transitions to SEND_UNCERTAIN, isolates conversation to manual mode, creates incident, and does not retry if verification times out after Enter", async () => {
       let channelSuspended = false;
-      let suspendReason = "";
 
       const mockDb = {
         select: vi.fn().mockReturnValue({
@@ -439,7 +438,6 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         update: vi.fn().mockReturnValue({
           set: vi.fn().mockImplementation((data) => {
             if (data.isSuspended) channelSuspended = true;
-            if (data.statusReason) suspendReason = data.statusReason;
             return {
               where: vi.fn().mockResolvedValue([]),
             };
