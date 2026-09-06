@@ -5,6 +5,7 @@ import { SseProvider } from "./context/SseContext";
 import { TimezoneProvider } from "./context/TimezoneContext";
 import { Layout } from "./components/Layout";
 import { OverviewPage } from "./pages/OverviewPage";
+import { WorkflowPage } from "./pages/WorkflowPage";
 import { InboxPage } from "./pages/InboxPage";
 import { ConversationDetailPage } from "./pages/ConversationDetailPage";
 import { QueuePage } from "./pages/QueuePage";
@@ -29,6 +30,14 @@ export const App: React.FC = () => {
               element={
                 <Layout>
                   <OverviewPage />
+                </Layout>
+              }
+            />
+            <Route
+              path="/workflow"
+              element={
+                <Layout>
+                  <WorkflowPage />
                 </Layout>
               }
             />

@@ -335,3 +335,50 @@ export interface ConversationDetailData {
     createdAt: string;
   }>;
 }
+
+export interface WorkflowNodeMetric {
+  label: string;
+  value: string;
+}
+
+export interface WorkflowNode {
+  id: string;
+  step: number;
+  name: string;
+  subtitle: string;
+  category: "intake" | "queue" | "safety" | "ai" | "sender" | "delivery";
+  status: "idle" | "active" | "waiting" | "completed" | "error";
+  activity: string;
+  metrics: WorkflowNodeMetric[];
+  details: Record<string, unknown>;
+}
+
+export interface WorkflowLiveData {
+  channel: {
+    status: string;
+    isSuspended: boolean;
+    isPaused: boolean;
+    statusReason: string | null;
+  };
+  activeStage: "IDLE" | "INBOUND" | "DEBOUNCE" | "POLICY" | "AI_THINKING" | "GUARDS" | "TYPING" | "VERIFYING_SEND" | "ERROR" | "PAUSED";
+  waitingReason: string;
+  activeConversation: {
+    id: string;
+    title: string;
+  } | null;
+  openIncidents: Array<{
+    id: string;
+    title: string;
+    type: string;
+  }>;
+  nodes: WorkflowNode[];
+  latestTrace: {
+    inboundText: string | null;
+    inboundTime: string | null;
+    aiModel: string | null;
+    aiLatencyMs: number | null;
+    outboundText: string | null;
+    outboundStatus: string | null;
+    confirmedAt: string | null;
+  };
+}

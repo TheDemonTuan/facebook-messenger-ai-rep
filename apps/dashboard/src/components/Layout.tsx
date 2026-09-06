@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
+  Workflow,
   Inbox,
   ListOrdered,
   AlertTriangle,
@@ -88,6 +89,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const navItems = [
     { label: "Tổng quan", path: "/overview", icon: LayoutDashboard },
+    { label: "Luồng xử lý", path: "/workflow", icon: Workflow },
     { label: "Hộp thư", path: "/inbox", icon: Inbox },
     { label: "Hàng đợi", path: "/queue", icon: ListOrdered, badge: overview?.queueLength },
     { label: "Sự cố", path: "/incidents", icon: AlertTriangle, badge: overview?.openIncidentsCount, badgeColor: "#ef4444" },

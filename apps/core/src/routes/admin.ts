@@ -16,6 +16,9 @@ import {
   aiRuns,
   conversationEvents,
   jobs,
+  turns,
+  outboundActions,
+  customers,
   participants,
   replyPolicyMembers,
   inboundMessages,
@@ -190,6 +193,292 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           todayMessagesCount: todayMsgRes[0]?.count || 0,
           openIncidentsCount: openIncidentsRes[0]?.count || 0,
           businessTimeZone,
+        })
+      );
+    });
+
+    // Workflow Live Pipeline state for interactive n8n / flow graph
+    fastify.get("/api/workflow/live", async (_request, reply) => {
+      const now = new Date();
+      const channel = await db
+        .select()
+        .from(channelAccounts)
+        .where(eq(channelAccounts.id, channelAccountId))
+        .then((r) => r[0]);
+
+      const [
+        queueItems,
+        recentTurn,
+        recentAction,
+        recentAiRun,
+        recentInbound,
+        openIncidents,
+        settingsData,
+      ] = await Promise.all([
+        queueRepo.getQueueList(channelAccountId),
+        db
+          .select()
+          .from(turns)
+          .where(eq(turns.channelAccountId, channelAccountId))
+          .orderBy(desc(turns.startedAt))
+          .limit(1)
+          .then((r) => r[0] || null),
+        db
+          .select()
+          .from(outboundActions)
+          .where(eq(outboundActions.channelAccountId, channelAccountId))
+          .orderBy(desc(outboundActions.createdAt))
+          .limit(1)
+          .then((r) => r[0] || null),
+        db
+          .select()
+          .from(aiRuns)
+          .where(eq(aiRuns.channelAccountId, channelAccountId))
+          .orderBy(desc(aiRuns.createdAt))
+          .limit(1)
+          .then((r) => r[0] || null),
+        db
+          .select()
+          .from(inboundMessages)
+          .where(eq(inboundMessages.channelAccountId, channelAccountId))
+          .orderBy(desc(inboundMessages.receivedAt))
+          .limit(1)
+          .then((r) => r[0] || null),
+        incidentRepo.getOpenIncidents(channelAccountId),
+        settingsRepo.getSettings(channelAccountId),
+      ]);
+
+      let activeStage = "IDLE";
+      let waitingReason = "Đang sẵn sàng chờ tin nhắn mới từ khách hàng";
+      let activeConversationId: string | null = null;
+      let activeConversationTitle: string | null = null;
+
+      if (channel?.isSuspended || channel?.status === "SUSPENDED") {
+        activeStage = "ERROR";
+        waitingReason = `Kênh tạm dừng do sự cố: ${channel.statusReason || "Cần kiểm tra đối soát"}`;
+      } else if (channel?.isPaused || channel?.status === "PAUSED") {
+        activeStage = "PAUSED";
+        waitingReason = "Kênh đang tạm dừng thủ công bởi chủ sở hữu";
+      } else if (openIncidents.length > 0) {
+        activeStage = "ERROR";
+        waitingReason = `Có ${openIncidents.length} sự cố chưa giải quyết (${openIncidents[0]!.title})`;
+      } else if (recentAction && (recentAction.status === "TYPING" || recentAction.status === "SEND_INTENT")) {
+        if (recentAction.status === "TYPING") {
+          activeStage = "TYPING";
+          activeConversationId = recentAction.conversationId;
+          waitingReason = `Đang gõ phím ảo mô phỏng người thật (${recentAction.text.slice(0, 35)}...)`;
+        } else {
+          activeStage = "VERIFYING_SEND";
+          activeConversationId = recentAction.conversationId;
+          waitingReason = "Đã ấn phím Enter, đang quét DOM xác nhận bong bóng tin nhắn (tối đa 15s)";
+        }
+      } else if (recentTurn && recentTurn.status === "THINKING") {
+        activeStage = "AI_THINKING";
+        activeConversationId = recentTurn.conversationId;
+        waitingReason = "Mô hình AI đang xử lý ngữ cảnh và tạo câu trả lời";
+      } else if (queueItems.length > 0) {
+        activeStage = "DEBOUNCE";
+        activeConversationId = queueItems[0]!.conversationId;
+        waitingReason = `Đang gom cụm tin nhắn (${queueItems.length} hội thoại trong hàng đợi)`;
+      }
+
+      if (activeConversationId) {
+        const conv = await db
+          .select({
+            convId: conversations.id,
+            threadId: conversations.externalThreadId,
+            customerName: customers.name,
+          })
+          .from(conversations)
+          .leftJoin(customers, eq(conversations.customerId, customers.id))
+          .where(eq(conversations.id, activeConversationId))
+          .then((r) => r[0]);
+        if (conv) {
+          activeConversationTitle = conv.customerName || `Khách #${conv.threadId.slice(-4)}`;
+        }
+      }
+
+      const nodes = [
+        {
+          id: "inbound",
+          step: 1,
+          name: "1. Tiếp nhận tin nhắn",
+          subtitle: "DOM Observer & Deduplication",
+          category: "intake",
+          status: recentInbound && (now.getTime() - new Date(recentInbound.receivedAt).getTime()) < 60000 ? "active" : "idle",
+          activity: recentInbound ? `Tin mới: "${recentInbound.text.slice(0, 45)}..."` : "Sẵn sàng nhận tin",
+          metrics: [
+            { label: "Trạng thái", value: "Đang lắng nghe" },
+            { label: "Tin gần nhất", value: recentInbound?.receivedAt ? new Date(recentInbound.receivedAt).toLocaleTimeString("vi-VN") : "—" },
+          ],
+          details: {
+            mid: recentInbound?.id || "—",
+            fullText: recentInbound?.text || "—",
+            dedupeMethod: "CRC32 + Stable MID",
+          },
+        },
+        {
+          id: "debounce",
+          step: 2,
+          name: "2. Gom cụm & Hàng đợi",
+          subtitle: "Debounce Window & Batching",
+          category: "queue",
+          status: activeStage === "DEBOUNCE" ? "waiting" : queueItems.length > 0 ? "active" : "idle",
+          activity: queueItems.length > 0 ? `${queueItems.length} tin đang chờ xử lý` : "Hàng đợi trống",
+          metrics: [
+            { label: "Đang chờ", value: `${queueItems.length} hội thoại` },
+            { label: "Cửa sổ gom", value: `${settingsData.settings.debounceMs || 3000}ms` },
+          ],
+          details: {
+            queueLength: queueItems.length,
+            debounceMs: settingsData.settings.debounceMs || 3000,
+            stickyWindowMs: settingsData.settings.stickyWindowMs || 45000,
+          },
+        },
+        {
+          id: "policy",
+          step: 3,
+          name: "3. Kiểm duyệt chính sách",
+          subtitle: "Reply Gating & Business Hours",
+          category: "safety",
+          status: activeStage === "AI_THINKING" || activeStage === "DEBOUNCE" ? "active" : "idle",
+          activity: `Chế độ: ${settingsData.settings.replyMode}`,
+          metrics: [
+            { label: "Chế độ", value: settingsData.settings.replyMode === "EVERYONE_EXCEPT" ? "Mọi người trừ ds chặn" : "Chỉ danh sách chọn" },
+            { label: "Tự động rep", value: settingsData.settings.autoReplyEnabled ? "BẬT" : "TẮT" },
+          ],
+          details: {
+            directReplies: settingsData.settings.directRepliesEnabled,
+            groupReplies: settingsData.settings.groupRepliesEnabled,
+            timezone: settingsData.settings.businessTimeZone,
+          },
+        },
+        {
+          id: "context",
+          step: 4,
+          name: "4. Xây dựng ngữ cảnh",
+          subtitle: "Token Budget & History Trimmer",
+          category: "ai",
+          status: activeStage === "AI_THINKING" ? "active" : "idle",
+          activity: "Nạp 24h hội thoại + Persona Sin Sin Shop",
+          metrics: [
+            { label: "Token trần", value: `${settingsData.settings.contextMaxInputTokens || 4096} tokens` },
+            { label: "Tin tối đa", value: `${settingsData.settings.contextMaxMessages || 12} tin` },
+          ],
+          details: {
+            personaLen: (settingsData.settings.aiSystemPersona || "").length,
+            businessProfileLen: (settingsData.settings.businessProfile || "").length,
+            historyHours: settingsData.settings.contextHistoryMaxAgeHours || 24,
+          },
+        },
+        {
+          id: "llm",
+          step: 5,
+          name: "5. Trí tuệ nhân tạo (LLM)",
+          subtitle: `${settingsData.settings.aiModel}`,
+          category: "ai",
+          status: activeStage === "AI_THINKING" ? "active" : recentAiRun ? "completed" : "idle",
+          activity: activeStage === "AI_THINKING" ? "Đang suy nghĩ câu trả lời..." : `Lần gần nhất: ${recentAiRun?.latencyMs || 0}ms`,
+          metrics: [
+            { label: "Model", value: recentAiRun?.model || settingsData.settings.aiModel },
+            { label: "Thời gian", value: `${recentAiRun?.latencyMs || 0}ms` },
+            { label: "Tokens", value: `${(recentAiRun?.promptTokens || 0) + (recentAiRun?.completionTokens || 0)}` },
+          ],
+          details: {
+            model: recentAiRun?.model || settingsData.settings.aiModel,
+            promptTokens: recentAiRun?.promptTokens || 0,
+            completionTokens: recentAiRun?.completionTokens || 0,
+            lastStatus: recentAiRun?.status || "SUCCESS",
+            rawOutputExcerpt: recentAiRun?.responseSnapshot ? JSON.stringify(recentAiRun.responseSnapshot).slice(0, 120) : "—",
+          },
+        },
+        {
+          id: "guards",
+          step: 6,
+          name: "6. Bộ lọc & Định dạng",
+          subtitle: "Leak Guard, Single List & Question Split",
+          category: "safety",
+          status: activeStage === "TYPING" ? "completed" : "idle",
+          activity: "Gộp danh sách vào Tin 1 & Tách câu hỏi vào Tin 2",
+          metrics: [
+            { label: "Chống lộ prompt", value: "BẢO VỆ" },
+            { label: "Tách tin thông minh", value: "KÍCH HOẠT" },
+          ],
+          details: {
+            maxResponseCount: settingsData.settings.aiMaxResponseCount || 3,
+            totalMaxChars: settingsData.settings.aiTotalMaxChars || 1000,
+            splitPolicy: "Danh sách sản phẩm gom thành 1 tin, câu hỏi chốt tách tin 2",
+          },
+        },
+        {
+          id: "typing",
+          step: 7,
+          name: "7. Mô phỏng gõ phím ảo",
+          subtitle: "Human WPM Pacing & Multi-byte Emoji",
+          category: "sender",
+          status: activeStage === "TYPING" ? "active" : "idle",
+          activity: activeStage === "TYPING" ? `Đang gõ: "${recentAction?.text?.slice(0, 35)}..."` : "Sẵn sàng",
+          metrics: [
+            { label: "Tốc độ WPM", value: `${settingsData.settings.typingTargetWpmMin || 55}-${settingsData.settings.typingTargetWpmMax || 65}` },
+            { label: "Giới hạn trễ", value: "2500ms cap" },
+          ],
+          details: {
+            activeTypingText: recentAction?.status === "TYPING" ? recentAction.text : "—",
+            singleTabExclusion: true,
+            emojiHandling: "Intl.Segmenter + keyboard.insertText",
+          },
+        },
+        {
+          id: "delivery",
+          step: 8,
+          name: "8. Gửi & Xác nhận đối soát",
+          subtitle: "Enter Key & Post-Enter DOM Check",
+          category: "delivery",
+          status: activeStage === "VERIFYING_SEND" ? "active" : openIncidents.length > 0 ? "error" : "idle",
+          activity: activeStage === "VERIFYING_SEND" ? "Đang chờ xác nhận từ Messenger..." : openIncidents.length > 0 ? "Cần đối soát sự cố" : "Gửi thành công",
+          metrics: [
+            { label: "Trạng thái", value: openIncidents.length > 0 ? "CÓ SỰ CỐ" : recentAction?.status || "CONFIRMED" },
+            { label: "Hạn chờ", value: "15000ms" },
+          ],
+          details: {
+            lastActionStatus: recentAction?.status || "CONFIRMED",
+            confirmedAt: recentAction?.confirmedAt ? new Date(recentAction.confirmedAt).toLocaleTimeString("vi-VN") : "—",
+            failClosedProtection: "No blind retry to prevent duplicate messages",
+          },
+        },
+      ];
+
+      return reply.send(
+        sanitizeApiOutput({
+          channel: {
+            status: channel?.status || "RUNNING",
+            isSuspended: channel?.isSuspended || false,
+            isPaused: channel?.isPaused || false,
+            statusReason: channel?.statusReason || null,
+          },
+          activeStage,
+          waitingReason,
+          activeConversation: activeConversationId
+            ? {
+                id: activeConversationId,
+                title: activeConversationTitle || "Khách hàng",
+              }
+            : null,
+          openIncidents: openIncidents.map((i) => ({
+            id: i.id,
+            title: i.title,
+            type: i.type,
+          })),
+          nodes,
+          latestTrace: {
+            inboundText: recentInbound?.text || null,
+            inboundTime: recentInbound?.receivedAt || null,
+            aiModel: recentAiRun?.model || settingsData.settings.aiModel,
+            aiLatencyMs: recentAiRun?.latencyMs || null,
+            outboundText: recentAction?.text || null,
+            outboundStatus: recentAction?.status || null,
+            confirmedAt: recentAction?.confirmedAt || null,
+          },
         })
       );
     });
