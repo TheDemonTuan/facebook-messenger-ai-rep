@@ -189,4 +189,47 @@ hello! Em chào anh/chị ạ rất vui được hỗ trợ. Anh/chị cần em 
     expect(res.data?.messages.length).toBe(2);
     expect(res.data?.messages[0]).toBe("Dạ chào bạn ạ");
   });
+
+  it("consolidates product catalog list into 1 message and isolates closing question as second message", () => {
+    const listWithQuestion = JSON.stringify({
+      messages: [
+        `Sin Sin Shop mình chuyên bán các mặt hàng cute như:
+- Phụ kiện tóc (kẹp, cột tóc, kẹp càng cua)
+- Sản phẩm Hello Kitty & nhân vật dễ thương
+- Móc khóa, charm, dây đeo điện thoại
+- Sticker & đồ trang trí
+- Văn phòng phẩm (giấy note, sổ, bút, washi tape)
+- Phụ kiện photocard (sleeve, album, toploader)
+- Túi quà, thiệp, quà tặng
+- Và còn nhiều món xinh xắn khác nữa!
+Bạn đang tìm món gì nè?`,
+      ],
+      needsClarification: false,
+    });
+    const res = validateAiOutput(listWithQuestion, { totalMaxChars: 1000 });
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages.length).toBe(2);
+    expect(res.data?.messages[0]).toContain("Sin Sin Shop mình chuyên bán các mặt hàng cute như:");
+    expect(res.data?.messages[0]).toContain("Và còn nhiều món xinh xắn khác nữa!");
+    expect(res.data?.messages[0]).not.toContain("Bạn đang tìm món gì nè?");
+    expect(res.data?.messages[1]).toBe("Bạn đang tìm món gì nè?");
+  });
+
+  it("consolidates multiple fragmented list messages into 1 message and keeps trailing question separate", () => {
+    const fragmented = JSON.stringify({
+      messages: [
+        "Sin Sin Shop mình chuyên bán các mặt hàng cute như:",
+        "- Phụ kiện tóc (kẹp, cột tóc, kẹp càng cua)\n- Móc khóa, charm, dây đeo điện thoại",
+        "Bạn đang tìm món gì nè?",
+      ],
+      needsClarification: false,
+    });
+    const res = validateAiOutput(fragmented, { totalMaxChars: 1000 });
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages.length).toBe(2);
+    expect(res.data?.messages[0]).toBe(
+      "Sin Sin Shop mình chuyên bán các mặt hàng cute như:\n- Phụ kiện tóc (kẹp, cột tóc, kẹp càng cua)\n- Móc khóa, charm, dây đeo điện thoại"
+    );
+    expect(res.data?.messages[1]).toBe("Bạn đang tìm món gì nè?");
+  });
 });

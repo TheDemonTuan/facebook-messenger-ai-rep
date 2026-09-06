@@ -73,6 +73,61 @@ export function extractJsonFromRaw(raw: string): string {
   return cleaned;
 }
 
+/**
+ * Normalizes outgoing chat messages to match human conversational conventions:
+ * 1. Consolidates product lists, introductions, and explanations into 1 single message.
+ * 2. Isolates trailing questions or call-to-actions (e.g. "Bạn đang tìm món gì nè?") into a second message.
+ * 3. Prevents fragmenting lists into excessive small bubbles.
+ */
+export function normalizeOutgoingChatMessages(messages: string[]): string[] {
+  if (!messages || messages.length === 0) return messages;
+
+  // Case 1: Multiple messages were returned
+  if (messages.length > 1) {
+    const lastMsg = messages[messages.length - 1]!.trim();
+    const isClosingQuestion =
+      lastMsg.length <= 150 &&
+      (/\?$/.test(lastMsg) ||
+        /\b(nè|nhé|nha|ạ|nhỉ|hông|không|được không|gì nè)\s*[!?.]*$/i.test(lastMsg) ||
+        /^(bạn|em|chị|anh|mình)\s+(đang tìm|muốn|cần|có thể|thích|hỏi)/i.test(lastMsg));
+
+    if (isClosingQuestion) {
+      const contentParts = messages.slice(0, -1).map((m) => m.trim()).filter(Boolean);
+      const combinedContent = contentParts.join("\n");
+      return [combinedContent, lastMsg];
+    }
+
+    if (messages.length > 2) {
+      const first = messages.slice(0, -1).map((m) => m.trim()).filter(Boolean).join("\n");
+      return [first, lastMsg];
+    }
+
+    return messages;
+  }
+
+  // Case 2: Exactly 1 message was returned, check if it contains content/list followed by a closing question on a new line
+  const single = messages[0]!.trim();
+  const lines = single.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+  if (lines.length >= 2) {
+    const lastLine = lines[lines.length - 1]!;
+    const isClosingQuestion =
+      lastLine.length <= 150 &&
+      (/\?$/.test(lastLine) ||
+        /\b(nè|nhé|nha|ạ|nhỉ|hông|không|được không|gì nè)\s*[!?.]*$/i.test(lastLine) ||
+        /^(bạn|em|chị|anh|mình)\s+(đang tìm|muốn|cần|có thể|thích|hỏi)/i.test(lastLine));
+
+    const hasListOrIntro = lines.slice(0, -1).some((l) => /^[-*•\d.]/.test(l) || l.endsWith(":"));
+
+    if (isClosingQuestion && (hasListOrIntro || lines.length >= 3)) {
+      const content = lines.slice(0, -1).join("\n");
+      return [content, lastLine];
+    }
+  }
+
+  return [single];
+}
+
 export function validateAiOutput(
   rawText: string,
   options: {
@@ -113,14 +168,7 @@ export function validateAiOutput(
         !isHtmlPayload(plainText) &&
         !FORBIDDEN_LEAK_PATTERNS.some((pattern) => pattern.test(plainText))
       ) {
-        // Split multi-line messages by paragraphs if appropriate
-        const lines = plainText
-          .split(/\n{2,}|\n(?=[A-ZĐÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚĂĨŨƠƯẠẢẤẦẨẪẬẮẰẲẴẶẸẺẼỀỀỂỄỆỈỊỌỎỐỒỔỖỘỚỜỞỠỢỤỦỨỪỬỮỰỲỴÝỶỸ])/)
-          .map((l) => l.trim())
-          .filter(Boolean);
-
-        const msgs = lines.length > 1 && lines.length <= maxResponseCount ? lines : [plainText];
-
+        const msgs = normalizeOutgoingChatMessages([plainText]);
         parsedJson = {
           messages: msgs,
           needsClarification: false,
@@ -230,9 +278,13 @@ export function validateAiOutput(
   if (totalChars > totalMaxChars) {
     return {
       valid: false,
-      error: `Total message characters (${totalChars}) exceeded limit (${totalMaxChars})`,
+      error: `Total message length (${totalChars}) exceeded limit (${totalMaxChars})`,
     };
   }
+
+  // Normalize message distribution:
+  // Combine all content/lists into Message 1, and isolate closing question to Message 2
+  data.messages = normalizeOutgoingChatMessages(data.messages);
 
   return {
     valid: true,
