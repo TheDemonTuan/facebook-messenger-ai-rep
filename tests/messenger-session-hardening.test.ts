@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { extractMessengerThreadId } from "../apps/browser-agent/src/messenger-adapter.js";
+import {
+  extractMessengerThreadId,
+  shouldInspectMessengerThread,
+} from "../apps/browser-agent/src/messenger-adapter.js";
 import { getIncidentSafetyPolicy, isCheckpoint } from "../apps/dashboard/src/helpers/incident-helpers.js";
 import type { IncidentItem } from "../apps/dashboard/src/types.js";
 
@@ -12,9 +15,18 @@ describe("Messenger session hardening", () => {
     expect(extractMessengerThreadId(url)).toBe(expected);
   });
 
-  it("does not treat unrelated tabs as Messenger threads", () => {
+  it("does not treat the inbox or unrelated tabs as an open Messenger thread", () => {
+    expect(extractMessengerThreadId("https://www.facebook.com/messages/t/")).toBeNull();
     expect(extractMessengerThreadId("https://www.facebook.com/")).toBeNull();
     expect(extractMessengerThreadId("about:blank")).toBeNull();
+  });
+
+  it("inspects new, unread, changed, and currently open conversations", () => {
+    expect(shouldInspectMessengerThread(null, "new-thread", false, undefined, "new message")).toBe(true);
+    expect(shouldInspectMessengerThread(null, "thread-1", true, "same", "same")).toBe(true);
+    expect(shouldInspectMessengerThread(null, "thread-1", false, "old", "new")).toBe(true);
+    expect(shouldInspectMessengerThread("thread-1", "thread-1", false, "same", "same")).toBe(true);
+    expect(shouldInspectMessengerThread("thread-2", "thread-1", false, "same", "same")).toBe(false);
   });
 
   it("treats login-required incidents as session recovery incidents", () => {

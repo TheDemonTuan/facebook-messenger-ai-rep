@@ -38,6 +38,21 @@ export function extractMessengerThreadId(value: string): string | null {
   return value.match(MESSENGER_THREAD_PATH)?.[1] ?? null;
 }
 
+export function shouldInspectMessengerThread(
+  currentThreadId: string | null,
+  threadId: string,
+  isUnread: boolean,
+  previousSnippet: string | undefined,
+  snippet: string
+): boolean {
+  return (
+    currentThreadId === threadId ||
+    isUnread ||
+    previousSnippet === undefined ||
+    previousSnippet !== snippet
+  );
+}
+
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
   readonly channelAccountId: string;
   timeZone: string;
@@ -300,6 +315,19 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
   private async ensureObserverPage(): Promise<Page> {
     if (!this.context) throw new Error("Browser context is not initialized");
+
+    const messengerPage = this.context
+      .pages()
+      .find((page) => page !== this.senderPage && !page.isClosed() && page.url().includes("facebook.com/messages"));
+
+    if ((!this.observerPage || this.observerPage.isClosed() || !this.observerPage.url().includes("facebook.com/messages")) && messengerPage) {
+      if (this.observerPage !== messengerPage) {
+        this.observerPage = messengerPage;
+        this.isInitializedBaseline = false;
+        this.consecutiveEmptyInboxPolls = 0;
+      }
+    }
+
     if (!this.observerPage || this.observerPage.isClosed()) {
       this.observerPage = await this.context.newPage();
       this.isInitializedBaseline = false;
@@ -459,14 +487,16 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
 
-          // Also capture baseline message bubbles if thread is open
-          const baselineBubbles = await this.readBubblesFromPage(observerPage);
-          if (baselineBubbles.isDegraded) {
-            await this.triggerDegradedDom(baselineBubbles.degradedReason || "Missing stable identity during baseline");
-            return;
-          }
-          for (const b of baselineBubbles.bubbles) {
-            this.lastSeenMessageIds.add(b.id);
+          // Also capture baseline message bubbles if a conversation is open.
+          if (extractMessengerThreadId(observerPage.url())) {
+            const baselineBubbles = await this.readBubblesFromPage(observerPage);
+            if (baselineBubbles.isDegraded) {
+              await this.triggerDegradedDom(baselineBubbles.degradedReason || "Missing stable identity during baseline");
+              return;
+            }
+            for (const b of baselineBubbles.bubbles) {
+              this.lastSeenMessageIds.add(b.id);
+            }
           }
 
           this.isInitializedBaseline = true;
@@ -480,24 +510,49 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           if (!t.threadId || !t.snippet) continue;
 
           const prevSnippet = this.lastSeenSnippets.get(t.threadId);
-          const hasTrigger = t.isUnread || (prevSnippet !== undefined && prevSnippet !== t.snippet);
+          const currentThreadId = extractMessengerThreadId(observerPage.url());
+          const hasTrigger = shouldInspectMessengerThread(
+            currentThreadId,
+            t.threadId,
+            t.isUnread,
+            prevSnippet,
+            t.snippet
+          );
 
           if (!hasTrigger) continue;
 
-          // Sidebar triggered: inspect the real message bubbles in observer page
-          const currentObserverUrl = observerPage.url();
-          if (extractMessengerThreadId(currentObserverUrl) !== t.threadId) {
+          // Inspect the current conversation or one whose sidebar state changed.
+          if (currentThreadId !== t.threadId) {
             const clicked = await observerPage
-              .locator('a[href*="/messages/"]')
-              .evaluateAll((links, href) => {
-                const link = links.find((candidate) => candidate.getAttribute("href") === href) as HTMLElement | undefined;
+              .locator('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]')
+              .evaluateAll((links, threadId) => {
+                const link = links.find((candidate) => {
+                  const href = candidate.getAttribute("href") || "";
+                  return href.match(/\/messages\/(?:e2ee\/)?t\/([^/?#]+)/i)?.[1] === threadId;
+                }) as HTMLElement | undefined;
                 link?.click();
                 return Boolean(link);
-              }, t.href);
-            if (!clicked) throw new Error("Messenger sidebar thread link disappeared before it could be opened");
-            await observerPage.waitForURL((url) => extractMessengerThreadId(url.toString()) === t.threadId, {
-              timeout: 15000,
-            });
+              }, t.threadId);
+
+            const opened = clicked
+              ? await observerPage
+                  .waitForURL((url) => extractMessengerThreadId(url.toString()) === t.threadId, { timeout: 5000 })
+                  .then(() => true)
+                  .catch(() => false)
+              : false;
+
+            if (!opened) {
+              const routePrefix = t.href.includes("/messages/e2ee/t/")
+                ? "/messages/e2ee/t/"
+                : "/messages/t/";
+              await observerPage.goto(`https://www.facebook.com${routePrefix}${encodeURIComponent(t.threadId)}`, {
+                waitUntil: "domcontentloaded",
+                timeout: 45000,
+              });
+            }
+            if (extractMessengerThreadId(observerPage.url()) !== t.threadId) {
+              throw new Error(`Messenger did not open expected thread ${t.threadId}`);
+            }
             await this.dismissOverlays(observerPage);
           }
 
@@ -509,6 +564,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               bubbleResult.degradedReason || "DOM bubble missing stable message id - suspending channel"
             );
             return;
+          }
+
+          if (bubbleResult.bubbles.length === 0 && (t.isUnread || prevSnippet !== t.snippet)) {
+            console.warn(`[BrowserAdapter] No stable message bubbles found for changed thread ${t.threadId}.`);
           }
 
           // Process incoming bubbles
@@ -527,9 +586,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             this.lastSeenSnippets.set(t.threadId, t.snippet);
 
             if (this.inboundCallback) {
-              const fullThreadRef = t.href.startsWith("http")
-                ? new URL(t.href, "https://www.facebook.com").toString()
-                : `https://www.facebook.com/messages/t/${t.threadId}`;
+              const routePrefix = t.href.includes("/messages/e2ee/t/")
+                ? "/messages/e2ee/t/"
+                : "/messages/t/";
+              const fullThreadRef = `https://www.facebook.com${routePrefix}${encodeURIComponent(t.threadId)}`;
 
               const isVerifiedSender = Boolean(bubble.senderId && bubble.senderReliability === "VERIFIED");
 
@@ -596,18 +656,61 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
    * Reads message bubbles from a page, extracting stable identity, sender, thread type, mentions, and timestamps.
    */
   private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
+    if (!extractMessengerThreadId(page.url())) {
+      return { ok: false, bubbles: [], isDegraded: false };
+    }
+
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         const html = await page.evaluate(() => {
-          const header = document.querySelector('div[role="banner"], header, [data-testid*="header"]');
           const main = document.querySelector('div[role="main"]');
-          if (header && main && !main.contains(header)) {
-            return header.outerHTML + "\n" + main.outerHTML;
+          if (!main) return "";
+
+          const clone = main.cloneNode(true) as HTMLElement;
+          const sourceElements = [main, ...Array.from(main.querySelectorAll("*"))];
+          const clonedElements = [clone, ...Array.from(clone.querySelectorAll("*"))];
+
+          for (let index = 0; index < sourceElements.length; index++) {
+            const source = sourceElements[index] as HTMLElement;
+            const target = clonedElements[index] as HTMLElement | undefined;
+            if (!target) continue;
+
+            for (const key of Object.keys(source)) {
+              if (!key.startsWith("__reactProps") && !key.startsWith("__reactFiber")) continue;
+
+              const pending: Array<{ value: unknown; depth: number }> = [
+                { value: (source as unknown as Record<string, unknown>)[key], depth: 0 },
+              ];
+              const visited = new Set<object>();
+              let inspected = 0;
+
+              while (pending.length > 0 && inspected < 300) {
+                const item = pending.shift()!;
+                inspected += 1;
+
+                if (typeof item.value === "string") {
+                  const id = item.value.match(/mid\.[A-Za-z0-9_$.-]+/)?.[0];
+                  if (id) {
+                    target.setAttribute("data-message-id", id);
+                    break;
+                  }
+                  continue;
+                }
+
+                if (!item.value || typeof item.value !== "object" || item.depth >= 4) continue;
+                if (visited.has(item.value)) continue;
+                visited.add(item.value);
+
+                for (const child of Object.values(item.value as Record<string, unknown>)) {
+                  pending.push({ value: child, depth: item.depth + 1 });
+                }
+              }
+
+              if (target.hasAttribute("data-message-id")) break;
+            }
           }
-          if (main) {
-            return main.outerHTML;
-          }
-          return document.body ? document.body.innerHTML : "";
+
+          return clone.outerHTML;
         });
         return parseMessengerBubblesFromHtml(html, {
           observedAt: new Date(),

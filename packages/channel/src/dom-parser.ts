@@ -298,10 +298,10 @@ export function parseSenderIdentity(
     body.match(/aria-label=["']([^"']+)["']/i);
   let senderName: string | undefined;
   if (ariaLabelMatch && ariaLabelMatch[1]) {
-    const parts = ariaLabelMatch[1].split(/[:;]/);
-    if (parts.length > 1 && parts[0]) {
-      senderName = parts[0].trim();
-    }
+    const label = ariaLabelMatch[1];
+    const timestampedSender = label.match(/^(?:at|lúc)\s+.+,\s*([^:;]+)(?=[:;]|$)/i)?.[1];
+    const parts = label.split(/[:;]/);
+    senderName = timestampedSender?.trim() || (parts.length > 1 ? parts[0]?.trim() : undefined);
   }
 
   // 1. Non-person / System signals
@@ -913,6 +913,7 @@ function isActualMessageRow(openingTag: string, body: string, text: string): boo
   }
 
   const hasMessageTestId =
+    openingTag.includes('aria-roledescription="message"') ||
     openingTag.includes('data-testid="mw_message_row"') ||
     openingTag.includes('data-testid="message_row"') ||
     openingTag.includes('data-testid="outgoing_message"') ||
@@ -957,7 +958,7 @@ export function parseMessengerBubblesFromHtml(
 
   // Split by message rows or status rows
   const rowChunks = html.split(
-    /<div\b(?=[^>]*\b(?:role=["'](?:row|status)["']|data-testid=["'](?:mw_message_row|system_message)["']))/i
+    /<div\b(?=[^>]*\b(?:role=["'](?:row|status)["']|aria-roledescription=["']message["']|data-testid=["'](?:mw_message_row|system_message)["']))/i
   );
 
   for (let i = 1; i < rowChunks.length; i++) {
@@ -1008,10 +1009,12 @@ export function parseMessengerBubblesFromHtml(
       openingTag.match(/aria-label=["']([^"']+)["']/i) ||
       body.match(/aria-label=["']([^"']+)["']/i);
     const ariaLabel = ariaLabelMatch ? ariaLabelMatch[1]!.trim().toLowerCase() : "";
+    const timestampedSender = ariaLabel.match(/^(?:at|lúc)\s+.+,\s*([^:;]+)(?=[:;]|$)/i)?.[1]?.trim();
 
     const isOutgoingAria =
       /^(?:bạn đã gửi|bạn|you sent|you)\s*[:;]/i.test(ariaLabel) ||
-      /^(?:bạn đã gửi|you sent)\b/i.test(ariaLabel);
+      /^(?:bạn đã gửi|you sent)\b/i.test(ariaLabel) ||
+      /^(?:you|bạn)$/i.test(timestampedSender ?? "");
 
     const isOutgoing =
       isOutgoingAria ||

@@ -460,6 +460,39 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(result.degradedReason).toContain("missing stable mid identifier");
     });
 
+    it("parses current Facebook message containers without role=row", () => {
+      const result = parseMessengerBubblesFromHtml(`
+        <div role="main">
+          <div aria-label="At 11:27 AM, Sin: nhan chua"
+               aria-roledescription="message"
+               data-message-id="mid.$liveInbound001"
+               data-scope="messages_table">
+            <div dir="auto">nhan chua</div>
+          </div>
+          <div aria-label="At 11:28 AM, You: anh nhận rồi"
+               aria-roledescription="message"
+               data-message-id="mid.$liveOutbound002"
+               data-scope="messages_table">
+            <div dir="auto">anh nhận rồi</div>
+          </div>
+        </div>
+      `);
+
+      expect(result.isDegraded).toBe(false);
+      expect(result.bubbles).toHaveLength(2);
+      expect(result.bubbles[0]).toMatchObject({
+        id: "mid.$liveInbound001",
+        text: "nhan chua",
+        isOutgoing: false,
+        senderName: "Sin",
+      });
+      expect(result.bubbles[1]).toMatchObject({
+        id: "mid.$liveOutbound002",
+        text: "anh nhận rồi",
+        isOutgoing: true,
+      });
+    });
+
     it("parses Vietnamese baseline fixture correctly without regression", () => {
       const result = parseMessengerBubblesFromHtml(viHtml);
       expect(result.ok).toBe(true);
