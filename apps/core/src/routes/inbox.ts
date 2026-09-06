@@ -250,8 +250,12 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             const isInbound = msg.direction === "INBOUND";
             const part = msg.senderParticipantId ? participantMap.get(msg.senderParticipantId) : null;
             const decision = decisionBySourceId.get(msg.externalMessageId);
+            const observedSenderName =
+              msg.metadata && typeof msg.metadata === "object" && "senderDisplayName" in msg.metadata
+                ? String(msg.metadata.senderDisplayName || "").trim()
+                : "";
             const defaultSenderName = isInbound
-              ? (part?.displayName || convData.customer?.name || (convData.conversation.threadKind === "GROUP" ? "Thành viên nhóm" : "Khách hàng Messenger"))
+              ? (part?.displayName || observedSenderName || convData.customer?.name || (convData.conversation.threadKind === "GROUP" ? "Thành viên nhóm" : "Khách hàng Messenger"))
               : (msg.actor === "AI" ? "Trợ lý AI" : (msg.actor === "MANUAL_OWNER" ? "Nhân viên hỗ trợ" : "Hệ thống"));
             const senderAvatar = isInbound ? (part?.avatarUrl || convData.customer?.avatarUrl || null) : null;
             const skipReason = (decision && !decision.eligible)

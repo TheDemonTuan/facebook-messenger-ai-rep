@@ -622,6 +622,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 senderEvidence: bubble.senderEvidence ?? [],
                 senderExternalId: bubble.senderId ?? null,
                 senderParticipantId: bubble.senderId ?? null,
+                senderDisplayName: bubble.senderName ?? null,
                 participantIdentity: isVerifiedSender
                   ? {
                       channelAccountId: this.channelAccountId,

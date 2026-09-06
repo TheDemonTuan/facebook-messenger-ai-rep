@@ -355,6 +355,9 @@ export class ConversationRepository {
           textHash,
           inboundVersion: newInboundVersion,
           timestamp: payload.timestamp,
+          metadata: payload.senderDisplayName
+            ? { senderDisplayName: payload.senderDisplayName }
+            : {},
         })
         .returning({ id: messages.id });
       if (!newMsg) throw new Error("Failed to insert message");
