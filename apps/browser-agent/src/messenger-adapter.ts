@@ -70,6 +70,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private observeTimer: NodeJS.Timeout | null = null;
   private lastSeenMessageIds = new Set<string>();
   private lastSeenSnippets = new Map<string, string>();
+  private initializedThreadIds = new Set<string>();
   private isInitializedBaseline = false;
   private typingEngine = new TypingEngine();
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
@@ -154,6 +155,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.isInitializedBaseline = false;
     this.lastSeenMessageIds.clear();
     this.lastSeenSnippets.clear();
+    this.initializedThreadIds.clear();
     this.consecutiveEmptyInboxPolls = 0;
     this.lastSuccessfulPollAt = null;
     this.hasReportedHealthySession = false;
@@ -512,6 +514,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               await observerPage.mouse.wheel(0, -100000).catch(() => undefined);
               await observerPage.waitForTimeout(400);
             }
+            this.initializedThreadIds.add(t.threadId);
           }
 
           await observerPage.goto(MESSENGER_INBOX_URL, {
@@ -582,6 +585,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             participantId: t.participantId,
             threadId: t.threadId,
           });
+
+          if (!this.initializedThreadIds.has(t.threadId)) {
+            for (const bubble of bubbleResult.bubbles) {
+              this.lastSeenMessageIds.add(bubble.id);
+            }
+            this.initializedThreadIds.add(t.threadId);
+            this.lastSeenSnippets.set(t.threadId, t.snippet);
+            continue;
+          }
 
           if (bubbleResult.isDegraded) {
             await this.triggerDegradedDom(
