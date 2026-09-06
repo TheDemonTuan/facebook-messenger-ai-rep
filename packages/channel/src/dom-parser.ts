@@ -73,6 +73,8 @@ export interface ParseBubblesOptions {
   botProfileUrl?: string;
   threadKindHint?: ThreadKind;
   threadReliabilityHint?: ClassificationReliability;
+  threadTitleHint?: string;
+  senderParticipantIdHint?: string;
 }
 
 export interface ParsedTimestampResult {
@@ -220,19 +222,22 @@ export function parseThreadClassification(
 
   // 1. Group structured signals from header / banner ONLY
   const headerSection = extractHeaderSection(html);
+  const headerText = cleanHtmlText(headerSection ?? "");
+  const threadTitle = options?.threadTitleHint?.trim();
 
   const hasGroupTestId =
     /data-testid=["'](?:group_chat_header|group_thread_header|mw_chat_header_group)["']/i.test(html) ||
     /data-thread-type=["']GROUP["']/i.test(html);
 
   const hasGroupAria = headerSection
-    ? /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details)[^"']*["']/i.test(headerSection)
+    ? /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members)[^"']*["']/i.test(headerSection)
     : false;
   const memberCountMatch = headerSection
     ? headerSection.match(/\b(\d+)\s*(?:thành viên|members)\b/i)
     : null;
+  const hasChatMembers = /\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(headerText);
 
-  if (hasGroupTestId || hasGroupAria || Boolean(memberCountMatch)) {
+  if (hasGroupTestId || hasGroupAria || Boolean(memberCountMatch) || hasChatMembers) {
     return {
       kind: "GROUP",
       reliability: "VERIFIED",
@@ -244,6 +249,7 @@ export function parseThreadClassification(
           details: {
             hasGroupTestId,
             hasGroupAria,
+            hasChatMembers,
             memberCount: memberCountMatch ? memberCountMatch[1] : null,
           },
         },
@@ -259,7 +265,10 @@ export function parseThreadClassification(
     ? /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(headerSection)
     : false;
 
-  if (hasDirectTestId || hasDirectAria) {
+  const hasDirectControls = /\b(?:profile|trang cá nhân)\b/i.test(headerText) && !hasChatMembers;
+  const hasDirectParticipant = Boolean(threadTitle && headerText.includes(threadTitle) && hasDirectControls);
+
+  if (hasDirectTestId || hasDirectAria || hasDirectParticipant) {
     return {
       kind: "DIRECT",
       reliability: "VERIFIED",
@@ -268,7 +277,7 @@ export function parseThreadClassification(
           source: "DOM_SELECTOR",
           signal: "direct_header_indicator",
           confidence: 1.0,
-          details: { hasDirectTestId, hasDirectAria },
+          details: { hasDirectTestId, hasDirectAria, hasDirectParticipant },
         },
       ],
     };
@@ -334,7 +343,7 @@ export function parseSenderIdentity(
 
   // 2. Extract structured identity ONLY from opening row attributes OR dedicated author elements (Finding 1)
   let structuredUrl: string | null = null;
-  let structuredId: string | null = null;
+  let structuredId: string | null = _options?.senderParticipantIdHint?.trim() || null;
   let isPage = false;
 
   // A. Check opening row attributes ONLY
@@ -412,7 +421,9 @@ export function parseSenderIdentity(
       evidence: [
         {
           source: "DOM_SELECTOR",
-          signal: isPage ? "page_badge_and_link" : "structured_profile_link",
+          signal: isPage
+            ? "page_badge_and_link"
+            : (_options?.senderParticipantIdHint ? "thread_participant_hint" : "structured_profile_link"),
           confidence: 1.0,
           details: { entityId: structuredId, profileUrl: structuredUrl },
         },
@@ -975,8 +986,14 @@ export function parseMessengerBubblesFromHtml(
       ""
     );
 
-    // Extract complete nested bubble text (Finding 6)
-    const cleanText = extractNestedBubbleText(bodyWithoutAuthor) || extractNestedBubbleText(body);
+    const ariaLabelMatch =
+      openingTag.match(/aria-label=["']([^"']+)["']/i) ||
+      body.match(/aria-label=["']([^"']+)["']/i);
+    const ariaLabel = ariaLabelMatch ? cleanHtmlText(ariaLabelMatch[1]!) : "";
+    const ariaMessageText = ariaLabel.match(/^(?:at|lúc)\s+.+,\s*[^:;]+[:;]\s*([\s\S]+)$/i)?.[1]?.trim();
+
+    // Current Facebook containers include surrounding chat UI inside the row body.
+    const cleanText = ariaMessageText || extractNestedBubbleText(bodyWithoutAuthor) || extractNestedBubbleText(body);
 
     if (!cleanText) {
       continue;
@@ -1005,15 +1022,12 @@ export function parseMessengerBubblesFromHtml(
     const stableId = rawId!;
 
     // Check outgoing vs incoming with anchored aria prefixes (Finding 5)
-    const ariaLabelMatch =
-      openingTag.match(/aria-label=["']([^"']+)["']/i) ||
-      body.match(/aria-label=["']([^"']+)["']/i);
-    const ariaLabel = ariaLabelMatch ? ariaLabelMatch[1]!.trim().toLowerCase() : "";
-    const timestampedSender = ariaLabel.match(/^(?:at|lúc)\s+.+,\s*([^:;]+)(?=[:;]|$)/i)?.[1]?.trim();
+    const normalizedAriaLabel = ariaLabel.toLowerCase();
+    const timestampedSender = normalizedAriaLabel.match(/^(?:at|lúc)\s+.+,\s*([^:;]+)(?=[:;]|$)/i)?.[1]?.trim();
 
     const isOutgoingAria =
-      /^(?:bạn đã gửi|bạn|you sent|you)\s*[:;]/i.test(ariaLabel) ||
-      /^(?:bạn đã gửi|you sent)\b/i.test(ariaLabel) ||
+      /^(?:bạn đã gửi|bạn|you sent|you)\s*[:;]/i.test(normalizedAriaLabel) ||
+      /^(?:bạn đã gửi|you sent)\b/i.test(normalizedAriaLabel) ||
       /^(?:you|bạn)$/i.test(timestampedSender ?? "");
 
     const isOutgoing =

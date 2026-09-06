@@ -493,6 +493,35 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       });
     });
 
+    it("uses current Messenger header controls to classify direct and group threads", () => {
+      const direct = parseMessengerBubblesFromHtml(
+        `<div role="main"><header>Sin Sin Active now Profile Mute Search Chat info</header></div>`,
+        { threadTitleHint: "Sin Sin" }
+      );
+      const group = parseMessengerBubblesFromHtml(
+        `<div role="main"><header>Điền trang chó BuDop Club Active now Chat members Media</header></div>`,
+        { threadTitleHint: "Khải ngoo" }
+      );
+
+      expect(direct.threadClassification).toMatchObject({ kind: "DIRECT", reliability: "VERIFIED" });
+      expect(group.threadClassification).toMatchObject({ kind: "GROUP", reliability: "VERIFIED" });
+    });
+
+    it("uses a direct thread participant hint as verified sender identity", () => {
+      const result = parseMessengerBubblesFromHtml(
+        `<div aria-label="At 12:31 PM, Sin: chào" aria-roledescription="message" data-message-id="mid.$liveInbound003"><div dir="auto">chào</div></div>`,
+        { senderParticipantIdHint: "100010082286691", threadKindHint: "DIRECT", threadReliabilityHint: "VERIFIED" }
+      );
+
+      expect(result.bubbles[0]).toMatchObject({
+        text: "chào",
+        senderId: "100010082286691",
+        senderName: "Sin",
+        senderKind: "PERSON",
+        senderReliability: "VERIFIED",
+      });
+    });
+
     it("parses Vietnamese baseline fixture correctly without regression", () => {
       const result = parseMessengerBubblesFromHtml(viHtml);
       expect(result.ok).toBe(true);

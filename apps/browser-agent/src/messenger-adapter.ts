@@ -446,6 +446,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const rawText = (a as HTMLElement).innerText || "";
             const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
             const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
+            const participantId =
+              href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
+              a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
+              null;
 
             // Check if thread has unread indicator
             const isUnread =
@@ -458,6 +462,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               href,
               threadId,
               customerName,
+              participantId,
               snippet: rawText.replace(/\s+/g, " ").trim(),
               isUnread,
             };
@@ -557,7 +562,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           }
 
           // Read real message bubbles from DOM
-          const bubbleResult = await this.readBubblesFromPage(observerPage);
+          const bubbleResult = await this.readBubblesFromPage(observerPage, {
+            threadTitle: t.customerName,
+            participantId: t.participantId,
+          });
 
           if (bubbleResult.isDegraded) {
             await this.triggerDegradedDom(
@@ -599,7 +607,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 externalThreadRef: fullThreadRef,
                 // Never conflate externalThreadId with actual sender identity
                 externalCustomerId: bubble.senderId ?? null,
-                customerName: bubble.senderName || t.customerName || null,
+                customerName:
+                  bubbleResult.threadClassification?.kind === "GROUP"
+                    ? t.customerName || null
+                    : bubble.senderName || t.customerName || null,
                 externalMessageId: bubble.id,
                 text: bubble.text,
                 timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
@@ -655,7 +666,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   /**
    * Reads message bubbles from a page, extracting stable identity, sender, thread type, mentions, and timestamps.
    */
-  private async readBubblesFromPage(page: Page): Promise<BubbleParseResult> {
+  private async readBubblesFromPage(
+    page: Page,
+    hints?: { threadTitle?: string; participantId?: string | null }
+  ): Promise<BubbleParseResult> {
     if (!extractMessengerThreadId(page.url())) {
       return { ok: false, bubbles: [], isDegraded: false };
     }
@@ -718,6 +732,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           botChannelAccountId: this.channelAccountId,
           botParticipantId: this.botParticipantId,
           botProfileUrl: this.botProfileUrl,
+          threadTitleHint: hints?.threadTitle,
+          senderParticipantIdHint: hints?.participantId ?? undefined,
         });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
