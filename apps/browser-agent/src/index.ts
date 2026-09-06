@@ -91,7 +91,7 @@ async function main() {
     });
   }
 
-  const sessionIncidentTypes = ["CHECKPOINT", "SESSION_EXPIRED", "INBOX_UNAVAILABLE"] as const;
+  const sessionIncidentTypes = ["CHECKPOINT", "SESSION_EXPIRED", "INBOX_UNAVAILABLE", "RATE_LIMITED"] as const;
 
   adapter.onSessionIssue(async (issue: BrowserSessionIssue) => {
     const incidentType =
@@ -99,7 +99,9 @@ async function main() {
         ? "CHECKPOINT"
         : issue.kind === "LOGIN_REQUIRED"
           ? "SESSION_EXPIRED"
-          : "INBOX_UNAVAILABLE";
+          : issue.kind === "RATE_LIMITED"
+            ? "RATE_LIMITED"
+            : "INBOX_UNAVAILABLE";
     const statusReason = `${issue.kind}: ${issue.message}`;
     console.error(`[Browser Agent] Suspending Messenger channel: ${statusReason}`);
 
@@ -123,7 +125,9 @@ async function main() {
             ? "Phiên Facebook đã hết hạn"
             : issue.kind === "CHECKPOINT"
               ? "Facebook yêu cầu xác minh tài khoản"
-              : "Không thể quan sát hộp thư Messenger",
+              : issue.kind === "RATE_LIMITED"
+                ? "Facebook giới hạn thao tác do dùng quá nhanh"
+                : "Không thể quan sát hộp thư Messenger",
         description: issue.message,
         metadata: { kind: issue.kind },
       });

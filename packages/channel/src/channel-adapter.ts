@@ -7,6 +7,7 @@ import type {
 export interface PreSendMarker {
   threadRef: string;
   knownMessageIds: string[];
+  knownMessageTexts?: Record<string, string>;
   lastMessageId: string | null;
   messageCount: number;
   capturedAt: Date;
@@ -116,4 +117,14 @@ export interface ChannelAdapter {
    * Optional listener for degraded DOM conditions (e.g. missing stable message IDs).
    */
   onDegradedDom?: (callback: (reason: string) => Promise<void>) => void;
+
+  /**
+   * Acquire send lock to pause observer during outbound typing/sending.
+   */
+  acquireSendLock?: () => Promise<void>;
+
+  /**
+   * Release send lock to resume observer.
+   */
+  releaseSendLock?: () => void;
 }

@@ -102,11 +102,30 @@ export class SenderWorkerService {
       pollIntervalMs: 250,
       leaseDurationSeconds: 60,
       heartbeatIntervalMs: 15000,
+      retryDelaySeconds: 0, // Strictly no retries for browser sending
     });
 
     const handler = async (ctx: JobExecutionContext) => {
       const payload = ctx.job.payload as unknown as OutboundJobPayload;
-      await this.processAction(payload, ctx);
+      try {
+        await this.processAction(payload, ctx);
+      } catch (err: unknown) {
+        const error = err as Error;
+        console.error(`[Sender Worker] Error in processAction for ${payload?.actionId}:`, error?.message || err);
+        try {
+          if (payload?.actionId) {
+            await this.outboundRepo.updateStatus(payload.actionId, "FAILED", {
+              errorMessage: error?.message || "Internal sender execution error",
+            });
+          }
+        } catch (updateErr) {
+          console.error(`[Sender Worker] Failed to update action status to FAILED:`, updateErr);
+        }
+      } finally {
+        if (typeof this.adapter.releaseSendLock === "function") {
+          this.adapter.releaseSendLock();
+        }
+      }
     };
 
     this.jobRunner.registerHandler("BROWSER_SEND", handler);
@@ -522,23 +541,39 @@ export class SenderWorkerService {
       .where(eq(channelAccounts.id, channelAccountId));
 
     // Create incident
-    await this.incidentRepo.createIncident({
-      channelAccountId,
-      conversationId,
-      outboundActionId: actionId,
-      type: "SEND_UNCERTAIN",
-      title: `Action ${actionId} entered SEND_UNCERTAIN after Enter was pressed`,
-      description: "Verification timed out after Enter key was pressed; fail-closed without retry",
-      metadata: {
-        actionId,
-        textHash,
-        inboundVersion,
-        responseIndex,
-        actor,
-        error: "Verification timed out post-Enter",
-      },
-      autoSuspendChannel: true,
-    });
+    let outboundActionUuid: string | null = null;
+    try {
+      const actionRecord = typeof this.outboundRepo.getActionById === "function"
+        ? await this.outboundRepo.getActionById(actionId)
+        : null;
+      if (actionRecord?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actionRecord.id)) {
+        outboundActionUuid = actionRecord.id;
+      }
+    } catch (e) {
+      console.warn(`[Sender Worker] Failed to fetch outbound action uuid for ${actionId}:`, e);
+    }
+
+    try {
+      await this.incidentRepo.createIncident({
+        channelAccountId,
+        conversationId,
+        outboundActionId: outboundActionUuid,
+        type: "SEND_UNCERTAIN",
+        title: `Action ${actionId} entered SEND_UNCERTAIN after Enter was pressed`,
+        description: "Verification timed out after Enter key was pressed; fail-closed without retry",
+        metadata: {
+          actionId,
+          textHash,
+          inboundVersion,
+          responseIndex,
+          actor,
+          error: "Verification timed out post-Enter",
+        },
+        autoSuspendChannel: true,
+      });
+    } catch (incidentErr) {
+      console.error(`[Sender Worker] Failed to create incident for ${actionId}:`, incidentErr);
+    }
 
     // Terminate without retry ("không retry")
   }

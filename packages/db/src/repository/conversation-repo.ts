@@ -123,6 +123,7 @@ export class ConversationRepository {
           manualMode: conversations.manualMode,
           status: conversations.status,
           isBlocked: conversations.isBlocked,
+          title: conversations.title,
         })
         .from(conversations)
         .where(
@@ -178,7 +179,11 @@ export class ConversationRepository {
       const threadKind = payload.threadKind ?? "UNKNOWN";
       const isGroup = threadKind === "GROUP";
       const threadReliability = payload.threadReliability ?? "UNVERIFIED";
-      const threadTitle = payload.customerName || null;
+      const existingTitle = existingConv[0]?.title?.trim() || null;
+      const candidateTitle = payload.customerName?.trim() || null;
+      const threadTitle = candidateTitle && (!existingTitle || candidateTitle.length >= existingTitle.length)
+        ? candidateTitle
+        : existingTitle;
 
       // 3. Customer resolution: never infer person from thread ID.
       // If thread is a group, or externalCustomerId equals externalThreadId without verified participant, customerId remains null.
@@ -208,7 +213,18 @@ export class ConversationRepository {
           const updateFields: { name?: string; avatarUrl?: string; updatedAt: Date } = {
             updatedAt: new Date(),
           };
-          if (payload.customerName) updateFields.name = payload.customerName;
+          if (payload.customerName) {
+            const [currentCustomer] = await tx
+              .select({ name: customers.name })
+              .from(customers)
+              .where(eq(customers.id, customerId))
+              .limit(1);
+            const currentName = currentCustomer?.name?.trim() || "";
+            const candidateName = payload.customerName.trim();
+            if (!currentName || candidateName.length >= currentName.length) {
+              updateFields.name = candidateName;
+            }
+          }
           if (avatarUrl) updateFields.avatarUrl = avatarUrl;
           await tx
             .update(customers)

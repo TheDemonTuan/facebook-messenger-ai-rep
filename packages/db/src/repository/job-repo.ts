@@ -207,7 +207,7 @@ export class JobRepository {
 
     if (!existing) return null;
 
-    const canRetry = retryDelaySeconds !== undefined && existing.attempts < existing.maxAttempts;
+    const canRetry = retryDelaySeconds !== undefined && retryDelaySeconds > 0 && existing.attempts < existing.maxAttempts;
 
     if (canRetry) {
       await executor.execute(sql`

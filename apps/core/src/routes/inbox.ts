@@ -112,6 +112,22 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
 
         const hasMore = Boolean(nextCursor) || offset + rows.length < total;
 
+        const conversationIds = rows.map((row) => row.conversation.id);
+        const latestInboundRows = conversationIds.length > 0
+          ? await db
+              .selectDistinctOn([messages.conversationId], {
+                conversationId: messages.conversationId,
+                text: messages.text,
+                timestamp: messages.timestamp,
+              })
+              .from(messages)
+              .where(and(inArray(messages.conversationId, conversationIds), eq(messages.direction, "INBOUND")))
+              .orderBy(messages.conversationId, desc(messages.timestamp), desc(messages.createdAt))
+          : [];
+        const latestInboundByConversation = new Map(
+          latestInboundRows.map((message) => [message.conversationId, message])
+        );
+
         const safeRows = rows.map((r) => {
           const isGroup = r.conversation.threadKind === "GROUP";
           const defaultName = isGroup ? "Nhóm Messenger" : "Khách hàng Messenger";
@@ -128,6 +144,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           return {
             conversation: r.conversation,
             customer: r.customer ?? fallbackCustomer,
+            latestInboundMessage: latestInboundByConversation.get(r.conversation.id) ?? null,
           };
         });
 
@@ -462,6 +479,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             queue: "browser",
             jobType: "BROWSER_SEND",
             priority: 20,
+            maxAttempts: 1,
             payload: {
               actionId: action.actionId,
               channelAccountId,
@@ -601,6 +619,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               queue: "browser",
               jobType: "BROWSER_SEND",
               priority: 20,
+              maxAttempts: 1,
               payload: {
                 actionId: action.actionId,
                 channelAccountId: targetChannelAccountId,

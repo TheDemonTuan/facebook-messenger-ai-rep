@@ -51,6 +51,10 @@ export interface ConversationItem {
     avatarUrl: string | null;
     externalCustomerId?: string | null;
   };
+  latestInboundMessage?: {
+    text: string;
+    timestamp: string;
+  } | null;
 }
 
 export interface SkipReasonInfo {

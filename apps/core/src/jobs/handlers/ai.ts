@@ -300,6 +300,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
           queue: "browser",
           jobType: "BROWSER_SEND",
           priority: 10,
+          maxAttempts: 1,
           payload: {
             actionId: action.actionId,
             channelAccountId,

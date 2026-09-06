@@ -278,11 +278,19 @@ export const InboxPage: React.FC = () => {
                     {getStatusBadge(item.conversation)}
                   </div>
 
-                  <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                    {item.conversation.lastInboundAt ? (
-                      <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                        <Clock size={12} /> Tin cuối: {formatDateTime(item.conversation.lastInboundAt)}
-                      </span>
+                  <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "4px", minWidth: 0 }}>
+                    {item.latestInboundMessage ? (
+                      <>
+                        <div
+                          title={item.latestInboundMessage.text}
+                          style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "560px" }}
+                        >
+                          {item.latestInboundMessage.text}
+                        </div>
+                        <span style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "2px", fontSize: "0.74rem" }}>
+                          <Clock size={12} /> {formatDateTime(item.latestInboundMessage.timestamp)}
+                        </span>
+                      </>
                     ) : (
                       <span>Chưa có tin nhắn</span>
                     )}

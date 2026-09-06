@@ -50,7 +50,7 @@ export class JobRunner {
     this.leaseDurationSeconds = config.leaseDurationSeconds || 60;
     this.heartbeatIntervalMs = config.heartbeatIntervalMs || 15000;
     this.reconcileIntervalMs = config.reconcileIntervalMs || 30000;
-    this.retryDelaySeconds = config.retryDelaySeconds || 5;
+    this.retryDelaySeconds = config.retryDelaySeconds !== undefined ? config.retryDelaySeconds : 5;
   }
 
   registerHandler(jobType: string, handler: JobHandler): this {
