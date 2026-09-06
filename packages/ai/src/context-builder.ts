@@ -31,10 +31,11 @@ export function estimateTextTokens(text: string): number {
 
 /**
  * Builds a lean, budgeted conversation context for AI generation according to PLAN_TOI_UU_MESSENGER_AI.
- * 1. Filters out stale messages beyond contextHistoryMaxAgeHours (default 24h).
- * 2. Enforces per-sender quota (contextMaxMessagesPerSender, default 6).
- * 3. Enforces inbound quota (contextMaxInboundMessages, default 6) and total quota (contextMaxMessages, default 12).
- * 4. Budgets input tokens against contextMaxInputTokens (default 4096), preserving the current turn.
+ * 1. Guarantees strict chronological ordering (oldest -> newest) so the latest customer question is always last.
+ * 2. Filters out stale messages beyond contextHistoryMaxAgeHours (default 24h), while preserving the latest inbound.
+ * 3. Enforces per-sender quota (contextMaxMessagesPerSender, default 6).
+ * 4. Enforces inbound quota (contextMaxInboundMessages, default 6) and total quota (contextMaxMessages, default 12).
+ * 5. Budgets input tokens safely, ensuring long system personas do not starve conversation history.
  */
 export function buildLeanConversationContext(
   rawMessages: ConversationMessageItem[],
@@ -53,38 +54,45 @@ export function buildLeanConversationContext(
   let droppedSenderQuotaCount = 0;
   let droppedBudgetCount = 0;
 
-  // Filter valid and non-stale messages
-  const nonStaleMessages: ConversationMessageItem[] = [];
-  for (const msg of rawMessages) {
-    if (!msg.text || !msg.text.trim()) continue;
+  // 1. Filter valid non-empty messages
+  const validMessages = rawMessages.filter((m) => Boolean(m.text && m.text.trim()));
 
-    if (msg.timestamp) {
-      const msgTime = new Date(msg.timestamp);
-      if (!isNaN(msgTime.getTime()) && msgTime < cutoffTime) {
-        droppedStaleCount++;
-        continue;
-      }
-    }
-    nonStaleMessages.push(msg);
-  }
+  // 2. Sort all messages chronologically (oldest -> newest)
+  const sortedAsc = [...validMessages].sort((a, b) => {
+    const tA = new Date(a.timestamp || 0).getTime();
+    const tB = new Date(b.timestamp || 0).getTime();
+    if (tA && tB && tA !== tB) return tA - tB;
+    return 0;
+  });
 
-  // Work from newest to oldest to preserve the most recent exchange
-  const candidateFromNewest = [...nonStaleMessages].reverse();
-  const selectedReversed: ConversationMessageItem[] = [];
+  // 3. Work backwards from newest to oldest to pick the most relevant recent exchange
+  const candidateFromNewest = [...sortedAsc].reverse();
+  const selectedFromNewest: ConversationMessageItem[] = [];
 
   let inboundCount = 0;
   const senderCounts = new Map<string, number>();
 
-  for (let i = 0; i < candidateFromNewest.length; i++) {
-    const msg = candidateFromNewest[i]!;
+  for (const msg of candidateFromNewest) {
     const isInbound = msg.direction === "INBOUND";
     const senderKey = msg.senderParticipantId || (isInbound ? "customer" : "assistant");
 
-    // Always keep the very latest inbound message regardless of quota
+    // The very first inbound message we encounter going backwards is the latest customer message
     const isLatestInbound = isInbound && inboundCount === 0;
 
+    // Check if message is older than the cutoff window
+    if (msg.timestamp) {
+      const msgTime = new Date(msg.timestamp);
+      if (!isNaN(msgTime.getTime()) && msgTime < cutoffTime) {
+        // Never drop the latest customer question even if timestamp is skewed
+        if (!isLatestInbound) {
+          droppedStaleCount++;
+          continue;
+        }
+      }
+    }
+
     if (!isLatestInbound) {
-      if (selectedReversed.length >= maxMessages) {
+      if (selectedFromNewest.length >= maxMessages) {
         droppedBudgetCount++;
         continue;
       }
@@ -101,27 +109,43 @@ export function buildLeanConversationContext(
       }
     }
 
-    selectedReversed.push(msg);
+    selectedFromNewest.push(msg);
     senderCounts.set(senderKey, (senderCounts.get(senderKey) || 0) + 1);
     if (isInbound) {
       inboundCount++;
     }
   }
 
-  // Restore chronological order (oldest to newest)
-  const chronological = selectedReversed.reverse();
+  // 4. Restore strict chronological order (oldest -> newest)
+  const chronological = [...selectedFromNewest].sort((a, b) => {
+    const tA = new Date(a.timestamp || 0).getTime();
+    const tB = new Date(b.timestamp || 0).getTime();
+    if (tA && tB && tA !== tB) return tA - tB;
+    return 0;
+  });
 
-  // Enforce token budget: estimate tokens and drop oldest history if over budget
+  // 5. Token budgeting:
+  // The system persona + business profile is defined by the shop owner and can be 5,000+ tokens.
+  // We allocate an additional message headroom of at least 4,096 tokens so system persona never starves history.
+  const systemTokens = estimateTextTokens(settings.aiSystemPersona) + estimateTextTokens(settings.businessProfile) + 100;
+  const effectiveMaxInputTokens = Math.max(systemTokens + 4096, maxInputTokens, 16384);
+
   let totalEstimatedTokens = chronological.reduce(
-    (sum, m) => sum + estimateTextTokens(m.text) + 4, // 4 tokens framing per message
-    estimateTextTokens(settings.aiSystemPersona) + estimateTextTokens(settings.businessProfile) + 100
+    (sum, m) => sum + estimateTextTokens(m.text) + 4,
+    systemTokens
   );
 
-  while (totalEstimatedTokens > maxInputTokens && chronological.length > 1) {
-    // Drop the oldest non-latest-inbound message
-    const dropped = chronological.shift()!;
-    droppedBudgetCount++;
-    totalEstimatedTokens -= estimateTextTokens(dropped.text) + 4;
+  // If over budget, drop oldest history, but NEVER drop the latest inbound message
+  while (totalEstimatedTokens > effectiveMaxInputTokens && chronological.length > 1) {
+    const oldestIndex = chronological.findIndex((m, idx) => idx < chronological.length - 1);
+    if (oldestIndex === -1) break;
+    const [dropped] = chronological.splice(oldestIndex, 1);
+    if (dropped) {
+      droppedBudgetCount++;
+      totalEstimatedTokens -= estimateTextTokens(dropped.text) + 4;
+    } else {
+      break;
+    }
   }
 
   return {

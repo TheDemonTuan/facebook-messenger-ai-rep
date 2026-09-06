@@ -45,8 +45,18 @@ export function buildChatMessages(context: ConversationContext): Array<{ role: "
     content: buildSystemPrompt(context.settings, context.customerSummary),
   });
 
-  // Recent conversation history in chronological order
-  const chronological = [...context.recentMessages].reverse();
+  // Recent conversation history in strict chronological order (oldest -> newest)
+  // so that the customer's latest question is always the final user message in the prompt.
+  const hasTimestamps = context.recentMessages.some((m) => m.timestamp);
+  const chronological = hasTimestamps
+    ? [...context.recentMessages].sort((a, b) => {
+        const tA = new Date(a.timestamp || 0).getTime();
+        const tB = new Date(b.timestamp || 0).getTime();
+        if (tA && tB && tA !== tB) return tA - tB;
+        return 0;
+      })
+    : [...context.recentMessages];
+
   for (const msg of chronological) {
     if (msg.direction === "INBOUND") {
       chatMessages.push({

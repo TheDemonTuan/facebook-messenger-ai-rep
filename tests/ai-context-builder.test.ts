@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildLeanConversationContext, estimateTextTokens } from "../packages/ai/src/context-builder.js";
+import { buildChatMessages } from "../packages/ai/src/persona.js";
 import { SystemSettingsDefaults } from "../packages/contracts/src/settings.js";
 
 describe("ContextBuilder & AI Context Budgeting", () => {
@@ -76,5 +77,86 @@ describe("ContextBuilder & AI Context Budgeting", () => {
     expect(result.messages).toHaveLength(4);
     expect(result.messages[result.messages.length - 1].text).toBe("Khách gửi câu 10");
     expect(result.manifest.droppedSenderQuotaCount).toBe(6);
+  });
+
+  it("correctly handles descending input from DB and keeps the latest message as the final item", () => {
+    const now = new Date("2026-09-06T12:00:00Z");
+    // Like PostgreSQL orderBy(desc(timestamp)): newest at index 0, oldest at the end
+    const descendingDbRows = [
+      { direction: "INBOUND", text: "tôi muốn biết các sản phẩm shop bán ayas", timestamp: new Date(now.getTime() - 1000) },
+      { direction: "OUTBOUND", text: "Dạ chào bạn!", timestamp: new Date(now.getTime() - 30000) },
+      { direction: "INBOUND", text: "shop bán gì vậy ?", timestamp: new Date(now.getTime() - 60000) },
+      { direction: "OUTBOUND", text: "Chào bạn nha!", timestamp: new Date(now.getTime() - 90000) },
+      { direction: "INBOUND", text: "đâu rồi ?", timestamp: new Date(now.getTime() - 3600000) },
+    ];
+
+    const result = buildLeanConversationContext(descendingDbRows, {
+      settings: SystemSettingsDefaults,
+      now,
+    });
+
+    expect(result.messages.length).toBeGreaterThanOrEqual(4);
+    // The very last message in result.messages MUST be the newest customer question!
+    const lastMessage = result.messages[result.messages.length - 1]!;
+    expect(lastMessage.text).toBe("tôi muốn biết các sản phẩm shop bán ayas");
+    expect(lastMessage.direction).toBe("INBOUND");
+  });
+
+  it("does not drop all messages when aiSystemPersona is very large (e.g. 15,000 chars)", () => {
+    const now = new Date("2026-09-06T12:00:00Z");
+    const hugePersona = "A".repeat(15000); // 15,000 chars = ~6000 tokens
+
+    const descendingDbRows = [
+      { direction: "INBOUND", text: "tôi muốn biết các sản phẩm shop bán ayas", timestamp: new Date(now.getTime() - 1000) },
+      { direction: "OUTBOUND", text: "Dạ shop chào bạn!", timestamp: new Date(now.getTime() - 30000) },
+      { direction: "INBOUND", text: "shop bán gì vậy ?", timestamp: new Date(now.getTime() - 60000) },
+      { direction: "OUTBOUND", text: "Chào bạn nha!", timestamp: new Date(now.getTime() - 90000) },
+      { direction: "INBOUND", text: "alo", timestamp: new Date(now.getTime() - 120000) },
+    ];
+
+    const result = buildLeanConversationContext(descendingDbRows, {
+      settings: {
+        ...SystemSettingsDefaults,
+        aiSystemPersona: hugePersona,
+      },
+      now,
+    });
+
+    // Should NOT be trimmed down to 1 message!
+    expect(result.messages.length).toBeGreaterThanOrEqual(4);
+    expect(result.messages[result.messages.length - 1]!.text).toBe("tôi muốn biết các sản phẩm shop bán ayas");
+  });
+
+  it("ensures buildChatMessages produces the latest user message as the final item sent to the proxy", () => {
+    const now = new Date("2026-09-06T12:00:00Z");
+    const descendingDbRows = [
+      { direction: "INBOUND", text: "tôi muốn biết các sản phẩm shop bán ayas", timestamp: new Date(now.getTime() - 1000) },
+      { direction: "OUTBOUND", text: "Dạ shop chào bạn!", timestamp: new Date(now.getTime() - 30000) },
+      { direction: "INBOUND", text: "shop bán gì vậy ?", timestamp: new Date(now.getTime() - 60000) },
+    ];
+
+    const contextResult = buildLeanConversationContext(descendingDbRows, {
+      settings: SystemSettingsDefaults,
+      now,
+    });
+
+    const chatMessages = buildChatMessages({
+      recentMessages: contextResult.messages,
+      settings: SystemSettingsDefaults,
+      customerName: "Sin Sin",
+    });
+
+    // 1st is system
+    expect(chatMessages[0]!.role).toBe("system");
+
+    // Last message MUST be role: user with the newest question
+    const lastChatMsg = chatMessages[chatMessages.length - 1]!;
+    expect(lastChatMsg.role).toBe("user");
+    expect(lastChatMsg.content).toBe("tôi muốn biết các sản phẩm shop bán ayas");
+
+    // The previous question should come before it
+    const userMessages = chatMessages.filter((m) => m.role === "user");
+    expect(userMessages[0]!.content).toBe("shop bán gì vậy ?");
+    expect(userMessages[1]!.content).toBe("tôi muốn biết các sản phẩm shop bán ayas");
   });
 });
