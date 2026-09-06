@@ -230,8 +230,8 @@ export function parseThreadClassification(
     /data-thread-type=["']GROUP["']/i.test(html);
 
   const hasGroupAria = headerSection
-    ? /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members)[^"']*["']/i.test(headerSection)
-    : false;
+    ? /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members|tùy chọn nhóm|group options)[^"']*["']/i.test(headerSection)
+    : /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members|tùy chọn nhóm|group options)[^"']*["']/i.test(html);
   const memberCountMatch = headerSection
     ? headerSection.match(/\b(\d+)\s*(?:thành viên|members)\b/i)
     : null;
@@ -257,15 +257,21 @@ export function parseThreadClassification(
     };
   }
 
-  // 2. Direct structured signals from header / banner ONLY
+  // 2. Direct structured signals
   const hasDirectTestId =
     /data-testid=["'](?:direct_chat_header|mw_chat_header_direct)["']/i.test(html) ||
     /data-thread-type=["']DIRECT["']/i.test(html);
   const hasDirectAria = headerSection
     ? /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(headerSection)
-    : false;
+    : /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(html);
 
-  const hasDirectControls = /\b(?:profile|trang cá nhân)\b/i.test(structuredText) && !hasChatMembers;
+  const hasDirectPresence = /\b(?:active now|đang hoạt động|active \d+[smhd]? ago|hoạt động \d+ phút trước)\b/i.test(html);
+  const hasDirectCalls = /\b(?:bắt đầu gọi thoại|bắt đầu gọi video|bắt đầu cuộc gọi|start a voice call|start a video call|start a call)\b/i.test(html);
+  const hasDirectControls =
+    (/\b(?:profile|trang cá nhân)\b/i.test(structuredText) ||
+      hasDirectCalls ||
+      hasDirectPresence) &&
+    !hasChatMembers;
   const hasDirectParticipant = Boolean(threadTitle && structuredText.includes(threadTitle) && hasDirectControls);
 
   if (hasDirectTestId || hasDirectAria || hasDirectParticipant) {
@@ -277,7 +283,7 @@ export function parseThreadClassification(
           source: "DOM_SELECTOR",
           signal: "direct_header_indicator",
           confidence: 1.0,
-          details: { hasDirectTestId, hasDirectAria, hasDirectParticipant },
+          details: { hasDirectTestId, hasDirectAria, hasDirectParticipant, hasDirectPresence, hasDirectCalls },
         },
       ],
     };
@@ -1087,7 +1093,7 @@ export function parseMessengerBubblesFromHtml(
  */
 export function parseSidebarThreadsFromHtml(html: string): ParsedSidebarThread[] {
   const threads: ParsedSidebarThread[] = [];
-  const linkRegex = /<a\b[^>]*\bhref=["']([^"']*\/messages\/t\/([^"'/]+)\/?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const linkRegex = /<a\b[^>]*\bhref=["']([^"']*\/messages\/(?:e2ee\/)?t\/([^"'/]+)\/?)["'][^>]*>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = linkRegex.exec(html)) !== null) {

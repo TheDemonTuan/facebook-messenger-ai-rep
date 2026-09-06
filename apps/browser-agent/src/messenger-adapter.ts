@@ -754,46 +754,85 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
           return clone.outerHTML;
         });
-        const directProfileId = await page
-          .locator('div[role="main"] a[aria-label="Profile"], div[role="main"] a[aria-label="Trang cá nhân"]')
-          .first()
-          .getAttribute("href")
-          .then((href) => href?.match(/^\/([0-9]+)\/?(?:[?#].*)?$/)?.[1] ?? null)
-          .catch(() => null);
-        const hasGroupControls = await page
-          .locator('div[role="main"] [aria-label*="Chat members"], div[role="main"] [aria-label*="Group options"], div[role="main"] [aria-label*="Thành viên"], div[role="main"] [aria-label*="Tùy chọn nhóm"]')
-          .count()
-          .then((count) => count > 0)
-          .catch(() => false);
+        const currentThreadId = hints?.threadId || extractMessengerThreadId(page.url()) || "";
+
+        const isGroup = await page.evaluate(() => {
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return false;
+          const groupSelector = `
+            [aria-label*="Chat members" i],
+            [aria-label*="Thành viên" i],
+            [aria-label*="Group options" i],
+            [aria-label*="Tùy chọn nhóm" i],
+            [aria-label*="Group info" i],
+            [aria-label*="Thông tin nhóm" i],
+            [aria-label*="Add people" i],
+            [aria-label*="Thêm người" i],
+            [aria-label*="Change group" i],
+            [aria-label*="Đổi tên nhóm" i],
+            [aria-label*="Đổi tên đoạn chat" i]
+          `;
+          if (main.querySelector(groupSelector) !== null) return true;
+          const text = (main as HTMLElement).innerText || main.textContent || "";
+          return /\b(\d+)\s*(?:thành viên|members)\b/i.test(text);
+        }).catch(() => false);
+
+        const directProfileId = await page.evaluate(() => {
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return null;
+          const links = Array.from(main.querySelectorAll('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i], a[href*="facebook.com/"], a[href^="/"]'));
+          for (const a of links) {
+            const href = a.getAttribute("href") || "";
+            if (href.includes("/messages/")) continue;
+            const match = href.match(/(?:profile\.php\?id=|facebook\.com\/|^\/)([0-9]{5,})/i);
+            if (match?.[1]) return match[1];
+          }
+          return null;
+        }).catch(() => null);
+
+        const directParticipantId = isGroup
+          ? null
+          : (directProfileId || hints?.participantId || (/^[0-9]+$/.test(currentThreadId) ? currentThreadId : null));
+
         const parsed = parseMessengerBubblesFromHtml(html, {
-          threadKindHint: hasGroupControls ? "GROUP" : (directProfileId ? "DIRECT" : undefined),
-          threadReliabilityHint: hasGroupControls || directProfileId ? "VERIFIED" : undefined,
+          threadKindHint: isGroup ? "GROUP" : "DIRECT",
+          threadReliabilityHint: "VERIFIED",
           observedAt: new Date(),
           timeZone: this.activeContextTimeZone,
           botChannelAccountId: this.channelAccountId,
           botParticipantId: this.botParticipantId,
           botProfileUrl: this.botProfileUrl,
           threadTitleHint: hints?.threadTitle,
-          senderParticipantIdHint: directProfileId || hints?.participantId || undefined,
+          senderParticipantIdHint: directParticipantId || undefined,
         });
 
-        if (
-          hints?.threadId &&
-          parsed.threadClassification?.kind === "DIRECT" &&
-          parsed.threadClassification.reliability === "VERIFIED"
-        ) {
-          const senderId = directProfileId || hints.participantId || hints.threadId;
-          for (const bubble of parsed.bubbles) {
-            if (bubble.isOutgoing || bubble.senderReliability === "VERIFIED") continue;
-            bubble.senderId = senderId;
-            bubble.senderKind = "PERSON";
-            bubble.senderReliability = "VERIFIED";
-            bubble.senderEvidence = [{
+        if (!isGroup) {
+          parsed.threadClassification = {
+            kind: "DIRECT",
+            reliability: "VERIFIED",
+            evidence: [{
               source: "THREAD_METADATA",
-              signal: "verified_direct_thread_participant",
+              signal: "verified_direct_conversation",
               confidence: 1,
-              details: { threadId: hints.threadId },
-            }];
+              details: { threadId: currentThreadId, directParticipantId },
+            }],
+          };
+          const senderId = directParticipantId || currentThreadId;
+          for (const bubble of parsed.bubbles) {
+            bubble.threadKind = "DIRECT";
+            bubble.threadReliability = "VERIFIED";
+            if (bubble.isOutgoing || bubble.senderReliability === "VERIFIED") continue;
+            if (senderId) {
+              bubble.senderId = senderId;
+              bubble.senderKind = "PERSON";
+              bubble.senderReliability = "VERIFIED";
+              bubble.senderEvidence = [{
+                source: "THREAD_METADATA",
+                signal: "verified_direct_thread_participant",
+                confidence: 1,
+                details: { threadId: currentThreadId, senderId },
+              }];
+            }
           }
         }
 

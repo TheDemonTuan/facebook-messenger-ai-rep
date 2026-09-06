@@ -85,11 +85,18 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
           <div class="unread"></div>
           <div>Bạn: ok</div>
         </a>
+        <a href="https://www.facebook.com/messages/e2ee/t/67890">
+          <span>Sin</span>
+          <div class="unread"></div>
+          <div>alo</div>
+        </a>
       `;
       const threads = parseSidebarThreadsFromHtml(sidebarHtml);
-      expect(threads.length).toBe(1);
+      expect(threads.length).toBe(2);
       expect(threads[0]!.threadKind).toBe("GROUP");
       expect(threads[0]!.threadReliability).toBe("UNVERIFIED");
+      expect(threads[1]!.threadId).toBe("67890");
+      expect(threads[1]!.threadKind).toBe("DIRECT");
     });
   });
 
