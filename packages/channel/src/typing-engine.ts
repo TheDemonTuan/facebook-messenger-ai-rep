@@ -2,12 +2,14 @@ export interface TypingProfile {
   targetWpmMin: number;
   targetWpmMax: number;
   punctuationPauseMs: number;
+  maxTotalDelayMs?: number;
 }
 
 export const DEFAULT_TYPING_PROFILE: TypingProfile = {
   targetWpmMin: 55,
   targetWpmMax: 65,
   punctuationPauseMs: 250,
+  maxTotalDelayMs: 2500,
 };
 
 function sleep(ms: number): Promise<void> {
@@ -49,6 +51,13 @@ export class TypingEngine {
     sink: (char: string) => Promise<void>,
     signal?: AbortSignal
   ): Promise<{ completed: boolean; aborted?: boolean }> {
+    const totalExpectedDelayMs = text.split("").reduce((sum, char) => sum + this.calculateCharDelay(char), 0);
+    const maxTotalDelayMs = this.profile.maxTotalDelayMs ?? 2500;
+    const compressionFactor = totalExpectedDelayMs > maxTotalDelayMs && maxTotalDelayMs > 0
+      ? maxTotalDelayMs / totalExpectedDelayMs
+      : 1;
+
+    let accumulatedDelayMs = 0;
     for (let i = 0; i < text.length; i++) {
       if (signal?.aborted) {
         return { completed: false, aborted: true };
@@ -57,9 +66,11 @@ export class TypingEngine {
       const char = text[i]!;
       await sink(char);
 
-      const delayMs = this.calculateCharDelay(char);
-      if (delayMs > 0) {
-        await sleep(delayMs);
+      accumulatedDelayMs += this.calculateCharDelay(char) * compressionFactor;
+      if (accumulatedDelayMs >= 15) {
+        const sleepMs = Math.round(accumulatedDelayMs);
+        accumulatedDelayMs = 0;
+        await sleep(sleepMs);
       }
     }
 

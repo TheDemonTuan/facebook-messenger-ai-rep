@@ -12,6 +12,7 @@ import {
   outboxEvents,
   turns,
   outboundActions,
+  aiRuns,
 } from "../schema/index.js";
 import type {
   InboundMessagePayload,
@@ -749,5 +750,31 @@ export class ConversationRepository {
         )
       );
     return res.length > 0;
+  }
+
+  /**
+   * Prunes messages older than retentionDays.
+   */
+  async cleanOldMessages(retentionDays = 30): Promise<number> {
+    const result = await this.db.execute(sql`
+      DELETE FROM ${messages}
+      WHERE created_at < clock_timestamp() - (${retentionDays} || ' days')::interval
+      RETURNING id;
+    `);
+    const rows = (result as unknown as { rows?: unknown[] }).rows || (result as unknown as unknown[]) || [];
+    return rows.length;
+  }
+
+  /**
+   * Prunes ai_runs older than retentionDays.
+   */
+  async cleanOldAiRuns(retentionDays = 30): Promise<number> {
+    const result = await this.db.execute(sql`
+      DELETE FROM ${aiRuns}
+      WHERE created_at < clock_timestamp() - (${retentionDays} || ' days')::interval
+      RETURNING id;
+    `);
+    const rows = (result as unknown as { rows?: unknown[] }).rows || (result as unknown as unknown[]) || [];
+    return rows.length;
   }
 }

@@ -57,6 +57,24 @@ export const ConversationDetailPage: React.FC = () => {
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
 
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const initialScrolledRef = useRef(false);
+
+  const scrollToBottom = useCallback((smooth = true) => {
+    messagesEndRef.current?.scrollIntoView({ behavior: smooth ? "smooth" : "auto" });
+  }, []);
+
+  useEffect(() => {
+    if (!loading && messages.length > 0) {
+      if (!initialScrolledRef.current) {
+        scrollToBottom(false);
+        initialScrolledRef.current = true;
+      } else {
+        scrollToBottom(true);
+      }
+    }
+  }, [messages.length, loading, scrollToBottom]);
+
   const loadDetails = useCallback(async (messageCursor?: string, appendOlder = false) => {
     if (!conversationIdRef.current) return;
     setError(null);
@@ -243,35 +261,51 @@ export const ConversationDetailPage: React.FC = () => {
     if (manualMode) return "Hỗ trợ trực tiếp";
     switch (status) {
       case "WAITING":
-        return "Đang chờ tin nhắn";
+      case "WAITING_CUSTOMER":
+        return "Đang chờ tin nhắn từ khách";
       case "DEBOUNCING":
-        return "Đang chờ phản hồi";
+        return "Đang gom tin nhắn";
       case "READING":
+        return "Đang đọc tin";
       case "THINKING":
-      case "DRAFT_READY":
-      case "TYPING":
-      case "SENDING":
         return "AI đang soạn tin";
+      case "DRAFT_READY":
+        return "Bản thảo sẵn sàng";
+      case "TYPING":
+        return "Đang gõ tin nhắn";
+      case "SENDING":
+        return "Đang gửi qua Facebook";
+      case "CONFIRMED":
+      case "SENT":
+        return "Đã phản hồi";
+      case "QUEUED":
+        return "Đang trong hàng đợi";
+      case "SEND_UNCERTAIN":
+        return "Cần đối soát gửi";
       case "ERROR":
         return "Cần kiểm tra";
       default:
-        return "Đang chờ tin nhắn";
+        return status;
     }
   };
 
   const formatActionStatus = (status: string) => {
     switch (status) {
       case "SENT":
-        return "Đã gửi";
+      case "CONFIRMED":
+        return "Đã gửi thành công";
       case "SEND_UNCERTAIN":
-        return "Cần xác nhận";
+        return "Cần đối soát kết quả";
       case "QUEUED":
         return "Đang chờ gửi";
       case "IN_PROGRESS":
-        return "Đang gửi";
+      case "TYPING":
+      case "SEND_INTENT":
+        return "Đang gửi vào Facebook";
       case "FAILED":
         return "Gửi thất bại";
       case "CANCELLED":
+      case "ABORTED":
         return "Đã hủy";
       case "SKIPPED":
         return "Bỏ qua";
@@ -680,6 +714,7 @@ export const ConversationDetailPage: React.FC = () => {
                 );
               })
             )}
+            <div ref={messagesEndRef} />
           </div>
 
           {/* Composer Box */}

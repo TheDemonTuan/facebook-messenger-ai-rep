@@ -122,10 +122,12 @@ export const InboxPage: React.FC = () => {
             CẦN KIỂM TRA
           </span>
         );
+      case "WAITING":
+      case "WAITING_CUSTOMER":
       default:
         return (
           <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "2px 8px", borderRadius: "4px", fontSize: "0.75rem" }}>
-            ĐÃ TRẢ LỜI
+            ĐANG CHỜ KHÁCH
           </span>
         );
     }

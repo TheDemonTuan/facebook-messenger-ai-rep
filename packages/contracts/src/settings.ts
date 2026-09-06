@@ -51,6 +51,12 @@ export const SystemSettingsBaseShape = {
   requireGroupMention: z.boolean(),
   selectedParticipantIds: z.array(z.string().trim().min(1)),
   excludedParticipantIds: z.array(z.string().trim().min(1)),
+  contextMaxInputTokens: z.number().int().min(512).max(32768).optional(),
+  contextMaxMessages: z.number().int().min(2).max(50).optional(),
+  contextMaxInboundMessages: z.number().int().min(1).max(25).optional(),
+  contextMaxMessagesPerSender: z.number().int().min(1).max(25).optional(),
+  contextHistoryMaxAgeHours: z.number().int().min(1).max(168).optional(),
+  aiMaxOutputTokens: z.number().int().min(50).max(4096).optional(),
 };
 
 // Default values for full system settings
@@ -80,6 +86,12 @@ export const SystemSettingsDefaults = {
   requireGroupMention: true,
   selectedParticipantIds: [] as string[],
   excludedParticipantIds: [] as string[],
+  contextMaxInputTokens: 4096,
+  contextMaxMessages: 12,
+  contextMaxInboundMessages: 6,
+  contextMaxMessagesPerSender: 6,
+  contextHistoryMaxAgeHours: 24,
+  aiMaxOutputTokens: 384,
 };
 
 // Patch schema for partial updates without default population
@@ -111,6 +123,12 @@ export const SystemSettingsSchema = z.object({
   requireGroupMention: SystemSettingsBaseShape.requireGroupMention.default(SystemSettingsDefaults.requireGroupMention),
   selectedParticipantIds: SystemSettingsBaseShape.selectedParticipantIds.default(SystemSettingsDefaults.selectedParticipantIds),
   excludedParticipantIds: SystemSettingsBaseShape.excludedParticipantIds.default(SystemSettingsDefaults.excludedParticipantIds),
+  contextMaxInputTokens: SystemSettingsBaseShape.contextMaxInputTokens.default(SystemSettingsDefaults.contextMaxInputTokens),
+  contextMaxMessages: SystemSettingsBaseShape.contextMaxMessages.default(SystemSettingsDefaults.contextMaxMessages),
+  contextMaxInboundMessages: SystemSettingsBaseShape.contextMaxInboundMessages.default(SystemSettingsDefaults.contextMaxInboundMessages),
+  contextMaxMessagesPerSender: SystemSettingsBaseShape.contextMaxMessagesPerSender.default(SystemSettingsDefaults.contextMaxMessagesPerSender),
+  contextHistoryMaxAgeHours: SystemSettingsBaseShape.contextHistoryMaxAgeHours.default(SystemSettingsDefaults.contextHistoryMaxAgeHours),
+  aiMaxOutputTokens: SystemSettingsBaseShape.aiMaxOutputTokens.default(SystemSettingsDefaults.aiMaxOutputTokens),
 });
 
 // Override .partial() so partial update callers do not get whole-object default resets

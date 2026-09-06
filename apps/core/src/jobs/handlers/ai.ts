@@ -13,6 +13,7 @@ import type {
 } from "@messenger/db";
 import { aiRuns, aiDrafts, ReplyPolicyService } from "@messenger/db";
 import type { AiReplyGenerator } from "@messenger/ai";
+import { buildLeanConversationContext } from "@messenger/ai";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
 export interface AiJobPayload {
@@ -157,11 +158,20 @@ export function createAiHandler(deps: AiHandlerDeps) {
     });
 
     // 3. Gather context and generate reply
-    const [recentMessages, { settings }, aiConfig] = await Promise.all([
-      convRepo.getRecentMessages(conversationId, 20),
+    const [rawRecentMessages, { settings }, aiConfig] = await Promise.all([
+      convRepo.getRecentMessages(conversationId, 30),
       settingsRepo.getSettings(channelAccountId),
       aiConfigRepo.getConfig(channelAccountId),
     ]);
+
+    const { messages: recentMessages, manifest: contextManifest } = buildLeanConversationContext(
+      rawRecentMessages,
+      {
+        customerName: customer.name,
+        customerSummary: conversation.summary,
+        settings,
+      }
+    );
 
     const result = await aiGenerator.generateReply({
       customerName: customer.name,
@@ -194,7 +204,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
         status: runStatus,
         promptHash: result.promptHash,
         responseHash: result.responseHash || null,
-        requestSnapshot: result.requestSnapshot || null,
+        requestSnapshot: result.requestSnapshot ? { ...result.requestSnapshot, contextManifest } : (contextManifest ? { contextManifest } : null),
         responseSnapshot: result.responseSnapshot || null,
         usedResult: result.usedResult || null,
         parsedOutput: {

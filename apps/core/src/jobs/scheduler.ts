@@ -94,6 +94,7 @@ export class CoreJobService {
     this.handleRetention = createRetentionHandler({
       jobRepo: deps.jobRepo,
       outboxRepo: deps.outboxRepo,
+      convRepo: deps.convRepo,
     });
 
     // Register all 5 job handlers

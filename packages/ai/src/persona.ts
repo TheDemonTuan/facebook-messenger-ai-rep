@@ -1,8 +1,12 @@
 import type { SystemSettings } from "@messenger/contracts";
 
 export interface ConversationMessageItem {
+  id?: string;
   direction: string;
   text: string;
+  actor?: string;
+  timestamp?: Date | string | null;
+  senderParticipantId?: string | null;
 }
 
 export interface ConversationContext {
