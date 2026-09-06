@@ -561,16 +561,19 @@ export class SenderWorkerService {
       await this.turnRepo.cancelTurn(turnId, "SEND_UNCERTAIN").catch(() => {});
     }
 
-    // Suspend channel account fail-closed
-    await this.db
-      .update(channelAccounts)
-      .set({
-        isSuspended: true,
-        status: "SUSPENDED",
-        statusReason: `Uncertain outbound delivery for action ${actionId} - suspended pending operator check`,
-        updatedAt: new Date(),
-      })
-      .where(eq(channelAccounts.id, channelAccountId));
+    // Isolate failure to the specific conversation - switch conversation to manual mode
+    // Do NOT suspend the entire channel account for all customers
+    if (this.convRepo) {
+      if (typeof this.convRepo.setManualMode === "function") {
+        await this.convRepo.setManualMode(conversationId, true).catch((err) => {
+          console.warn(`[Sender Worker] Failed to set manual mode on conversation ${conversationId}:`, err);
+        });
+      } else if (typeof this.convRepo.updateStatus === "function") {
+        await this.convRepo.updateStatus(conversationId, "MANUAL").catch((err) => {
+          console.warn(`[Sender Worker] Failed to update conversation status ${conversationId}:`, err);
+        });
+      }
+    }
 
     // Create incident
     let outboundActionUuid: string | null = null;
@@ -601,7 +604,7 @@ export class SenderWorkerService {
           actor,
           error: "Verification timed out post-Enter",
         },
-        autoSuspendChannel: true,
+        autoSuspendChannel: false,
       });
     } catch (incidentErr) {
       console.error(`[Sender Worker] Failed to create incident for ${actionId}:`, incidentErr);

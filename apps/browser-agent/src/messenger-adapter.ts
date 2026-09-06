@@ -1440,7 +1440,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     expectedText: string,
     _expectedHash: string,
     marker?: PreSendMarker | string,
-    timeoutMs = 10000
+    timeoutMs = 15000
   ): Promise<{ verified: boolean; messageRef?: string }> {
     try {
       if (!this.senderPage) return { verified: false };
@@ -1488,8 +1488,13 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             previousText !== undefined &&
             previousText !== normBubble;
           const isBrandNewId = !knownIds.has(b.id);
+          const isAfterLastOutgoing =
+            Boolean(marker && typeof marker === "object" && marker.lastMessageId && b.id !== marker.lastMessageId && b.isOutgoing);
 
-          if ((isBrandNewId || isReusedIdWithNewText) && index === bubbles.length - 1) {
+          // Allow match if it is within the last 4 bubbles (Facebook often appends delivery ticks, seen receipts or timestamps below the bubble)
+          const isNearBottom = index >= Math.max(0, bubbles.length - 4);
+
+          if ((isBrandNewId || isReusedIdWithNewText || isAfterLastOutgoing) && isNearBottom) {
             b.isOutgoing = true;
             this.lastSeenMessageIds.add(b.id);
             this.confirmedOutboundMessageIds.add(b.id);

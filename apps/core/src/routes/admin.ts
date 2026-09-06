@@ -148,6 +148,24 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
             eq(incidents.status, "OPEN")
           )
         );
+      const openIncidentsCount = openIncidentsRes[0]?.count || 0;
+
+      // Auto-heal: If channel was suspended due to incidents that have all been resolved, and channel is not manually paused, restore it!
+      if (channel?.isSuspended && openIncidentsCount === 0 && !channel?.isPaused) {
+        await db
+          .update(channelAccounts)
+          .set({
+            isSuspended: false,
+            status: "RUNNING",
+            statusReason: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(channelAccounts.id, channelAccountId));
+        channel.isSuspended = false;
+        channel.status = "RUNNING";
+        channel.statusReason = null;
+        await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
+      }
 
       const oldestWaitSeconds =
         queueList.length > 0
@@ -1047,6 +1065,48 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         if (!resolved) {
           return reply.status(404).send({ error: "Incident not found" });
         }
+
+        // 1. If incident was attached to a specific conversation, restore it out of manual mode
+        if (resolved.conversationId) {
+          await db
+            .update(conversations)
+            .set({
+              manualMode: false,
+              status: "WAITING_CUSTOMER",
+              updatedAt: new Date(),
+            })
+            .where(eq(conversations.id, resolved.conversationId));
+
+          await broadcaster.broadcast("conversation:status", {
+            conversationId: resolved.conversationId,
+            manualMode: false,
+            status: "WAITING_CUSTOMER",
+          });
+        }
+
+        // 2. Auto un-suspend channel account if no other open incidents remain
+        const targetChannelId = resolved.channelAccountId || channelAccountId;
+        const openIncidents = await incidentRepo.getOpenIncidents(targetChannelId);
+        const hasRemainingOpen = openIncidents.some((i) => i.status === "OPEN" && i.id !== incidentId);
+
+        if (!hasRemainingOpen) {
+          await db
+            .update(channelAccounts)
+            .set({
+              isSuspended: false,
+              status: "RUNNING",
+              statusReason: null,
+              updatedAt: new Date(),
+            })
+            .where(eq(channelAccounts.id, targetChannelId));
+
+          await broadcaster.broadcast("channel:status", {
+            status: "RUNNING",
+            isPaused: false,
+            isSuspended: false,
+          });
+        }
+
         await broadcaster.broadcast("incident:resolved", { incidentId });
         return reply.send({ success: true, incident: resolved });
       }
@@ -1062,7 +1122,40 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
         for (const item of openItems) {
           await incidentRepo.resolveIncident(item.id, user.email, "Đã đóng hàng loạt từ quản lý sự cố");
+          if (item.conversationId) {
+            await db
+              .update(conversations)
+              .set({
+                manualMode: false,
+                status: "WAITING_CUSTOMER",
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, item.conversationId));
+
+            await broadcaster.broadcast("conversation:status", {
+              conversationId: item.conversationId,
+              manualMode: false,
+              status: "WAITING_CUSTOMER",
+            });
+          }
         }
+
+        // Auto un-suspend channel after resolving all incidents
+        await db
+          .update(channelAccounts)
+          .set({
+            isSuspended: false,
+            status: "RUNNING",
+            statusReason: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(channelAccounts.id, channelAccountId));
+
+        await broadcaster.broadcast("channel:status", {
+          status: "RUNNING",
+          isPaused: false,
+          isSuspended: false,
+        });
 
         await broadcaster.broadcast("incident:resolved", { count: openItems.length });
         return reply.send({ success: true, count: openItems.length });

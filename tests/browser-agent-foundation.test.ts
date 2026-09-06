@@ -422,7 +422,7 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
   });
 
   describe("7. Post-Enter Uncertainty / Crash Fail-Closed (No Retry)", () => {
-    it("transitions to SEND_UNCERTAIN, suspends channel, creates incident, and does not retry if verification times out after Enter", async () => {
+    it("transitions to SEND_UNCERTAIN, isolates conversation to manual mode, creates incident, and does not retry if verification times out after Enter", async () => {
       let channelSuspended = false;
       let suspendReason = "";
 
@@ -458,6 +458,7 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
           customer: { name: "Customer Uncertain" },
         }),
         updateStatus: vi.fn().mockResolvedValue(undefined),
+        setManualMode: vi.fn().mockResolvedValue(undefined),
       } as unknown as ConversationRepository;
 
       const adapter = new MockChannelAdapter("personal-messenger");
@@ -538,9 +539,11 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         })
       );
 
-      // Channel account suspended fail-closed
-      expect(channelSuspended).toBe(true);
-      expect(suspendReason).toContain("Uncertain outbound delivery");
+      // Conversation isolated to manual mode fail-closed without stopping whole channel
+      expect(mockConvRepo.setManualMode).toHaveBeenCalledWith("conv-uncertain-1", true);
+
+      // Channel account is NOT suspended (other conversations continue running)
+      expect(channelSuspended).toBe(false);
 
       // Incident created with type SEND_UNCERTAIN
       expect(incidentCreated).toBe(true);
