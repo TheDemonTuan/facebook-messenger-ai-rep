@@ -495,7 +495,7 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
 
     it("uses current Messenger header controls to classify direct and group threads", () => {
       const direct = parseMessengerBubblesFromHtml(
-        `<div role="main"><header>Sin Sin Active now Profile Mute Search Chat info</header></div>`,
+        `<div role="main">Sin Sin Active now Profile Mute Search Chat info</div>`,
         { threadTitleHint: "Sin Sin" }
       );
       const group = parseMessengerBubblesFromHtml(

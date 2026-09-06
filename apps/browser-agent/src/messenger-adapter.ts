@@ -449,7 +449,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const participantId =
               href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
               a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
-              null;
+              (/^[0-9]+$/.test(threadId) && !/\b(?:\d+\s*(?:members|thành viên)|chat members|group options)\b/i.test(rawText)
+                ? threadId
+                : null);
 
             // Check if thread has unread indicator
             const isUnread =

@@ -222,7 +222,7 @@ export function parseThreadClassification(
 
   // 1. Group structured signals from header / banner ONLY
   const headerSection = extractHeaderSection(html);
-  const headerText = cleanHtmlText(headerSection ?? "");
+  const structuredText = cleanHtmlText(headerSection ?? html);
   const threadTitle = options?.threadTitleHint?.trim();
 
   const hasGroupTestId =
@@ -235,7 +235,7 @@ export function parseThreadClassification(
   const memberCountMatch = headerSection
     ? headerSection.match(/\b(\d+)\s*(?:thành viên|members)\b/i)
     : null;
-  const hasChatMembers = /\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(headerText);
+  const hasChatMembers = /\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(structuredText);
 
   if (hasGroupTestId || hasGroupAria || Boolean(memberCountMatch) || hasChatMembers) {
     return {
@@ -265,8 +265,8 @@ export function parseThreadClassification(
     ? /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(headerSection)
     : false;
 
-  const hasDirectControls = /\b(?:profile|trang cá nhân)\b/i.test(headerText) && !hasChatMembers;
-  const hasDirectParticipant = Boolean(threadTitle && headerText.includes(threadTitle) && hasDirectControls);
+  const hasDirectControls = /\b(?:profile|trang cá nhân)\b/i.test(structuredText) && !hasChatMembers;
+  const hasDirectParticipant = Boolean(threadTitle && structuredText.includes(threadTitle) && hasDirectControls);
 
   if (hasDirectTestId || hasDirectAria || hasDirectParticipant) {
     return {
