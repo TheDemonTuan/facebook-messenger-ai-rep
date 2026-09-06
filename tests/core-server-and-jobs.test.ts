@@ -673,6 +673,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
     interface MockDb {
       execute: ReturnType<typeof vi.fn>;
       select: ReturnType<typeof vi.fn>;
+      selectDistinctOn: ReturnType<typeof vi.fn>;
       insert: ReturnType<typeof vi.fn>;
       update: ReturnType<typeof vi.fn>;
       transaction: ReturnType<typeof vi.fn>;
@@ -726,6 +727,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
       mockDb = {
         execute: vi.fn().mockResolvedValue({ rows: [{ "?column?": 1 }] }),
         select: vi.fn(() => createChain()),
+        selectDistinctOn: vi.fn(() => createChain()),
         insert: vi.fn(() => ({
           values: vi.fn(() => ({
             onConflictDoUpdate: vi.fn(() => ({
