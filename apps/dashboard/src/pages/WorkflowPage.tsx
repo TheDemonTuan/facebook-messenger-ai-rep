@@ -31,12 +31,12 @@ export const WorkflowPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<WorkflowNode | null>(null);
   const [viewMode, setViewMode] = useState<"graph" | "trace">("graph");
+  const [resolvingAll, setResolvingAll] = useState(false);
 
   const loadWorkflow = useCallback(async () => {
     try {
       const res = await apiFetch<WorkflowLiveData>("/api/workflow/live");
       setData(res);
-      // Keep selected node up to date if open
       if (selectedNode) {
         const updated = res.nodes.find((n) => n.id === selectedNode.id);
         if (updated) setSelectedNode(updated);
@@ -54,66 +54,92 @@ export const WorkflowPage: React.FC = () => {
     return () => clearInterval(interval);
   }, [loadWorkflow]);
 
-  // SSE wakeup: refetch immediately on any channel/turn/message event
   useSseWakeup(() => true, loadWorkflow);
 
-  const getNodeIcon = (id: string) => {
-    switch (id) {
-      case "inbound":
-        return <Radio className="w-5 h-5" />;
-      case "debounce":
-        return <Layers className="w-5 h-5" />;
-      case "policy":
-        return <ShieldCheck className="w-5 h-5" />;
-      case "context":
-        return <BookOpen className="w-5 h-5" />;
-      case "llm":
-        return <Cpu className="w-5 h-5" />;
-      case "guards":
-        return <CheckCircle2 className="w-5 h-5" />;
-      case "typing":
-        return <Keyboard className="w-5 h-5" />;
-      case "delivery":
-        return <Send className="w-5 h-5" />;
-      default:
-        return <Workflow className="w-5 h-5" />;
+  const handleResolveAllIncidents = async () => {
+    if (!data?.openIncidents?.length) return;
+    if (!confirm(`Bạn có chắc muốn đóng và giải quyết TOÀN BỘ ${data.openIncidents.length} sự cố đang mở?`)) {
+      return;
+    }
+    setResolvingAll(true);
+    try {
+      await apiFetch("/api/incidents/resolve-all", { method: "POST" });
+      await loadWorkflow();
+    } catch (err: unknown) {
+      alert((err as Error).message);
+    } finally {
+      setResolvingAll(false);
     }
   };
 
-  const getStatusBadge = (status: WorkflowNode["status"]) => {
+  const getNodeIcon = (id: string) => {
+    const iconSize = 20;
+    switch (id) {
+      case "inbound":
+        return <Radio size={iconSize} />;
+      case "debounce":
+        return <Layers size={iconSize} />;
+      case "policy":
+        return <ShieldCheck size={iconSize} />;
+      case "context":
+        return <BookOpen size={iconSize} />;
+      case "llm":
+        return <Cpu size={iconSize} />;
+      case "guards":
+        return <CheckCircle2 size={iconSize} />;
+      case "typing":
+        return <Keyboard size={iconSize} />;
+      case "delivery":
+        return <Send size={iconSize} />;
+      default:
+        return <Workflow size={iconSize} />;
+    }
+  };
+
+  const renderStatusBadge = (status: WorkflowNode["status"]) => {
+    const badgeStyle: React.CSSProperties = {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "6px",
+      padding: "3px 10px",
+      borderRadius: "9999px",
+      fontSize: "0.75rem",
+      fontWeight: 600,
+    };
+
     switch (status) {
       case "active":
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-100 text-blue-800 animate-pulse border border-blue-300">
-            <span className="w-2 h-2 rounded-full bg-blue-600"></span>
+          <span style={{ ...badgeStyle, backgroundColor: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd" }}>
+            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#2563eb", display: "inline-block" }}></span>
             Đang xử lý
           </span>
         );
       case "waiting":
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300">
-            <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
+          <span style={{ ...badgeStyle, backgroundColor: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d" }}>
+            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#d97706", display: "inline-block" }}></span>
             Đang chờ
           </span>
         );
       case "completed":
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-            <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
+          <span style={{ ...badgeStyle, backgroundColor: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7" }}>
+            <CheckCheck size={14} color="#059669" />
             Đã xong
           </span>
         );
       case "error":
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800 border border-rose-300">
-            <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+          <span style={{ ...badgeStyle, backgroundColor: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>
+            <AlertTriangle size={14} color="#dc2626" />
             Sự cố
           </span>
         );
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600 border border-gray-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400"></span>
+          <span style={{ ...badgeStyle, backgroundColor: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" }}>
+            <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#94a3b8", display: "inline-block" }}></span>
             Sẵn sàng
           </span>
         );
@@ -122,24 +148,24 @@ export const WorkflowPage: React.FC = () => {
 
   if (loading && !data) {
     return (
-      <div className="flex items-center justify-center min-h-[400px] gap-3 text-slate-500">
-        <Loader2 className="w-6 h-6 animate-spin text-blue-600" />
-        <span className="font-medium text-base">Đang tải sơ đồ luồng workflow...</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "350px", gap: "10px", color: "#64748b" }}>
+        <Loader2 size={24} className="animate-spin" />
+        <span style={{ fontWeight: 500, fontSize: "1rem" }}>Đang tải sơ đồ luồng workflow...</span>
       </div>
     );
   }
 
   if (error && !data) {
     return (
-      <div className="p-6 max-w-xl mx-auto my-8 bg-rose-50 border border-rose-200 rounded-xl text-rose-900">
-        <div className="flex items-center gap-2 font-semibold text-lg mb-2 text-rose-800">
-          <AlertTriangle className="w-5 h-5 text-rose-600" />
+      <div style={{ padding: "24px", maxWidth: "600px", margin: "32px auto", backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "12px", color: "#991b1b" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", fontSize: "1.1rem", marginBottom: "8px" }}>
+          <AlertTriangle size={20} color="#dc2626" />
           Không thể tải luồng xử lý
         </div>
-        <p className="text-sm mb-4">{error}</p>
+        <p style={{ fontSize: "0.875rem", marginBottom: "16px" }}>{error}</p>
         <button
           onClick={loadWorkflow}
-          className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 transition shadow"
+          style={{ padding: "8px 16px", backgroundColor: "#dc2626", color: "#ffffff", borderRadius: "8px", border: "none", fontWeight: 600, cursor: "pointer" }}
         >
           Thử lại
         </button>
@@ -150,46 +176,56 @@ export const WorkflowPage: React.FC = () => {
   const nodes = data?.nodes || [];
 
   return (
-    <div className="space-y-6 pb-12">
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px", paddingBottom: "40px" }}>
       {/* 1. Header & Live Telemetry Bar */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-slate-100">
-          <div>
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-blue-50 text-blue-600 rounded-xl border border-blue-100 shadow-sm">
-                <Workflow className="w-6 h-6" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                  Luồng xử lý AI (Workflow Graph)
-                </h1>
-                <p className="text-sm text-slate-500 mt-0.5">
-                  Sơ đồ đường đi thời gian thực: tiếp nhận tin nhắn, hàng đợi, suy luận AI, kiểm tra an toàn đến gõ phím & gửi
-                </p>
+      <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px", paddingBottom: "16px", borderBottom: "1px solid #f1f5f9" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <div style={{ padding: "10px", backgroundColor: "#eff6ff", color: "#2563eb", borderRadius: "12px", border: "1px solid #dbeafe" }}>
+              <Workflow size={24} />
+            </div>
+            <div>
+              <h1 style={{ margin: 0, fontSize: "1.35rem", fontWeight: "bold", color: "#0f172a" }}>
+                Luồng xử lý AI (Workflow Graph)
+              </h1>
+              <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: "2px" }}>
+                Sơ đồ thời gian thực: tiếp nhận tin nhắn, hàng đợi, suy luận AI, kiểm tra an toàn đến gõ phím & gửi
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 flex-wrap">
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             {/* View switcher */}
-            <div className="inline-flex p-1 bg-slate-100 rounded-xl border border-slate-200 text-xs font-medium">
+            <div style={{ display: "inline-flex", padding: "3px", backgroundColor: "#f1f5f9", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
               <button
                 onClick={() => setViewMode("graph")}
-                className={`px-3 py-1.5 rounded-lg transition ${
-                  viewMode === "graph"
-                    ? "bg-white text-blue-700 shadow-xs font-semibold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: "8px",
+                  fontSize: "0.8rem",
+                  fontWeight: viewMode === "graph" ? 700 : 500,
+                  border: "none",
+                  cursor: "pointer",
+                  backgroundColor: viewMode === "graph" ? "#ffffff" : "transparent",
+                  color: viewMode === "graph" ? "#1d4ed8" : "#64748b",
+                  boxShadow: viewMode === "graph" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                }}
               >
                 Sơ đồ n8n
               </button>
               <button
                 onClick={() => setViewMode("trace")}
-                className={`px-3 py-1.5 rounded-lg transition ${
-                  viewMode === "trace"
-                    ? "bg-white text-blue-700 shadow-xs font-semibold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
+                style={{
+                  padding: "6px 14px",
+                  borderRadius: "8px",
+                  fontSize: "0.8rem",
+                  fontWeight: viewMode === "trace" ? 700 : 500,
+                  border: "none",
+                  cursor: "pointer",
+                  backgroundColor: viewMode === "trace" ? "#ffffff" : "transparent",
+                  color: viewMode === "trace" ? "#1d4ed8" : "#64748b",
+                  boxShadow: viewMode === "trace" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                }}
               >
                 Nhật ký vết (Trace)
               </button>
@@ -197,79 +233,115 @@ export const WorkflowPage: React.FC = () => {
 
             <button
               onClick={loadWorkflow}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition shadow-2xs"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+                padding: "7px 12px",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                color: "#334155",
+                backgroundColor: "#ffffff",
+                border: "1px solid #cbd5e1",
+                borderRadius: "10px",
+                cursor: "pointer",
+              }}
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <RefreshCw size={14} />
               Làm mới
             </button>
 
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-xl text-xs font-medium">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "7px 12px", backgroundColor: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", borderRadius: "10px", fontSize: "0.8rem", fontWeight: 600 }}>
+              <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }}></span>
               Thời gian thực
             </div>
           </div>
         </div>
 
         {/* Real-time Status Callout */}
-        <div className="mt-5 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px", marginTop: "16px" }}>
           {/* Waiting For / Stage */}
-          <div className="md:col-span-2 p-4 rounded-xl bg-gradient-to-r from-blue-50/70 to-indigo-50/70 border border-blue-100 flex items-start gap-3.5">
-            <div className="p-2 bg-blue-600 text-white rounded-lg shadow-sm shrink-0 mt-0.5">
-              <Activity className="w-5 h-5 animate-pulse" />
+          <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+            <div style={{ padding: "8px", backgroundColor: "#16a34a", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Activity size={18} />
             </div>
-            <div className="min-w-0">
-              <div className="text-xs font-semibold uppercase tracking-wider text-blue-700 mb-0.5">
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#15803d", letterSpacing: "0.05em", marginBottom: "2px" }}>
                 Đang xử lý & Chờ đợi
               </div>
-              <div className="text-sm font-bold text-slate-900 truncate">
+              <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#0f172a", wordBreak: "break-word" }}>
                 {data?.waitingReason}
               </div>
               {data?.activeConversation && (
-                <div className="flex items-center gap-2 text-xs text-slate-600 mt-1">
-                  <User className="w-3.5 h-3.5 text-blue-500" />
-                  <span>Đối tượng: <strong className="text-slate-800">{data.activeConversation.title}</strong></span>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.8rem", color: "#475569", marginTop: "4px" }}>
+                  <User size={14} color="#2563eb" />
+                  <span>Đối tượng: <strong style={{ color: "#0f172a" }}>{data.activeConversation.title}</strong></span>
                   <Link
                     to={`/inbox/${data.activeConversation.id}`}
-                    className="text-blue-600 hover:underline inline-flex items-center gap-0.5"
+                    style={{ color: "#2563eb", textDecoration: "underline", display: "inline-flex", alignItems: "center", gap: "2px" }}
                   >
-                    Xem chat <ChevronRight className="w-3 h-3" />
+                    Xem chat <ChevronRight size={12} />
                   </Link>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Incidents or Healthy Indicator */}
+          {/* Incidents / Alert bar */}
           {data?.openIncidents && data.openIncidents.length > 0 ? (
-            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3">
-              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-rose-700 mb-0.5">
-                  Cảnh báo sự cố ({data.openIncidents.length})
+            <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+              <div style={{ padding: "8px", backgroundColor: "#dc2626", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <AlertTriangle size={18} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#b91c1c", letterSpacing: "0.05em" }}>
+                    Cảnh báo sự cố ({data.openIncidents.length})
+                  </div>
+                  <button
+                    onClick={handleResolveAllIncidents}
+                    disabled={resolvingAll}
+                    style={{
+                      padding: "3px 8px",
+                      fontSize: "0.75rem",
+                      fontWeight: 600,
+                      backgroundColor: "#fee2e2",
+                      color: "#991b1b",
+                      border: "1px solid #f87171",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {resolvingAll ? "Đang đóng..." : "Đóng tất cả"}
+                  </button>
                 </div>
-                <div className="text-sm font-semibold text-rose-900 truncate">
+                <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#7f1d1d", marginTop: "2px", wordBreak: "break-word" }}>
                   {data.openIncidents[0]!.title}
                 </div>
-                <Link
-                  to="/incidents"
-                  className="text-xs font-medium text-rose-700 hover:underline mt-1 inline-flex items-center gap-1"
-                >
-                  Đối soát ngay <ChevronRight className="w-3 h-3" />
-                </Link>
+                <div style={{ marginTop: "4px" }}>
+                  <Link
+                    to="/incidents"
+                    style={{ fontSize: "0.75rem", fontWeight: 600, color: "#dc2626", textDecoration: "underline", display: "inline-flex", alignItems: "center", gap: "4px" }}
+                  >
+                    Đối soát trong trang Sự cố <ChevronRight size={12} />
+                  </Link>
+                </div>
               </div>
             </div>
           ) : (
-            <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-100 flex items-start gap-3">
-              <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", alignItems: "flex-start", gap: "12px" }}>
+              <div style={{ padding: "8px", backgroundColor: "#059669", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <ShieldCheck size={18} />
+              </div>
               <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-0.5">
-                  Tình trạng hệ thống
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#047857", letterSpacing: "0.05em", marginBottom: "2px" }}>
+                  Tình trạng kiểm soát
                 </div>
-                <div className="text-sm font-semibold text-emerald-900">
-                  Không có sự cố nào bị nghẽn
+                <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#0f172a" }}>
+                  Không có sự cố nào bị kẹt
                 </div>
-                <div className="text-xs text-emerald-700/80 mt-1">
-                  Tất cả 8 cổng xử lý đang vận hành trơn tru
+                <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
+                  Tất cả 8 cổng xử lý đang sẵn sàng và hoạt động bình thường
                 </div>
               </div>
             </div>
@@ -277,38 +349,61 @@ export const WorkflowPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. Visual Workflow Graph (n8n canvas style) */}
+      {/* 2. Visual Workflow Graph (n8n canvas style with rich dark theme) */}
       {viewMode === "graph" ? (
-        <div className="relative bg-slate-900/95 border border-slate-800 rounded-3xl p-6 lg:p-8 shadow-xl overflow-x-auto text-slate-100">
-          {/* Canvas Background Grid Pattern */}
-          <div
-            className="absolute inset-0 rounded-3xl pointer-events-none opacity-20"
-            style={{
-              backgroundImage: "radial-gradient(circle, #94a3b8 1px, transparent 1px)",
-              backgroundSize: "24px 24px",
-            }}
-          />
+        <div
+          style={{
+            position: "relative",
+            backgroundColor: "#0f172a",
+            border: "1px solid #1e293b",
+            borderRadius: "20px",
+            padding: "24px",
+            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.3)",
+            overflowX: "auto",
+            color: "#f8fafc",
+          }}
+        >
+          {/* Canvas header banner */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", paddingBottom: "12px", borderBottom: "1px solid #1e293b" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", fontWeight: 700, color: "#94a3b8" }}>
+              <Sparkles size={16} color="#38bdf8" />
+              <span>SƠ ĐỒ TIẾN TRÌNH XỬ LÝ (PIPELINE DAG - 8 NODES)</span>
+            </div>
+            <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
+              Bấm vào từng Node để xem chi tiết thông số và dữ liệu thô
+            </div>
+          </div>
 
-          <div className="relative z-10 flex flex-col gap-8 min-w-[900px]">
-            {/* Top Row: Nodes 1 -> 4 */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "28px", minWidth: "980px" }}>
+            {/* Giai đoạn 1: Nodes 1 -> 4 */}
             <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-                Giai đoạn 1: Tiếp nhận & Chuẩn bị ngữ cảnh
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#38bdf8", marginBottom: "12px" }}>
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#38bdf8", display: "inline-block" }}></span>
+                Giai đoạn 1: Tiếp nhận tin nhắn & Chuẩn bị ngữ cảnh
               </div>
-              <div className="grid grid-cols-4 gap-4 relative">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px", position: "relative" }}>
                 {nodes.slice(0, 4).map((node, idx) => (
-                  <div key={node.id} className="relative flex items-center">
-                    <NodeCard
+                  <div key={node.id} style={{ position: "relative" }}>
+                    <NodeCardComponent
                       node={node}
                       icon={getNodeIcon(node.id)}
-                      statusBadge={getStatusBadge(node.status)}
+                      statusBadge={renderStatusBadge(node.status)}
                       isSelected={selectedNode?.id === node.id}
                       onClick={() => setSelectedNode(node)}
                     />
                     {idx < 3 && (
-                      <div className="hidden lg:flex absolute -right-4 top-1/2 -translate-y-1/2 z-20 text-slate-500">
-                        <ArrowRight className="w-5 h-5 text-slate-600" />
+                      <div
+                        style={{
+                          position: "absolute",
+                          right: "-12px",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          zIndex: 10,
+                          color: "#64748b",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <ArrowRight size={18} />
                       </div>
                     )}
                   </div>
@@ -316,33 +411,56 @@ export const WorkflowPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Connecting transition pipe */}
-            <div className="flex justify-end pr-16 text-slate-600">
-              <div className="flex items-center gap-2 text-xs font-mono text-indigo-400 bg-slate-800/80 px-3 py-1 rounded-full border border-slate-700">
-                <Sparkles className="w-3.5 h-3.5 text-yellow-400 animate-spin" />
-                Truyền ngữ cảnh sang LLM Inference
+            {/* Connecting Transition Connector */}
+            <div style={{ display: "flex", justifyContent: "flex-end", paddingRight: "40px" }}>
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  fontSize: "0.75rem",
+                  fontFamily: "monospace",
+                  color: "#a5b4fc",
+                  backgroundColor: "#1e1b4b",
+                  border: "1px solid #4338ca",
+                  padding: "4px 14px",
+                  borderRadius: "9999px",
+                }}
+              >
+                <ArrowRight size={14} color="#818cf8" />
+                <span>Nạp Prompt & Lịch sử sang Giai đoạn 2 (Inference & Gửi)</span>
               </div>
             </div>
 
-            {/* Bottom Row: Nodes 5 -> 8 */}
+            {/* Giai đoạn 2: Nodes 5 -> 8 */}
             <div>
-              <div className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-4 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                Giai đoạn 2: Suy luận, Chuẩn hóa & Gửi tin nhắn
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#34d399", marginBottom: "12px" }}>
+                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#34d399", display: "inline-block" }}></span>
+                Giai đoạn 2: Suy luận AI, Chuẩn hóa gộp/tách tin & Gõ phím gửi
               </div>
-              <div className="grid grid-cols-4 gap-4 relative">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px", position: "relative" }}>
                 {nodes.slice(4, 8).map((node, idx) => (
-                  <div key={node.id} className="relative flex items-center">
-                    <NodeCard
+                  <div key={node.id} style={{ position: "relative" }}>
+                    <NodeCardComponent
                       node={node}
                       icon={getNodeIcon(node.id)}
-                      statusBadge={getStatusBadge(node.status)}
+                      statusBadge={renderStatusBadge(node.status)}
                       isSelected={selectedNode?.id === node.id}
                       onClick={() => setSelectedNode(node)}
                     />
                     {idx < 3 && (
-                      <div className="hidden lg:flex absolute -right-4 top-1/2 -translate-y-1/2 z-20 text-slate-500">
-                        <ArrowRight className="w-5 h-5 text-slate-600" />
+                      <div
+                        style={{
+                          position: "absolute",
+                          right: "-12px",
+                          top: "50%",
+                          transform: "translateY(-50%)",
+                          zIndex: 10,
+                          color: "#64748b",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        <ArrowRight size={18} />
                       </div>
                     )}
                   </div>
@@ -353,69 +471,77 @@ export const WorkflowPage: React.FC = () => {
         </div>
       ) : (
         /* 3. Live Execution Trace View */
-        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-6">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+        <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", padding: "24px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "16px", borderBottom: "1px solid #f1f5f9", marginBottom: "16px" }}>
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Vết xử lý gần nhất (Execution Trace)</h2>
-              <p className="text-xs text-slate-500">
-                Toàn bộ dữ liệu chuyển giao từ lúc khách nhắn tin đến khi bot hoàn tất gửi tin
-              </p>
+              <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: "bold", color: "#0f172a" }}>
+                Vết xử lý gần nhất (Execution Trace)
+              </h2>
+              <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
+                Chi tiết dữ liệu chuyển giao qua từng bước của tin nhắn gần nhất
+              </div>
             </div>
-            <div className="text-xs text-slate-400 font-mono">
+            <div style={{ fontSize: "0.8rem", color: "#475569", fontFamily: "monospace", padding: "4px 10px", backgroundColor: "#f1f5f9", borderRadius: "8px" }}>
               Model: {data?.latestTrace.aiModel || "auto"}
             </div>
           </div>
 
-          <div className="space-y-4">
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
             {/* Step 1 */}
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-start gap-4">
-              <div className="p-2 bg-blue-100 text-blue-700 rounded-lg shrink-0 mt-0.5">
-                <Radio className="w-5 h-5" />
+            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
+              <div style={{ padding: "10px", backgroundColor: "#dbeafe", color: "#1d4ed8", borderRadius: "10px", height: "fit-content" }}>
+                <Radio size={20} />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">1. Khách gửi tin nhắn đến</div>
-                  <div className="text-xs text-slate-500">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
+                    1. Khách hàng gửi tin nhắn đến
+                  </div>
+                  <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
                     {data?.latestTrace.inboundTime ? new Date(data.latestTrace.inboundTime).toLocaleTimeString("vi-VN") : "—"}
                   </div>
                 </div>
-                <div className="text-xs text-slate-700 bg-white p-3 rounded-lg border border-slate-200 mt-2 font-mono whitespace-pre-wrap">
+                <div style={{ marginTop: "8px", padding: "12px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.85rem", color: "#1e293b", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
                   {data?.latestTrace.inboundText || "Chưa có nội dung tin nhắn gần đây"}
                 </div>
               </div>
             </div>
 
             {/* Step 2 */}
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-start gap-4">
-              <div className="p-2 bg-purple-100 text-purple-700 rounded-lg shrink-0 mt-0.5">
-                <Cpu className="w-5 h-5" />
+            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
+              <div style={{ padding: "10px", backgroundColor: "#f3e8ff", color: "#7e22ce", borderRadius: "10px", height: "fit-content" }}>
+                <Cpu size={20} />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">2. Mô hình AI suy luận & tạo câu trả lời</div>
-                  <div className="text-xs text-slate-500">
-                    Độ trễ: <strong className="text-slate-800">{data?.latestTrace.aiLatencyMs || 0}ms</strong>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
+                    2. Mô hình AI suy luận & Tạo câu trả lời
+                  </div>
+                  <div style={{ fontSize: "0.8rem", color: "#475569" }}>
+                    Thời gian phản hồi: <strong style={{ color: "#0f172a" }}>{data?.latestTrace.aiLatencyMs || 0}ms</strong>
                   </div>
                 </div>
-                <div className="text-xs text-slate-600 mt-1">
-                  Đã qua bộ lọc rò rỉ và áp dụng quy tắc gộp danh sách sản phẩm thành 1 tin nhắn, tách câu hỏi kết thúc làm tin thứ 2.
+                <div style={{ marginTop: "6px", fontSize: "0.8rem", color: "#64748b" }}>
+                  Đã kiểm tra an toàn, áp dụng quy tắc gộp toàn bộ danh sách sản phẩm thành 1 tin nhắn và tách câu hỏi gợi mở kết thúc làm tin nhắn thứ 2.
                 </div>
               </div>
             </div>
 
             {/* Step 3 */}
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex items-start gap-4">
-              <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg shrink-0 mt-0.5">
-                <Send className="w-5 h-5" />
+            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
+              <div style={{ padding: "10px", backgroundColor: "#d1fae5", color: "#047857", borderRadius: "10px", height: "fit-content" }}>
+                <Send size={20} />
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">3. Gõ phím ảo & Đã gửi đến khách hàng</div>
-                  <div className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
+                    3. Gõ phím ảo & Đã gửi đến khách hàng
+                  </div>
+                  <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#065f46", backgroundColor: "#d1fae5", padding: "2px 8px", borderRadius: "6px" }}>
                     {data?.latestTrace.outboundStatus || "CONFIRMED"}
                   </div>
                 </div>
-                <div className="text-xs text-slate-700 bg-white p-3 rounded-lg border border-slate-200 mt-2 font-mono whitespace-pre-wrap">
+                <div style={{ marginTop: "8px", padding: "12px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.85rem", color: "#1e293b", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
                   {data?.latestTrace.outboundText || "Chưa có nội dung tin gửi gần đây"}
                 </div>
               </div>
@@ -424,80 +550,114 @@ export const WorkflowPage: React.FC = () => {
         </div>
       )}
 
-      {/* 4. Selected Node Inspector Drawer (Slide-out or Card) */}
+      {/* 4. Selected Node Inspector Drawer (Slide-out panel) */}
       {selectedNode && (
-        <div className="fixed inset-y-0 right-0 z-50 w-full max-w-md bg-white border-l border-slate-200 shadow-2xl p-6 flex flex-col justify-between overflow-y-auto animate-in slide-in-from-right duration-200">
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            right: 0,
+            bottom: 0,
+            width: "440px",
+            maxWidth: "90vw",
+            backgroundColor: "#ffffff",
+            borderLeft: "1px solid #cbd5e1",
+            boxShadow: "-8px 0 25px rgba(0,0,0,0.2)",
+            zIndex: 100,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            padding: "24px",
+            overflowY: "auto",
+          }}
+        >
           <div>
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 bg-blue-50 text-blue-600 rounded-lg">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "16px", borderBottom: "1px solid #e2e8f0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <div style={{ padding: "8px", backgroundColor: "#eff6ff", color: "#2563eb", borderRadius: "10px" }}>
                   {getNodeIcon(selectedNode.id)}
                 </div>
                 <div>
-                  <h3 className="font-bold text-base text-slate-900">{selectedNode.name}</h3>
-                  <div className="text-xs text-slate-500 font-mono">{selectedNode.subtitle}</div>
+                  <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: "bold", color: "#0f172a" }}>
+                    {selectedNode.name}
+                  </h3>
+                  <div style={{ fontSize: "0.75rem", color: "#64748b", fontFamily: "monospace" }}>
+                    {selectedNode.subtitle}
+                  </div>
                 </div>
               </div>
               <button
                 onClick={() => setSelectedNode(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+                style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: "4px" }}
               >
-                <X className="w-5 h-5" />
+                <X size={20} />
               </button>
             </div>
 
-            <div className="mt-5 space-y-5">
+            <div style={{ display: "flex", flexDirection: "column", gap: "18px", marginTop: "20px" }}>
               {/* Status */}
               <div>
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
                   Trạng thái hiện tại
                 </div>
-                <div>{getStatusBadge(selectedNode.status)}</div>
+                <div>{renderStatusBadge(selectedNode.status)}</div>
               </div>
 
               {/* Activity */}
               <div>
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
                   Hoạt động tức thì
                 </div>
-                <div className="p-3 bg-slate-50 rounded-xl text-xs font-mono text-slate-800 border border-slate-200 break-words">
+                <div style={{ padding: "12px", backgroundColor: "#f8fafc", borderRadius: "10px", fontSize: "0.8rem", fontFamily: "monospace", color: "#1e293b", border: "1px solid #e2e8f0", wordBreak: "break-word" }}>
                   {selectedNode.activity}
                 </div>
               </div>
 
               {/* Metrics */}
               <div>
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
                   Chỉ số thời gian thực
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
                   {selectedNode.metrics.map((m, i) => (
-                    <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-200">
-                      <div className="text-xs text-slate-500">{m.label}</div>
-                      <div className="text-sm font-bold text-slate-900 mt-0.5">{m.value}</div>
+                    <div key={i} style={{ padding: "10px", backgroundColor: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "0.75rem", color: "#64748b" }}>{m.label}</div>
+                      <div style={{ fontSize: "0.95rem", fontWeight: "bold", color: "#0f172a", marginTop: "2px" }}>
+                        {m.value}
+                      </div>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Technical Config / Payload */}
+              {/* Technical Details JSON */}
               <div>
-                <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Chi tiết kỹ thuật & Cấu hình
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
+                  Chi tiết cấu hình & Thông số
                 </div>
-                <pre className="p-3 bg-slate-900 text-slate-200 rounded-xl text-xs font-mono overflow-x-auto max-h-56">
+                <pre style={{ padding: "12px", backgroundColor: "#0f172a", color: "#38bdf8", borderRadius: "10px", fontSize: "0.75rem", fontFamily: "monospace", overflowX: "auto", maxHeight: "200px" }}>
                   {JSON.stringify(selectedNode.details, null, 2)}
                 </pre>
               </div>
             </div>
           </div>
 
-          <div className="pt-6 border-t border-slate-100 flex gap-2">
+          <div style={{ paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
             <button
               onClick={() => setSelectedNode(null)}
-              className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-semibold rounded-xl transition"
+              style={{
+                width: "100%",
+                padding: "10px",
+                backgroundColor: "#f1f5f9",
+                color: "#334155",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+                borderRadius: "10px",
+                border: "none",
+                cursor: "pointer",
+              }}
             >
-              Đóng
+              Đóng chi tiết
             </button>
           </div>
         </div>
@@ -514,55 +674,86 @@ interface NodeCardProps {
   onClick: () => void;
 }
 
-const NodeCard: React.FC<NodeCardProps> = ({ node, icon, statusBadge, isSelected, onClick }) => {
+const NodeCardComponent: React.FC<NodeCardProps> = ({ node, icon, statusBadge, isSelected, onClick }) => {
   const isGlowing = node.status === "active";
   const isError = node.status === "error";
 
   return (
     <div
       onClick={onClick}
-      className={`w-full text-left p-4 rounded-2xl transition-all duration-200 cursor-pointer border ${
-        isSelected
-          ? "ring-2 ring-blue-400 bg-slate-800 border-blue-500 shadow-lg scale-[1.02]"
+      style={{
+        width: "100%",
+        padding: "14px",
+        borderRadius: "14px",
+        cursor: "pointer",
+        transition: "all 0.2s ease",
+        backgroundColor: isError ? "rgba(153, 27, 27, 0.2)" : isGlowing ? "rgba(30, 58, 138, 0.3)" : "#1e293b",
+        border: isSelected
+          ? "2px solid #60a5fa"
           : isError
-          ? "bg-rose-950/40 border-rose-500/80 hover:border-rose-400"
+          ? "1px solid #f87171"
           : isGlowing
-          ? "bg-blue-950/40 border-blue-400 shadow-md shadow-blue-500/20 hover:scale-[1.01]"
-          : "bg-slate-800/80 border-slate-700/80 hover:border-slate-600 hover:bg-slate-800"
-      }`}
+          ? "1px solid #60a5fa"
+          : "1px solid #334155",
+        boxShadow: isSelected
+          ? "0 0 16px rgba(96, 165, 250, 0.5)"
+          : isGlowing
+          ? "0 0 12px rgba(59, 130, 246, 0.3)"
+          : "none",
+      }}
     >
-      <div className="flex items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2 min-w-0">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <div
-            className={`p-2 rounded-xl shrink-0 ${
-              isGlowing
-                ? "bg-blue-600 text-white shadow-sm shadow-blue-500/50"
-                : isError
-                ? "bg-rose-600 text-white"
-                : "bg-slate-700 text-slate-300"
-            }`}
+            style={{
+              padding: "7px",
+              borderRadius: "8px",
+              backgroundColor: isError ? "#dc2626" : isGlowing ? "#2563eb" : "#334155",
+              color: "#ffffff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             {icon}
           </div>
-          <span className="text-xs font-bold text-slate-400">Node {node.step}</span>
+          <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#94a3b8" }}>Node {node.step}</span>
         </div>
         <div>{statusBadge}</div>
       </div>
 
-      <div className="mb-2">
-        <div className="font-bold text-sm text-white truncate">{node.name}</div>
-        <div className="text-xs text-slate-400 truncate mt-0.5">{node.subtitle}</div>
+      <div style={{ marginBottom: "8px" }}>
+        <div style={{ fontWeight: 700, fontSize: "0.9rem", color: "#ffffff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {node.name}
+        </div>
+        <div style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "2px" }}>
+          {node.subtitle}
+        </div>
       </div>
 
-      <div className="p-2.5 rounded-xl bg-slate-900/60 border border-slate-700/60 text-xs font-mono text-slate-300 truncate mb-3">
+      <div
+        style={{
+          padding: "8px",
+          borderRadius: "8px",
+          backgroundColor: "rgba(15, 23, 42, 0.7)",
+          border: "1px solid #334155",
+          fontSize: "0.75rem",
+          fontFamily: "monospace",
+          color: "#cbd5e1",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          marginBottom: "10px",
+        }}
+      >
         {node.activity}
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-slate-700/60 text-xs">
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", paddingTop: "8px", borderTop: "1px solid #334155", fontSize: "0.75rem" }}>
         {node.metrics.slice(0, 2).map((m, i) => (
-          <div key={i} className="truncate">
-            <span className="text-slate-400">{m.label}:</span>{" "}
-            <strong className="text-slate-200">{m.value}</strong>
+          <div key={i} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span style={{ color: "#94a3b8" }}>{m.label}:</span>{" "}
+            <strong style={{ color: "#f8fafc" }}>{m.value}</strong>
           </div>
         ))}
       </div>
