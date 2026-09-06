@@ -1354,7 +1354,11 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       text,
       async (char) => {
         if (this.senderPage) {
-          await this.senderPage.keyboard.type(char);
+          if (char.length > 1 || char.codePointAt(0)! > 0xffff) {
+            await this.senderPage.keyboard.insertText(char);
+          } else {
+            await this.senderPage.keyboard.type(char);
+          }
         }
       },
       options?.signal

@@ -74,4 +74,31 @@ describe("TypingEngine Pacing & Cancellation", () => {
     expect(typed).toBe(longText);
     expect(elapsed).toBeLessThan(350);
   });
+
+  it("handles multi-byte and surrogate pair emojis as atomic characters without corrupting them into ", async () => {
+    const engine = new TypingEngine({ maxTotalDelayMs: 50 });
+    const emojiText = "Chào bạn! 🐐 😔 😄 👨‍👩‍👧‍👦 Chúc một ngày tốt lành!";
+
+    const typedCharacters: string[] = [];
+    let typed = "";
+    const result = await engine.typeWithPacing(emojiText, async (char) => {
+      typedCharacters.push(char);
+      typed += char;
+    });
+
+    expect(result.completed).toBe(true);
+    expect(typed).toBe(emojiText);
+    // Multi-byte emojis should not be split into half surrogates
+    expect(typedCharacters).toContain("🐐");
+    expect(typedCharacters).toContain("😔");
+    expect(typedCharacters).toContain("😄");
+    for (const ch of typedCharacters) {
+      const code = ch.charCodeAt(0);
+      // UTF-16 high surrogate: 0xD800 to 0xDBFF; low surrogate: 0xDC00 to 0xDFFF
+      // A solitary surrogate character in typedCharacters indicates corruption
+      if (ch.length === 1) {
+        expect(code < 0xd800 || code > 0xdfff).toBe(true);
+      }
+    }
+  });
 });
