@@ -48,8 +48,7 @@ export function shouldInspectMessengerThread(
   return (
     currentThreadId === threadId ||
     isUnread ||
-    previousSnippet === undefined ||
-    previousSnippet !== snippet
+    (previousSnippet !== undefined && previousSnippet !== snippet)
   );
 }
 

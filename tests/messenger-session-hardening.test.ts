@@ -21,8 +21,8 @@ describe("Messenger session hardening", () => {
     expect(extractMessengerThreadId("about:blank")).toBeNull();
   });
 
-  it("inspects new, unread, changed, and currently open conversations", () => {
-    expect(shouldInspectMessengerThread(null, "new-thread", false, undefined, "new message")).toBe(true);
+  it("inspects unread, changed, and currently open conversations without replaying unknown history", () => {
+    expect(shouldInspectMessengerThread(null, "new-thread", false, undefined, "new message")).toBe(false);
     expect(shouldInspectMessengerThread(null, "thread-1", true, "same", "same")).toBe(true);
     expect(shouldInspectMessengerThread(null, "thread-1", false, "old", "new")).toBe(true);
     expect(shouldInspectMessengerThread("thread-1", "thread-1", false, "same", "same")).toBe(true);
