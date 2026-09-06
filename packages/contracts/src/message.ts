@@ -225,6 +225,7 @@ export const MessageClassificationFields = {
   senderExternalId: z.string().nullable().optional(),
   senderParticipantId: z.string().nullable().optional(),
   senderDisplayName: z.string().nullable().optional(),
+  avatarUrl: z.string().nullable().optional(),
   mentions: z.array(MentionEvidenceSchema).optional(),
   timestamps: MessageTimestampsSchema.optional(),
   eventTimestamp: z.coerce.date().nullable().optional(),

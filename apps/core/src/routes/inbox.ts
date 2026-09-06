@@ -118,6 +118,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           const fallbackCustomer = {
             id: r.conversation.customerId ?? "00000000-0000-0000-0000-000000000000",
             channelAccountId: r.conversation.channelAccountId,
+            externalCustomerId: r.conversation.threadKind === "DIRECT" ? r.conversation.externalThreadId : null,
             name: r.conversation.title || defaultName,
             avatarUrl: null,
             notes: null,

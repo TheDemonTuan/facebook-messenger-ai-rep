@@ -33,6 +33,7 @@ export interface ChannelOverview {
 export interface ConversationItem {
   conversation: {
     id: string;
+    externalThreadId?: string;
     status: string;
     threadKind?: string;
     inboundVersion: number;
@@ -48,6 +49,7 @@ export interface ConversationItem {
     id: string;
     name: string | null;
     avatarUrl: string | null;
+    externalCustomerId?: string | null;
   };
 }
 

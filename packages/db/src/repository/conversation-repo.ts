@@ -181,10 +181,15 @@ export class ConversationRepository {
       const threadTitle = payload.customerName || null;
 
       // 3. Customer resolution: never infer person from thread ID.
-      // If thread is a group, or externalCustomerId equals externalThreadId, customerId remains null.
+      // If thread is a group, or externalCustomerId equals externalThreadId without verified participant, customerId remains null.
       let customerId: string | null = null;
       const externalCustId = payload.externalCustomerId?.trim();
-      const canInferPerson = !isGroup && Boolean(externalCustId) && externalCustId !== externalThreadIdTrimmed;
+      const canInferPerson = !isGroup && Boolean(externalCustId) && (externalCustId !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
+
+      const avatarUrl =
+        (payload.participantIdentity?.metadata?.avatarUrl as string | undefined) ||
+        (payload as { avatarUrl?: string | null }).avatarUrl ||
+        null;
 
       if (canInferPerson && externalCustId) {
         const existingCustomer = await tx
@@ -200,12 +205,15 @@ export class ConversationRepository {
 
         if (existingCustomer.length > 0 && existingCustomer[0]) {
           customerId = existingCustomer[0].id;
-          if (payload.customerName) {
-            await tx
-              .update(customers)
-              .set({ name: payload.customerName, updatedAt: new Date() })
-              .where(eq(customers.id, customerId));
-          }
+          const updateFields: { name?: string; avatarUrl?: string; updatedAt: Date } = {
+            updatedAt: new Date(),
+          };
+          if (payload.customerName) updateFields.name = payload.customerName;
+          if (avatarUrl) updateFields.avatarUrl = avatarUrl;
+          await tx
+            .update(customers)
+            .set(updateFields)
+            .where(eq(customers.id, customerId));
         } else {
           const [newCustomer] = await tx
             .insert(customers)
@@ -213,6 +221,7 @@ export class ConversationRepository {
               channelAccountId: payload.channelAccountId,
               externalCustomerId: externalCustId,
               name: payload.customerName || null,
+              avatarUrl,
             })
             .returning({ id: customers.id });
           if (newCustomer) {
@@ -241,6 +250,7 @@ export class ConversationRepository {
             isVerified: true,
             profileUrl: payload.participantIdentity.profileUrl ?? null,
             displayName: payload.participantIdentity.displayName ?? null,
+            avatarUrl,
             verifiedAt: payload.participantIdentity.verifiedAt ?? now,
             metadata: payload.participantIdentity.metadata ?? {},
             updatedAt: now,
@@ -253,6 +263,7 @@ export class ConversationRepository {
               isVerified: true,
               ...(payload.participantIdentity.profileUrl ? { profileUrl: payload.participantIdentity.profileUrl } : {}),
               ...(payload.participantIdentity.displayName ? { displayName: payload.participantIdentity.displayName } : {}),
+              ...(avatarUrl ? { avatarUrl } : {}),
               verifiedAt: payload.participantIdentity.verifiedAt ?? now,
               updatedAt: now,
             },

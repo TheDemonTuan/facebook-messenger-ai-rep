@@ -447,6 +447,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const rawText = (a as HTMLElement).innerText || "";
             const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
             const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
+            const avatarImg = (a as HTMLElement).querySelector('img[src*="scontent"], img[src*="fbcdn"], img');
+            const avatarUrl =
+              avatarImg?.getAttribute("src") ||
+              (a as HTMLElement).querySelector("image")?.getAttribute("xlink:href") ||
+              (a as HTMLElement).querySelector("image")?.getAttribute("href") ||
+              null;
             const participantId =
               href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
               a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
@@ -465,6 +471,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               href,
               threadId,
               customerName,
+              avatarUrl,
               participantId,
               snippet: rawText.replace(/\s+/g, " ").trim(),
               isUnread,
@@ -605,12 +612,34 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             console.warn(`[BrowserAdapter] No stable message bubbles found for changed thread ${t.threadId}.`);
           }
 
-          // Process incoming bubbles
-          for (const bubble of bubbleResult.bubbles) {
-            if (bubble.isOutgoing) {
-              this.lastSeenMessageIds.add(bubble.id);
-              continue;
+          // 1. Identify last outgoing bubble in current DOM view
+          let lastOutgoingIdx = -1;
+          for (let i = bubbleResult.bubbles.length - 1; i >= 0; i--) {
+            if (bubbleResult.bubbles[i]?.isOutgoing) {
+              lastOutgoingIdx = i;
+              break;
             }
+          }
+
+          // 2. Mark all bubbles up to and including lastOutgoingIdx as already handled/seen
+          for (let i = 0; i <= lastOutgoingIdx; i++) {
+            const b = bubbleResult.bubbles[i];
+            if (b) {
+              this.lastSeenMessageIds.add(b.id);
+            }
+          }
+
+          // 3. If the newest visible bubble is outgoing, there are no pending inbounds in this thread
+          if (lastOutgoingIdx === bubbleResult.bubbles.length - 1) {
+            this.lastSeenSnippets.set(t.threadId, t.snippet);
+            continue;
+          }
+
+          // 4. Process only unreplied inbound bubbles strictly after lastOutgoingIdx
+          const startIdx = lastOutgoingIdx >= 0 ? lastOutgoingIdx + 1 : 0;
+          for (let i = startIdx; i < bubbleResult.bubbles.length; i++) {
+            const bubble = bubbleResult.bubbles[i];
+            if (!bubble || bubble.isOutgoing) continue;
 
             if (this.lastSeenMessageIds.has(bubble.id)) {
               continue; // Dedupe
@@ -628,16 +657,21 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
               const isVerifiedSender = Boolean(bubble.senderId && bubble.senderReliability === "VERIFIED");
 
+              const resolvedName =
+                (bubbleResult.threadClassification?.kind === "GROUP"
+                  ? t.customerName
+                  : bubbleResult.headerTitle || bubble.senderName || t.customerName) || null;
+
+              const resolvedAvatar = bubbleResult.avatarUrl || (t as { avatarUrl?: string | null }).avatarUrl || null;
+
               await this.inboundCallback({
                 channelAccountId: this.channelAccountId,
                 externalThreadId: t.threadId,
                 externalThreadRef: fullThreadRef,
                 // Never conflate externalThreadId with actual sender identity
                 externalCustomerId: bubble.senderId ?? null,
-                customerName:
-                  bubbleResult.threadClassification?.kind === "GROUP"
-                    ? t.customerName || null
-                    : bubble.senderName || t.customerName || null,
+                customerName: resolvedName,
+                avatarUrl: resolvedAvatar,
                 externalMessageId: bubble.id,
                 text: bubble.text,
                 timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
@@ -649,7 +683,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 senderEvidence: bubble.senderEvidence ?? [],
                 senderExternalId: bubble.senderId ?? null,
                 senderParticipantId: bubble.senderId ?? null,
-                senderDisplayName: bubble.senderName ?? null,
+                senderDisplayName: resolvedName,
                 participantIdentity: isVerifiedSender
                   ? {
                       channelAccountId: this.channelAccountId,
@@ -657,9 +691,11 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                       senderKind: bubble.senderKind ?? "PERSON",
                       isVerified: true,
                       profileUrl: bubble.senderProfileUrl ?? null,
-                      displayName: bubble.senderName ?? null,
+                      displayName: resolvedName,
                       verifiedAt: new Date(),
-                      metadata: {},
+                      metadata: {
+                        ...(resolvedAvatar ? { avatarUrl: resolvedAvatar } : {}),
+                      },
                     }
                   : null,
                 mentions: bubble.mentions ?? [],
@@ -835,6 +871,20 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
         }
+
+        const mainHeaderInfo = await page.evaluate(() => {
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return { title: null, avatarUrl: null };
+          const avatarImg = main.querySelector('img[src*="scontent"], img[src*="fbcdn"]');
+          const avatarUrl = avatarImg?.getAttribute("src") || null;
+          const profileLink = main.querySelector('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i]');
+          const heading = main.querySelector('h2, [role="heading"]');
+          const title = profileLink?.textContent?.trim() || heading?.textContent?.trim() || null;
+          return { title, avatarUrl };
+        }).catch(() => ({ title: null, avatarUrl: null }));
+
+        parsed.headerTitle = mainHeaderInfo.title;
+        parsed.avatarUrl = mainHeaderInfo.avatarUrl;
 
         return parsed;
       } catch (err: unknown) {

@@ -538,17 +538,25 @@ export class ReplyPolicyService {
 
     // Candidate participant ID resolution
     const externalThreadIdTrimmed = externalThreadId.trim();
-    let candidateParticipantId: string | null = null;
-    if (rawPayload.participantIdentity?.participantId) {
-      const pId = rawPayload.participantIdentity.participantId.trim();
-      if (pId && pId !== externalThreadIdTrimmed) candidateParticipantId = pId;
-    } else if (inbound.senderParticipantId) {
-      const sId = inbound.senderParticipantId.trim();
-      if (sId && sId !== externalThreadIdTrimmed) candidateParticipantId = sId;
-    } else if (inbound.senderExternalId) {
-      const sId = inbound.senderExternalId.trim();
-      if (sId && sId !== externalThreadIdTrimmed) candidateParticipantId = sId;
-    }
+    const isDirectThread = ((conv.threadKind as ThreadKind) || rawPayload.threadKind) === "DIRECT";
+    const isVerifiedDirectParticipant =
+      isDirectThread &&
+      (((conv.reliability as ClassificationReliability) || rawPayload.threadReliability) === "VERIFIED" ||
+        rawPayload.participantIdentity?.isVerified === true ||
+        inbound.senderReliability === "VERIFIED");
+
+    const isAllowedParticipantId = (id: string | null | undefined): string | null => {
+      if (!id) return null;
+      const clean = id.trim();
+      if (!clean) return null;
+      if (clean === externalThreadIdTrimmed && !isVerifiedDirectParticipant) return null;
+      return clean;
+    };
+
+    const candidateParticipantId: string | null =
+      isAllowedParticipantId(rawPayload.participantIdentity?.participantId) ||
+      isAllowedParticipantId(inbound.senderParticipantId) ||
+      isAllowedParticipantId(inbound.senderExternalId);
 
     let participantIdentity: VerifiedParticipantIdentity | null = null;
     let senderKind: SenderKind = (inbound.senderKind as SenderKind) || rawPayload.senderKind || "UNKNOWN";
@@ -556,11 +564,12 @@ export class ReplyPolicyService {
       (inbound.senderReliability as ClassificationReliability) || rawPayload.senderReliability || "UNVERIFIED";
 
     if (rawPayload.participantIdentity) {
-      if (rawPayload.participantIdentity.participantId.trim() !== externalThreadIdTrimmed) {
+      const cleanPId = isAllowedParticipantId(rawPayload.participantIdentity.participantId);
+      if (cleanPId) {
         participantIdentity = {
           channelAccountId: rawPayload.participantIdentity.channelAccountId || params.channelAccountId,
-          participantId: rawPayload.participantIdentity.participantId.trim(),
-          senderKind: rawPayload.participantIdentity.senderKind || "UNKNOWN",
+          participantId: cleanPId,
+          senderKind: rawPayload.participantIdentity.senderKind || "PERSON",
           isVerified: Boolean(rawPayload.participantIdentity.isVerified),
           profileUrl: rawPayload.participantIdentity.profileUrl ?? null,
           displayName: rawPayload.participantIdentity.displayName ?? null,

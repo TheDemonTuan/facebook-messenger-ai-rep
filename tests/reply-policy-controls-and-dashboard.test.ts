@@ -716,6 +716,28 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
       expect(verifiedResult.eligible).toBe(true);
       expect(verifiedResult.decision).toBe("ELIGIBLE");
       expect(verifiedResult.reasonCode).toBe("ELIGIBLE");
+
+      // 4. In a DIRECT thread, participantId matching externalThreadId is verified and legitimate
+      const directSameIdResult = evaluateReplyEligibility({
+        channel: { id: channelAccountId, accountType: "PERSONAL_MESSENGER", status: "RUNNING", isSuspended: false, isPaused: false },
+        thread: { id: "conv-1", externalThreadId: "100010082286691", isBlocked: false, manualMode: false, kind: "DIRECT", reliability: "VERIFIED" },
+        sender: {
+          id: "100010082286691",
+          kind: "PERSON",
+          reliability: "VERIFIED",
+          participantIdentity: {
+            channelAccountId,
+            participantId: "100010082286691",
+            displayName: "Sin",
+            senderKind: "PERSON",
+            isVerified: true,
+          },
+        },
+        message: { id: "msg-1", direction: "INBOUND", actor: "SYSTEM", text: "hi" },
+        settings: SystemSettingsSchema.parse({}),
+      });
+      expect(directSameIdResult.eligible).toBe(true);
+      expect(directSameIdResult.reasonCode).toBe("ELIGIBLE");
     });
   });
 });

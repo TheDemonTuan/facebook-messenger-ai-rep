@@ -52,12 +52,15 @@ export interface BubbleParseResult {
   isDegraded: boolean;
   degradedReason?: string;
   threadClassification?: ThreadClassificationResult;
+  headerTitle?: string | null;
+  avatarUrl?: string | null;
 }
 
 export interface ParsedSidebarThread {
   threadId: string;
   threadRef: string;
   customerName: string;
+  avatarUrl?: string | null;
   snippet: string;
   isUnread: boolean;
   isOutgoing: boolean;
@@ -1126,6 +1129,12 @@ export function parseSidebarThreadsFromHtml(html: string): ParsedSidebarThread[]
       ? nameMatch[1]!.replace(/<[^>]+>/g, "").trim()
       : threadId;
 
+    const avatarMatch =
+      /<img\b[^>]*\bsrc=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
+      /<image\b[^>]*\b(?:xlink:href|href)=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
+      /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(inner);
+    const avatarUrl = avatarMatch ? avatarMatch[1] : null;
+
     const threadKind: ThreadKind =
       textWithoutTags.includes("thành viên") || textWithoutTags.includes("members")
         ? "GROUP"
@@ -1136,6 +1145,7 @@ export function parseSidebarThreadsFromHtml(html: string): ParsedSidebarThread[]
       threadId,
       threadRef,
       customerName,
+      avatarUrl,
       snippet: textWithoutTags,
       isUnread,
       isOutgoing,

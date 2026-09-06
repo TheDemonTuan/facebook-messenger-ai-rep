@@ -239,7 +239,12 @@ export const InboxPage: React.FC = () => {
                   }}
                 >
                   {item.customer.avatarUrl ? (
-                    <img src={item.customer.avatarUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    <img
+                      src={item.customer.avatarUrl}
+                      alt=""
+                      referrerPolicy="no-referrer"
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
                   ) : (
                     <User size={20} color="#64748b" />
                   )}
@@ -251,6 +256,20 @@ export const InboxPage: React.FC = () => {
                     <span style={{ fontWeight: "700", fontSize: "0.95rem", color: "#0f172a" }}>
                       {item.customer.name || "Khách hàng Messenger"}
                     </span>
+                    {(item.customer.externalCustomerId || (item.conversation.threadKind === "DIRECT" && item.conversation.externalThreadId)) && (
+                      <span
+                        style={{
+                          fontSize: "0.72rem",
+                          color: "#64748b",
+                          backgroundColor: "#f1f5f9",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        ID: {item.customer.externalCustomerId || item.conversation.externalThreadId}
+                      </span>
+                    )}
                     {item.conversation.threadKind === "GROUP" && (
                       <span style={{ backgroundColor: "#ede9fe", color: "#6d28d9", padding: "1px 6px", borderRadius: "4px", fontSize: "0.7rem", fontWeight: "700" }}>
                         NHÓM

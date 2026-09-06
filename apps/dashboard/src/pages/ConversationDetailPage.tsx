@@ -21,6 +21,7 @@ import { useSseWakeup } from "../context/SseContext";
 import { formatTime } from "../helpers/date-helpers";
 import {
   ArrowLeft,
+  User,
   UserCheck,
   Send,
   RefreshCw,
@@ -324,9 +325,23 @@ export const ConversationDetailPage: React.FC = () => {
           <Link to="/inbox" style={{ color: "#64748b", textDecoration: "none", display: "flex", alignItems: "center" }}>
             <ArrowLeft size={20} />
           </Link>
+          <div style={{ width: "40px", height: "40px", borderRadius: "50%", backgroundColor: "#e2e8f0", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            {customer.avatarUrl ? (
+              <img src={customer.avatarUrl} alt="" referrerPolicy="no-referrer" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+            ) : (
+              <User size={20} color="#64748b" />
+            )}
+          </div>
           <div>
-            <div style={{ fontWeight: "bold", fontSize: "1.1rem", color: "#0f172a" }}>
-              {customer.name || "Khách hàng Messenger"}
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+              <span style={{ fontWeight: "bold", fontSize: "1.1rem", color: "#0f172a" }}>
+                {customer.name || "Khách hàng Messenger"}
+              </span>
+              {conv.threadKind === "DIRECT" && conv.externalThreadId && (
+                <span style={{ fontSize: "0.72rem", color: "#64748b", backgroundColor: "#f1f5f9", padding: "1px 6px", borderRadius: "4px", fontFamily: "monospace" }}>
+                  ID: {conv.externalThreadId}
+                </span>
+              )}
             </div>
             <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
               Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode)}</strong>
@@ -601,7 +616,7 @@ export const ConversationDetailPage: React.FC = () => {
                       {isInbound && (
                         <div style={{ width: "20px", height: "20px", borderRadius: "50%", backgroundColor: "#e2e8f0", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
                           {msg.avatarUrl ? (
-                            <img src={msg.avatarUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <img src={msg.avatarUrl} alt="" referrerPolicy="no-referrer" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                           ) : (
                             <UserCheck size={11} color="#64748b" />
                           )}
