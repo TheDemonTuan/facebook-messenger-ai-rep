@@ -152,21 +152,27 @@ export class ReplyPolicyService {
     // 3. Sender Context
     // Clean sender ID: Never use externalThreadId as participant
     const externalThreadIdTrimmed = payload.externalThreadId.trim();
+    const isVerifiedDirectParticipant =
+      threadKind === "DIRECT" &&
+      threadReliability === "VERIFIED" &&
+      payload.participantIdentity?.isVerified === true;
+    const isAllowedParticipantId = (id: string): boolean =>
+      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
     let candidateParticipantId: string | null = null;
 
     if (payload.participantIdentity?.participantId) {
       const pId = payload.participantIdentity.participantId.trim();
-      if (pId && pId !== externalThreadIdTrimmed) {
+      if (isAllowedParticipantId(pId)) {
         candidateParticipantId = pId;
       }
     } else if (payload.senderParticipantId) {
       const sId = payload.senderParticipantId.trim();
-      if (sId && sId !== externalThreadIdTrimmed) {
+      if (isAllowedParticipantId(sId)) {
         candidateParticipantId = sId;
       }
     } else if (payload.senderExternalId) {
       const sId = payload.senderExternalId.trim();
-      if (sId && sId !== externalThreadIdTrimmed) {
+      if (isAllowedParticipantId(sId)) {
         candidateParticipantId = sId;
       }
     }
@@ -177,7 +183,7 @@ export class ReplyPolicyService {
       payload.senderReliability ?? (payload.participantIdentity?.isVerified ? "VERIFIED" : "UNVERIFIED");
 
     if (payload.participantIdentity) {
-      if (payload.participantIdentity.participantId.trim() !== externalThreadIdTrimmed) {
+      if (isAllowedParticipantId(payload.participantIdentity.participantId.trim())) {
         participantIdentity = {
           channelAccountId: payload.participantIdentity.channelAccountId || params.channelAccountId,
           participantId: payload.participantIdentity.participantId.trim(),

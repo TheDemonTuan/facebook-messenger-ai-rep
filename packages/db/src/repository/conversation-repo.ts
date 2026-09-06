@@ -81,20 +81,27 @@ export class ConversationRepository {
 
       // 2. Sender resolution includes payload.senderParticipantId when trusted/valid
       const externalThreadIdTrimmed = payload.externalThreadId.trim();
+      const isVerifiedDirectParticipant =
+        payload.threadKind === "DIRECT" &&
+        payload.threadReliability === "VERIFIED" &&
+        payload.participantIdentity?.isVerified === true;
+      const isAllowedParticipantId = (id: string): boolean =>
+        Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
+
       let senderParticipantId: string | null = null;
       if (payload.participantIdentity?.participantId) {
         const cleanPId = payload.participantIdentity.participantId.trim();
-        if (cleanPId && cleanPId !== externalThreadIdTrimmed) {
+        if (isAllowedParticipantId(cleanPId)) {
           senderParticipantId = cleanPId;
         }
       } else if (payload.senderParticipantId) {
         const cleanPId = payload.senderParticipantId.trim();
-        if (cleanPId && cleanPId !== externalThreadIdTrimmed) {
+        if (isAllowedParticipantId(cleanPId)) {
           senderParticipantId = cleanPId;
         }
       } else if (payload.senderExternalId) {
         const cleanSenderId = payload.senderExternalId.trim();
-        if (cleanSenderId && cleanSenderId !== externalThreadIdTrimmed) {
+        if (isAllowedParticipantId(cleanSenderId)) {
           senderParticipantId = cleanSenderId;
         }
       }
@@ -218,7 +225,7 @@ export class ConversationRepository {
       const isVerifiedEvidence =
         Boolean(payload.participantIdentity?.isVerified) &&
         Boolean(payload.participantIdentity?.participantId) &&
-        payload.participantIdentity!.participantId.trim() !== externalThreadIdTrimmed;
+        isAllowedParticipantId(payload.participantIdentity!.participantId.trim());
 
       if (isVerifiedEvidence && payload.participantIdentity) {
         const pId = payload.participantIdentity.participantId.trim();

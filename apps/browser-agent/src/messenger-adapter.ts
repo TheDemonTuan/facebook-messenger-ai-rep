@@ -494,17 +494,25 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
 
-          // Also capture baseline message bubbles if a conversation is open.
-          if (extractMessengerThreadId(observerPage.url())) {
-            const baselineBubbles = await this.readBubblesFromPage(observerPage);
-            if (baselineBubbles.isDegraded) {
-              await this.triggerDegradedDom(baselineBubbles.degradedReason || "Missing stable identity during baseline");
-              return;
+          // Capture every currently rendered message so startup never imports history.
+          for (const t of threadElements) {
+            if (!t.threadId) continue;
+            if (extractMessengerThreadId(observerPage.url()) !== t.threadId) {
+              await observerPage.goto(`https://www.facebook.com${t.href.includes("/messages/e2ee/t/") ? "/messages/e2ee/t/" : "/messages/t/"}${encodeURIComponent(t.threadId)}`, {
+                waitUntil: "domcontentloaded",
+                timeout: 45000,
+              }).catch(() => undefined);
             }
-            for (const b of baselineBubbles.bubbles) {
-              this.lastSeenMessageIds.add(b.id);
+            const baselineBubbles = await this.readBubblesFromPage(observerPage);
+            for (const bubble of baselineBubbles.bubbles) {
+              this.lastSeenMessageIds.add(bubble.id);
             }
           }
+
+          await observerPage.goto(MESSENGER_INBOX_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: 45000,
+          }).catch(() => undefined);
 
           this.isInitializedBaseline = true;
           console.log(`[BrowserAdapter] Baseline snapshot captured for ${threadElements.length} threads and ${this.lastSeenMessageIds.size} visible messages.`);
@@ -567,6 +575,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           const bubbleResult = await this.readBubblesFromPage(observerPage, {
             threadTitle: t.customerName,
             participantId: t.participantId,
+            threadId: t.threadId,
           });
 
           if (bubbleResult.isDegraded) {
@@ -671,7 +680,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
    */
   private async readBubblesFromPage(
     page: Page,
-    hints?: { threadTitle?: string; participantId?: string | null }
+    hints?: { threadTitle?: string; participantId?: string | null; threadId?: string }
   ): Promise<BubbleParseResult> {
     if (!extractMessengerThreadId(page.url())) {
       return { ok: false, bubbles: [], isDegraded: false };
@@ -729,7 +738,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
           return clone.outerHTML;
         });
-        return parseMessengerBubblesFromHtml(html, {
+        const parsed = parseMessengerBubblesFromHtml(html, {
           observedAt: new Date(),
           timeZone: this.activeContextTimeZone,
           botChannelAccountId: this.channelAccountId,
@@ -738,6 +747,28 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           threadTitleHint: hints?.threadTitle,
           senderParticipantIdHint: hints?.participantId ?? undefined,
         });
+
+        if (
+          hints?.threadId &&
+          parsed.threadClassification?.kind === "DIRECT" &&
+          parsed.threadClassification.reliability === "VERIFIED"
+        ) {
+          const senderId = hints.participantId || hints.threadId;
+          for (const bubble of parsed.bubbles) {
+            if (bubble.isOutgoing || bubble.senderReliability === "VERIFIED") continue;
+            bubble.senderId = senderId;
+            bubble.senderKind = "PERSON";
+            bubble.senderReliability = "VERIFIED";
+            bubble.senderEvidence = [{
+              source: "THREAD_METADATA",
+              signal: "verified_direct_thread_participant",
+              confidence: 1,
+              details: { threadId: hints.threadId },
+            }];
+          }
+        }
+
+        return parsed;
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         const isNav =

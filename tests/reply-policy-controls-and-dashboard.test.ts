@@ -673,10 +673,10 @@ describe("Reply Policy Controls, Safe IDs & Data Sanitization", () => {
       expect(unknownResult.eligible).toBe(false);
       expect(unknownResult.reasonCode).toBe("UNKNOWN_THREAD_KIND");
 
-      // 2. Thread ID cannot be used as participant identity (impersonation guard)
+      // 2. A group thread ID cannot be used as participant identity (impersonation guard)
       const impersonationResult = evaluateReplyEligibility({
         channel: { id: channelAccountId, accountType: "PERSONAL_MESSENGER", status: "RUNNING", isSuspended: false, isPaused: false },
-        thread: { id: "conv-1", externalThreadId: "shared-thread-id", isBlocked: false, manualMode: false, kind: "DIRECT", reliability: "VERIFIED" },
+        thread: { id: "conv-1", externalThreadId: "shared-thread-id", isBlocked: false, manualMode: false, kind: "GROUP", reliability: "VERIFIED" },
         sender: {
           id: "shared-thread-id", // Same as externalThreadId!
           kind: "PERSON",

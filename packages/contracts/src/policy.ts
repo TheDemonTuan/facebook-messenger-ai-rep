@@ -402,6 +402,7 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
 
   if (
     input.thread.externalThreadId &&
+    input.thread.kind !== "DIRECT" &&
     ((input.sender.id && input.sender.id.trim() === input.thread.externalThreadId.trim()) ||
       (input.sender.participantIdentity?.participantId &&
         input.sender.participantIdentity.participantId.trim() === input.thread.externalThreadId.trim()))

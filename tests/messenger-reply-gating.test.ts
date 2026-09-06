@@ -116,9 +116,24 @@ describe("PR 5: Synchronous Inbound Identity Reconciliation & Reply Eligibility 
       expect(result.reasonCode).toBe("UNVERIFIED_PARTICIPANT_IDENTITY");
     });
 
-    it("fail-closed: externalThreadId cannot impersonate participant identity", () => {
+    it("allows a verified direct thread participant to use the direct thread ID", () => {
       const input = createBaseInput();
-      input.sender.id = "thread-101"; // matches externalThreadId!
+      input.sender.id = "thread-101";
+      input.sender.participantIdentity = {
+        channelAccountId: "chan-01",
+        participantId: "thread-101",
+        senderKind: "PERSON",
+        isVerified: true,
+      };
+
+      const result = evaluateReplyEligibility(input);
+      expect(result.eligible).toBe(true);
+    });
+
+    it("fail-closed: a group thread ID cannot impersonate participant identity", () => {
+      const input = createBaseInput();
+      input.thread.kind = "GROUP";
+      input.sender.id = "thread-101";
       input.sender.participantIdentity = {
         channelAccountId: "chan-01",
         participantId: "thread-101",
