@@ -503,9 +503,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
                 timeout: 45000,
               }).catch(() => undefined);
             }
-            const baselineBubbles = await this.readBubblesFromPage(observerPage);
-            for (const bubble of baselineBubbles.bubbles) {
-              this.lastSeenMessageIds.add(bubble.id);
+            await observerPage.waitForTimeout(750);
+            for (let pass = 0; pass < 3; pass++) {
+              const baselineBubbles = await this.readBubblesFromPage(observerPage);
+              for (const bubble of baselineBubbles.bubbles) {
+                this.lastSeenMessageIds.add(bubble.id);
+              }
+              await observerPage.mouse.wheel(0, -100000).catch(() => undefined);
+              await observerPage.waitForTimeout(400);
             }
           }
 
