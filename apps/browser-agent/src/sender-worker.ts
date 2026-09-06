@@ -6,6 +6,7 @@ import type {
   SettingsRepository,
   IncidentRepository,
   JobExecutionContext,
+  TurnRepository,
   Sql,
 } from "@messenger/db";
 import { channelAccounts, JobRepository, JobRunner, ReplyPolicyService } from "@messenger/db";
@@ -42,7 +43,8 @@ export class SenderWorkerService {
     private incidentRepo: IncidentRepository,
     customJobRepo?: JobRepository,
     customSql?: Sql,
-    customPolicyService?: ReplyPolicyService
+    customPolicyService?: ReplyPolicyService,
+    private turnRepo?: TurnRepository
   ) {
     this.jobRepo = customJobRepo || new JobRepository(db);
     this.sql = customSql || null;
@@ -173,6 +175,7 @@ export class SenderWorkerService {
       text,
       textHash,
       actor,
+      turnId,
     } = data;
 
     const ownerToken = data.ownerToken || data.claimToken || ctx?.ownerToken || "browser-sender";
@@ -204,6 +207,9 @@ export class SenderWorkerService {
           fencingEpoch,
         });
       }
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "Channel suspended or degraded").catch(() => {});
+      }
       return;
     }
 
@@ -234,6 +240,9 @@ export class SenderWorkerService {
         actor: "BROWSER_AGENT",
         payload: { actionId, expectedVersion: inboundVersion, currentVersion },
       });
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "Stale inbound version").catch(() => {});
+      }
       return;
     }
 
@@ -245,6 +254,9 @@ export class SenderWorkerService {
         ownerToken,
         fencingEpoch,
       });
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "Manual mode takeover").catch(() => {});
+      }
       return;
     }
 
@@ -280,6 +292,9 @@ export class SenderWorkerService {
           actor: "BROWSER_AGENT",
           payload: { actionId, reason: "POLICY_INELIGIBLE", reasonCode: policyResult.reasonCode },
         });
+        if (turnId && this.turnRepo) {
+          await this.turnRepo.cancelTurn(turnId, `Policy ineligible: ${policyResult.reason}`).catch(() => {});
+        }
         return;
       }
     }
@@ -500,6 +515,19 @@ export class SenderWorkerService {
       });
 
       await this.convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+      if (turnId && this.turnRepo) {
+        if (typeof this.turnRepo.completeTurn === "function") {
+          await this.turnRepo.completeTurn(turnId);
+        } else {
+          await this.turnRepo.transitionStatus(
+            turnId,
+            "DRAFT_READY",
+            "COMPLETED",
+            ownerToken,
+            fencingEpoch
+          );
+        }
+      }
       return;
     }
 
@@ -528,6 +556,10 @@ export class SenderWorkerService {
       actor,
       payload: { actionId, reason: "verification_timeout_after_enter" },
     });
+
+    if (turnId && this.turnRepo) {
+      await this.turnRepo.cancelTurn(turnId, "SEND_UNCERTAIN").catch(() => {});
+    }
 
     // Suspend channel account fail-closed
     await this.db

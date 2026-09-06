@@ -1,4 +1,4 @@
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, notInArray, sql } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { turns, channelAccounts } from "../schema/index.js";
 import type { TurnStatus } from "@messenger/contracts";
@@ -93,8 +93,16 @@ export class TurnRepository {
         channel.leaseExpiresAt &&
         channel.leaseExpiresAt > now
       ) {
-        // Channel already occupied by another active turn
-        return null;
+        // Channel already marked with active turn. Check if that turn is still genuinely active.
+        const [activeTurn] = await innerTx
+          .select({ status: turns.status })
+          .from(turns)
+          .where(eq(turns.id, channel.activeTurnId))
+          .limit(1);
+
+        if (activeTurn && ["PENDING", "THINKING", "DRAFT_READY"].includes(activeTurn.status)) {
+          return null;
+        }
       }
 
       const nextFencingEpoch = (channel?.fencingEpoch || 0) + 1;
@@ -197,9 +205,39 @@ export class TurnRepository {
             lease_expires_at = NULL,
             updated_at = clock_timestamp()
         WHERE id = ${updated.channelAccountId}
-          AND active_turn_id = ${turnId}
-          AND current_owner_token = ${ownerToken}
-          AND fencing_epoch = ${fencingEpoch};
+          AND active_turn_id = ${turnId};
+      `);
+    }
+
+    return updated || null;
+  }
+
+  /**
+   * Completes a turn directly and immediately releases the channel lease.
+   */
+  async completeTurn(turnId: string, tx?: DatabaseOrTx): Promise<typeof turns.$inferSelect | null> {
+    const executor = (tx || this.db) as Database;
+    const now = new Date();
+
+    const [updated] = await executor
+      .update(turns)
+      .set({
+        status: "COMPLETED",
+        completedAt: now,
+        updatedAt: now,
+      })
+      .where(and(eq(turns.id, turnId), notInArray(turns.status, ["COMPLETED", "FAILED", "CANCELLED"])))
+      .returning();
+
+    if (updated) {
+      await executor.execute(sql`
+        UPDATE ${channelAccounts}
+        SET active_turn_id = NULL,
+            current_owner_token = NULL,
+            lease_expires_at = NULL,
+            updated_at = clock_timestamp()
+        WHERE id = ${updated.channelAccountId}
+          AND active_turn_id = ${turnId};
       `);
     }
 
@@ -231,16 +269,30 @@ export class TurnRepository {
   }
 
   async cancelTurn(turnId: string, reason?: string, tx?: DatabaseOrTx): Promise<void> {
-    const executor = tx || this.db;
-    await executor
+    const executor = (tx || this.db) as Database;
+    const now = new Date();
+    const [updated] = await executor
       .update(turns)
       .set({
         status: "CANCELLED",
         errorMessage: reason || null,
-        completedAt: new Date(),
-        updatedAt: new Date(),
+        completedAt: now,
+        updatedAt: now,
       })
-      .where(eq(turns.id, turnId));
+      .where(and(eq(turns.id, turnId), notInArray(turns.status, ["COMPLETED", "FAILED", "CANCELLED"])))
+      .returning();
+
+    if (updated) {
+      await executor.execute(sql`
+        UPDATE ${channelAccounts}
+        SET active_turn_id = NULL,
+            current_owner_token = NULL,
+            lease_expires_at = NULL,
+            updated_at = clock_timestamp()
+        WHERE id = ${updated.channelAccountId}
+          AND active_turn_id = ${turnId};
+      `);
+    }
   }
 
   async failTurn(

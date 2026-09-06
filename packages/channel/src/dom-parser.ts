@@ -1042,7 +1042,9 @@ export function parseMessengerBubblesFromHtml(
     const isOutgoing =
       isOutgoingAria ||
       openingTag.includes('data-testid="outgoing_message"') ||
-      openingTag.includes('data-outgoing="true"');
+      openingTag.includes('data-outgoing="true"') ||
+      chunk.includes('data-outgoing="true"') ||
+      chunk.includes('data-testid="outgoing_message"');
 
     // Parse sender identity from trustworthy structured DOM evidence (Finding 1)
     const senderResult = parseSenderIdentity(chunk, openingTag, body, {

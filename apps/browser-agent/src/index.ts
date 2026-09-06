@@ -9,6 +9,7 @@ import {
   SettingsRepository,
   IncidentRepository,
   JobRepository,
+  TurnRepository,
   channelAccounts,
 } from "@messenger/db";
 import { eq } from "drizzle-orm";
@@ -27,6 +28,7 @@ async function main() {
   const settingsRepo = new SettingsRepository(db);
   const incidentRepo = new IncidentRepository(db);
   const jobRepo = new JobRepository(db);
+  const turnRepo = new TurnRepository(db);
 
   let initialTimeZone = "Asia/Ho_Chi_Minh";
   try {
@@ -60,7 +62,9 @@ async function main() {
     settingsRepo,
     incidentRepo,
     jobRepo,
-    sql
+    sql,
+    undefined,
+    turnRepo
   );
 
   senderWorker.start();

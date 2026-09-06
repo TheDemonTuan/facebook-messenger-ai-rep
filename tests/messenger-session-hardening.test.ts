@@ -8,6 +8,7 @@ import {
   PlaywrightMessengerAdapter,
 } from "../apps/browser-agent/src/messenger-adapter.js";
 import { parseMessengerBubblesFromHtml } from "../packages/channel/src/dom-parser.js";
+import { TurnRepository } from "../packages/db/src/repository/turn-repo.js";
 import { getIncidentSafetyPolicy, isCheckpoint } from "../apps/dashboard/src/helpers/incident-helpers.js";
 import type { IncidentItem } from "../apps/dashboard/src/types.js";
 
@@ -487,5 +488,54 @@ describe("Messenger session hardening", () => {
     expect(adapter.isSendLocked()).toBe(true);
     adapter.releaseSendLock();
     expect(adapter.isSendLocked()).toBe(false);
+  });
+
+  it("parses outgoing bubbles with emojis and inner testid or outgoing attribute", () => {
+    const html = `
+      <div role="row" id="mid.outgoing-1">
+        <div>
+          <div data-outgoing="true">
+            <span dir="auto">Ôi, buồn thế à? 😔 Không sao đâu, mọi thứ sẽ ổn thôi! Nếu cần tâm sự hay hỗ trợ gì về sản phẩm, đơn hàng gì thì mình đây nha!</span>
+          </div>
+        </div>
+      </div>
+    `;
+    const result = parseMessengerBubblesFromHtml(html);
+    expect(result.bubbles).toHaveLength(1);
+    expect(result.bubbles[0].isOutgoing).toBe(true);
+    expect(result.bubbles[0].text).toContain("Ôi, buồn thế à?");
+  });
+
+  it("completeTurn and cancelTurn clear channel active_turn_id lease", async () => {
+    let channelActiveTurnId: string | null = "turn-1";
+
+    const mockDb = {
+      update: vi.fn().mockReturnValue({
+        set: vi.fn().mockReturnValue({
+          where: vi.fn().mockReturnValue({
+            returning: vi.fn().mockImplementation(() => {
+              return [{ id: "turn-1", channelAccountId: "channel-1", status: "COMPLETED" }];
+            }),
+          }),
+        }),
+      }),
+      execute: vi.fn().mockImplementation((query: unknown) => {
+        const queryObj = query as { queryChunks?: unknown[]; sql?: string };
+        const chunks = (queryObj?.queryChunks || []).map((c: unknown) => typeof c === "string" ? c : (c as { value?: unknown })?.value || "").join(" ");
+        const str = (queryObj?.sql || "") + " " + chunks + " " + String(query);
+        if (str.includes("active_turn_id") || str.includes("NULL")) {
+          channelActiveTurnId = null;
+        }
+        return { rows: [] };
+      }),
+    };
+
+    const turnRepo = new TurnRepository(mockDb as unknown as Parameters<typeof TurnRepository.prototype.constructor>[0]);
+    await turnRepo.completeTurn("turn-1");
+    expect(channelActiveTurnId).toBeNull();
+
+    channelActiveTurnId = "turn-2";
+    await turnRepo.cancelTurn("turn-2", "Cancelled for test");
+    expect(channelActiveTurnId).toBeNull();
   });
 });

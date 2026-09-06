@@ -471,7 +471,7 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
   });
 
   describe("3. AI Job Handler Honors claimTurn Failure", () => {
-    it("aborts AI job and does not generate reply or update conversation if claimTurn returns null", async () => {
+    it("retries AI job and does not generate reply if claimTurn returns null", async () => {
       const mockDb = {} as unknown as Database;
 
       const mockConvRepo = {
@@ -535,10 +535,10 @@ describe("Critical/High State, Security, and Concurrency Fixes", () => {
         } as unknown as ReplyPolicyService,
       });
 
-      await aiHandler(context);
+      await expect(aiHandler(context)).rejects.toThrow("retry AI job");
 
       expect(mockTurnRepo.claimTurn).toHaveBeenCalledWith("turn-fail-1", "worker-token-1");
-      // Must not call generateReply, update conversation to THINKING, or record AI_STARTED if claim failed
+      // The job runner retries; generation must not start before the turn is acquired.
       expect(mockAiGenerator.generateReply).not.toHaveBeenCalled();
       expect(mockConvRepo.updateStatus).not.toHaveBeenCalled();
       expect(mockEventRepo.recordEvent).not.toHaveBeenCalledWith(

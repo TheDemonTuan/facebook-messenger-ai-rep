@@ -978,16 +978,22 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               source.getAttribute("data-testid") === "message_row" ||
               source.getAttribute("role") === "row";
             if (isMessageRow) {
-              const textElements = Array.from(source.querySelectorAll('[dir="auto"]')) as HTMLElement[];
+              const textElements = Array.from(source.querySelectorAll('[dir="auto"], [role="none"], div')) as HTMLElement[];
               const textElement = textElements
                 .filter((element) => {
                   const rect = element.getBoundingClientRect();
-                  return rect.width > 0 && rect.height > 0 && Boolean(element.innerText?.trim());
+                  return rect.width > 15 && rect.height > 10 && Boolean(element.innerText?.trim());
                 })
                 .at(-1);
               const rect = (textElement || source).getBoundingClientRect();
               const mainCenter = mainRect.left + mainRect.width / 2;
-              if (rect.width > 0 && rect.height > 0 && rect.left + rect.width / 2 > mainCenter) {
+              const distFromRight = Math.abs(mainRect.right - rect.right);
+              const distFromLeft = Math.abs(rect.left - mainRect.left);
+              if (
+                rect.width > 0 &&
+                rect.height > 0 &&
+                ((distFromRight < distFromLeft && rect.right > mainCenter) || rect.left + rect.width / 2 > mainCenter)
+              ) {
                 target.setAttribute("data-outgoing", "true");
               }
             }
@@ -1451,7 +1457,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         // outgoing bubble is also valid when the composer has been cleared after Enter.
         for (let index = bubbles.length - 1; index >= 0; index--) {
           const b = bubbles[index];
-          if (!b?.isOutgoing) continue;
+          if (!b) continue;
 
           const bubbleText = b.text.trim();
           const normBubble = bubbleText.toLowerCase();
@@ -1468,24 +1474,26 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             return text.trim().length === 0;
           }).catch(() => false);
 
-          if (!knownIds.has(b.id) && composerIsEmpty && index === bubbles.length - 1) {
-            this.lastSeenMessageIds.add(b.id);
-            this.confirmedOutboundMessageIds.add(b.id);
-            this.rememberActiveBubbleSequence(
-              extractMessengerThreadId(this.senderPage.url()) || "unknown",
-              { ok: true, bubbles: [b], isDegraded: false }
-            );
-            return { verified: true, messageRef: b.id };
-          }
+          if (!composerIsEmpty) continue;
 
           const previousText = marker && typeof marker === "object"
             ? marker.knownMessageTexts?.[b.id]?.trim().toLowerCase()
             : undefined;
-          if (previousText !== undefined && previousText !== normBubble && composerIsEmpty && index === bubbles.length - 1) {
+          const isReusedIdWithNewText =
+            knownIds.has(b.id) &&
+            previousText !== undefined &&
+            previousText !== normBubble;
+          const isBrandNewId = !knownIds.has(b.id);
+
+          if ((isBrandNewId || isReusedIdWithNewText) && index === bubbles.length - 1) {
+            b.isOutgoing = true;
             this.lastSeenMessageIds.add(b.id);
             this.confirmedOutboundMessageIds.add(b.id);
+            const currentUrl = typeof this.senderPage.url === "function"
+              ? this.senderPage.url()
+              : (this.senderPage as unknown as { url?: string }).url || "";
             this.rememberActiveBubbleSequence(
-              extractMessengerThreadId(this.senderPage.url()) || "unknown",
+              extractMessengerThreadId(currentUrl) || "unknown",
               { ok: true, bubbles: [b], isDegraded: false }
             );
             return { verified: true, messageRef: b.id };

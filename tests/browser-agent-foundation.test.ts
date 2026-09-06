@@ -14,6 +14,7 @@ import type {
   EventRepository,
   SettingsRepository,
   IncidentRepository,
+  TurnRepository,
 } from "@messenger/db";
 
 describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () => {
@@ -355,6 +356,9 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         }),
       } as unknown as SettingsRepository;
 
+      const mockTurnRepo = {
+        transitionStatus: vi.fn().mockResolvedValue({ status: "COMPLETED" }),
+      } as unknown as TurnRepository;
       const senderWorker = new SenderWorkerService(
         mockDb,
         null,
@@ -370,13 +374,15 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         undefined,
         {
           recheckEligibility: vi.fn().mockResolvedValue({ eligible: true, decision: "ELIGIBLE", reasonCode: "ELIGIBLE" }),
-        } as unknown as ReplyPolicyService
+        } as unknown as ReplyPolicyService,
+        mockTurnRepo
       );
 
       await senderWorker.processAction({
         actionId: "action-presend-1",
         channelAccountId: "personal-messenger",
         conversationId: "conv-presend-1",
+        turnId: "11111111-1111-4111-8111-111111111111",
         externalThreadRef: "https://www.facebook.com/messages/t/thread-presend",
         inboundVersion: 5,
         responseIndex: 0,
@@ -401,6 +407,13 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         "action-presend-1",
         expect.stringMatching(/^mid\.\$mock_/),
         expect.objectContaining({ ownerToken: "owner-token-presend" })
+      );
+      expect(mockTurnRepo.transitionStatus).toHaveBeenCalledWith(
+        "11111111-1111-4111-8111-111111111111",
+        "DRAFT_READY",
+        "COMPLETED",
+        "owner-token-presend",
+        1
       );
 
       // Conversation updated to WAITING_CUSTOMER

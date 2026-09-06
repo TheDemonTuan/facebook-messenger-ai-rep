@@ -139,9 +139,9 @@ export function createAiHandler(deps: AiHandlerDeps) {
       claimedTurn = await turnRepo.claimTurn(turnId, context.ownerToken);
       if (!claimedTurn) {
         console.warn(
-          `[AiHandler] Failed to claim turn ${turnId} for conversation ${conversationId}. Skipping job.`
+          `[AiHandler] Failed to claim turn ${turnId} for conversation ${conversationId}. Requeueing job.`
         );
-        return;
+        throw new Error(`Turn ${turnId} is still occupied; retry AI job`);
       }
     }
     const currentFencingEpoch = claimedTurn?.fencingEpoch ?? context.fencingEpoch;
@@ -291,8 +291,10 @@ export function createAiHandler(deps: AiHandlerDeps) {
         text: msgText,
         actor: "AI",
         claimToken: context.ownerToken,
-        fencingToken: context.fencingEpoch,
+        fencingToken: currentFencingEpoch,
       });
+
+      const effectiveFencingEpoch = action?.fencingEpoch ?? action?.fencingToken ?? currentFencingEpoch;
 
       if (jobRepo && action) {
         await jobRepo.enqueue({
@@ -314,8 +316,8 @@ export function createAiHandler(deps: AiHandlerDeps) {
             actor: "AI",
             claimToken: action.claimToken || context.ownerToken,
             ownerToken: action.ownerToken || context.ownerToken,
-            fencingToken: action.fencingToken ?? currentFencingEpoch,
-            fencingEpoch: action.fencingEpoch ?? currentFencingEpoch,
+            fencingToken: effectiveFencingEpoch,
+            fencingEpoch: effectiveFencingEpoch,
           },
           idempotencyKey: `browser-send:${action.actionId}`,
         });
