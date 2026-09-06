@@ -1036,7 +1036,13 @@ export function parseMessengerBubblesFromHtml(
       body.includes('data-testid="outgoing_message"');
 
     // Parse sender identity from trustworthy structured DOM evidence (Finding 1)
-    const senderResult = parseSenderIdentity(chunk, openingTag, body, options);
+    const senderResult = parseSenderIdentity(chunk, openingTag, body, {
+      ...options,
+      senderParticipantIdHint:
+        threadClassification.kind === "DIRECT" && threadClassification.reliability === "VERIFIED"
+          ? options?.senderParticipantIdHint
+          : undefined,
+    });
 
     // Parse structured and plain text mentions (Finding 10)
     const mentions = parseMentions(cleanText, chunk, options);
