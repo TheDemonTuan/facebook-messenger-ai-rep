@@ -266,7 +266,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         if (recentAction.status === "TYPING") {
           activeStage = "TYPING";
           activeConversationId = recentAction.conversationId;
-          waitingReason = `Đang gõ phím ảo mô phỏng người thật (${recentAction.text.slice(0, 35)}...)`;
+          waitingReason = `Đang gõ phím ảo mô phỏng người thật (${(recentAction.text || "").slice(0, 35)}...)`;
         } else {
           activeStage = "VERIFYING_SEND";
           activeConversationId = recentAction.conversationId;
@@ -294,7 +294,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           .where(eq(conversations.id, activeConversationId))
           .then((r) => r[0]);
         if (conv) {
-          activeConversationTitle = conv.customerName || `Khách #${conv.threadId.slice(-4)}`;
+          activeConversationTitle = conv.customerName || `Khách #${(conv.threadId || "").slice(-4)}`;
         }
       }
 
@@ -306,7 +306,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           subtitle: "DOM Observer & Deduplication",
           category: "intake",
           status: recentInbound && (now.getTime() - new Date(recentInbound.receivedAt).getTime()) < 60000 ? "active" : "idle",
-          activity: recentInbound ? `Tin mới: "${recentInbound.text.slice(0, 45)}..."` : "Sẵn sàng nhận tin",
+          activity: recentInbound?.text ? `Tin mới: "${recentInbound.text.slice(0, 45)}..."` : "Sẵn sàng nhận tin",
           metrics: [
             { label: "Trạng thái", value: "Đang lắng nghe" },
             { label: "Tin gần nhất", value: recentInbound?.receivedAt ? new Date(recentInbound.receivedAt).toLocaleTimeString("vi-VN") : "—" },

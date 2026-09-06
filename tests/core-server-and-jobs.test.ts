@@ -850,6 +850,29 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
       serverContext.broadcaster.stop();
     });
 
+    it("serves /api/workflow/live with pipeline nodes and stage data", async () => {
+      userRecord.role = "VIEWER";
+      const serverContext = await buildCoreServer({ db: mockDb });
+
+      const res = await serverContext.fastify.inject({
+        method: "GET",
+        url: "/api/workflow/live",
+        headers: {
+          "cf-access-authenticated-user-email": "viewer@example.com",
+        },
+      });
+
+      expect(res.statusCode).toBe(200);
+      const json = JSON.parse(res.payload);
+      expect(json.nodes).toBeDefined();
+      expect(json.nodes.length).toBe(8);
+      expect(json.activeStage).toBeDefined();
+      expect(json.waitingReason).toBeDefined();
+
+      serverContext.rateLimiter.destroy();
+      serverContext.broadcaster.stop();
+    });
+
     it("Role guards: OPERATOR can pause channel but is blocked on POST /api/settings (403 required OWNER)", async () => {
       userRecord.role = "OPERATOR";
       const serverContext = await buildCoreServer({ db: mockDb });
