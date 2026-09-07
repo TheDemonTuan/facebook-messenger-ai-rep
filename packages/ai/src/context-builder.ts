@@ -29,6 +29,22 @@ export function estimateTextTokens(text: string): number {
   return Math.ceil(text.length / 2.5);
 }
 
+export function estimateMessageTokens(m: ConversationMessageItem): number {
+  let tokens = estimateTextTokens(m.text);
+  if (Array.isArray(m.parts) && m.parts.length > 0) {
+    for (const part of m.parts) {
+      if (part.type === "IMAGE" || part.type === "VOICE" || part.type === "VIDEO" || part.type === "AUDIO") {
+        tokens += 50;
+      } else if (part.type === "SHARE") {
+        tokens += estimateTextTokens(part.title || "") + estimateTextTokens(part.previewText || "") + 20;
+      } else if (part.type === "FILE") {
+        tokens += estimateTextTokens(part.fileName || "") + 10;
+      }
+    }
+  }
+  return tokens + 4;
+}
+
 /**
  * Builds a lean, budgeted conversation context for AI generation according to PLAN_TOI_UU_MESSENGER_AI.
  * 1. Guarantees strict chronological ordering (oldest -> newest) so the latest customer question is always last.
@@ -54,8 +70,12 @@ export function buildLeanConversationContext(
   let droppedSenderQuotaCount = 0;
   let droppedBudgetCount = 0;
 
-  // 1. Filter valid non-empty messages
-  const validMessages = rawMessages.filter((m) => Boolean(m.text && m.text.trim()));
+  // 1. Filter valid non-empty messages (supports text or valid media parts)
+  const validMessages = rawMessages.filter((m) => {
+    const hasText = Boolean(m.text && m.text.trim());
+    const hasParts = Array.isArray(m.parts) && m.parts.length > 0;
+    return hasText || hasParts;
+  });
 
   // 2. Sort all messages chronologically (oldest -> newest)
   const sortedAsc = [...validMessages].sort((a, b) => {
@@ -131,7 +151,7 @@ export function buildLeanConversationContext(
   const effectiveMaxInputTokens = Math.max(systemTokens + 4096, maxInputTokens, 16384);
 
   let totalEstimatedTokens = chronological.reduce(
-    (sum, m) => sum + estimateTextTokens(m.text) + 4,
+    (sum, m) => sum + estimateMessageTokens(m),
     systemTokens
   );
 
@@ -142,7 +162,7 @@ export function buildLeanConversationContext(
     const [dropped] = chronological.splice(oldestIndex, 1);
     if (dropped) {
       droppedBudgetCount++;
-      totalEstimatedTokens -= estimateTextTokens(dropped.text) + 4;
+      totalEstimatedTokens -= estimateMessageTokens(dropped);
     } else {
       break;
     }

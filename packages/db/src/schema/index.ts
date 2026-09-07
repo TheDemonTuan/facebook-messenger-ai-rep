@@ -197,6 +197,13 @@ export const inboundMessages = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
     rawPayload: jsonb("raw_payload").$type<Record<string, unknown>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // PR-03 Additive Columns
+    contentSchemaVersion: integer("content_schema_version").notNull().default(1),
+    content: jsonb("content").$type<Record<string, unknown>>(),
+    contentStatus: varchar("content_status", { length: 32 }).notNull().default("READY"),
+    contentRevision: integer("content_revision").notNull().default(1),
+    contentHash: varchar("content_hash", { length: 64 }),
+    eventKind: varchar("event_kind", { length: 32 }).notNull().default("MESSAGE_CREATED"),
   },
   (t) => [
     uniqueIndex("inbound_messages_channel_src_msg_uniq").on(t.channelAccountId, t.sourceMessageId),
@@ -234,11 +241,54 @@ export const messages = pgTable(
     timestamp: timestamp("timestamp", { withTimezone: true }).notNull().defaultNow(),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // PR-03 Additive Columns
+    contentSchemaVersion: integer("content_schema_version").notNull().default(1),
+    content: jsonb("content").$type<Record<string, unknown>>(),
+    contentStatus: varchar("content_status", { length: 32 }).notNull().default("READY"),
+    contentRevision: integer("content_revision").notNull().default(1),
+    contentHash: varchar("content_hash", { length: 64 }),
+    parserVersion: varchar("parser_version", { length: 32 }),
+    contentQuality: varchar("content_quality", { length: 32 }).notNull().default("TRUSTED"),
+    eventKind: varchar("event_kind", { length: 32 }).notNull().default("MESSAGE_CREATED"),
   },
   (t) => [
     uniqueIndex("messages_channel_ext_msg_uniq").on(t.channelAccountId, t.externalMessageId),
     index("messages_conv_timestamp_idx").on(t.conversationId, t.timestamp),
     index("messages_conv_sender_hash_time_idx").on(t.conversationId, t.senderParticipantId, t.textHash, t.timestamp),
+    index("messages_conv_time_id_idx").on(t.conversationId, t.timestamp, t.id),
+  ]
+);
+
+// 6c. Message Media (attachment and media metadata tracking)
+export const messageMedia = pgTable(
+  "message_media",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    channelAccountId: varchar("channel_account_id", { length: 64 })
+      .notNull()
+      .references(() => channelAccounts.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id")
+      .notNull()
+      .references(() => conversations.id, { onDelete: "cascade" }),
+    messageId: uuid("message_id")
+      .references(() => messages.id, { onDelete: "cascade" }),
+    mediaRefId: text("media_ref_id").notNull(),
+    role: varchar("role", { length: 32 }).notNull().default("ATTACHMENT"),
+    mimeType: varchar("mime_type", { length: 64 }),
+    byteSize: integer("byte_size"),
+    width: integer("width"),
+    height: integer("height"),
+    durationMs: integer("duration_ms"),
+    sourceUrl: text("source_url"),
+    storagePath: text("storage_path"),
+    status: varchar("status", { length: 32 }).notNull().default("READY"),
+    metadata: jsonb("metadata").$type<Record<string, unknown>>().default({}),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("message_media_channel_msg_media_uniq").on(t.channelAccountId, t.messageId, t.mediaRefId),
+    index("message_media_conv_media_idx").on(t.conversationId, t.mediaRefId),
   ]
 );
 
@@ -695,6 +745,34 @@ export const conversationsRelations = relations(conversations, ({ one, many }) =
   outboundActions: many(outboundActions),
   events: many(conversationEvents),
   aiRuns: many(aiRuns),
+  media: many(messageMedia),
+}));
+
+export const messagesRelations = relations(messages, ({ one, many }) => ({
+  conversation: one(conversations, {
+    fields: [messages.conversationId],
+    references: [conversations.id],
+  }),
+  channelAccount: one(channelAccounts, {
+    fields: [messages.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+  media: many(messageMedia),
+}));
+
+export const messageMediaRelations = relations(messageMedia, ({ one }) => ({
+  channelAccount: one(channelAccounts, {
+    fields: [messageMedia.channelAccountId],
+    references: [channelAccounts.id],
+  }),
+  conversation: one(conversations, {
+    fields: [messageMedia.conversationId],
+    references: [conversations.id],
+  }),
+  message: one(messages, {
+    fields: [messageMedia.messageId],
+    references: [messages.id],
+  }),
 }));
 
 export const turnsRelations = relations(turns, ({ one, many }) => ({

@@ -24,7 +24,7 @@ import {
 } from "@messenger/db";
 import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
-import { getHumanReadableReason, type SessionUser } from "@messenger/contracts";
+import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
 import { requireRole } from "../auth/roles.js";
 
 export interface InboxRoutesOptions {
@@ -180,10 +180,23 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const messageCursor = request.query?.messageCursor;
 
         const msgConditions = [eq(messages.conversationId, conversationId)];
-        if (messageCursor) {
-          const cursorDate = new Date(messageCursor);
-          if (!isNaN(cursorDate.getTime())) {
-            msgConditions.push(sql`${messages.timestamp} < ${cursorDate}`);
+        if (messageCursor && typeof messageCursor === "string") {
+          const trimmedCursor = messageCursor.trim();
+          if (trimmedCursor.includes("__")) {
+            const [timePart, idPart] = trimmedCursor.split("__");
+            if (timePart && idPart) {
+              const cursorDate = new Date(timePart);
+              if (!isNaN(cursorDate.getTime())) {
+                msgConditions.push(
+                  sql`(${messages.timestamp} < ${cursorDate} OR (${messages.timestamp} = ${cursorDate} AND ${messages.id} < ${idPart}::uuid))`
+                );
+              }
+            }
+          } else {
+            const cursorDate = new Date(trimmedCursor);
+            if (!isNaN(cursorDate.getTime())) {
+              msgConditions.push(sql`${messages.timestamp} < ${cursorDate}`);
+            }
           }
         }
 
@@ -192,7 +205,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             .select()
             .from(messages)
             .where(and(...msgConditions))
-            .orderBy(desc(messages.timestamp))
+            .orderBy(desc(messages.timestamp), desc(messages.id))
             .limit(messageLimit),
           db
             .select()
@@ -265,7 +278,11 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         }
 
         const chronologicalMessages = [...convMessages]
-          .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+          .sort((a, b) => {
+            const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            if (timeDiff !== 0) return timeDiff;
+            return a.id.localeCompare(b.id);
+          })
           .map((msg) => {
             const isInbound = msg.direction === "INBOUND";
             const part = msg.senderParticipantId ? participantMap.get(msg.senderParticipantId) : null;
@@ -290,8 +307,37 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
                 }
               : null;
 
+            let resolvedParts: MessagePart[] = [];
+            const contentObj = msg.content as { parts?: MessagePart[] } | null;
+            if (contentObj && Array.isArray(contentObj.parts) && contentObj.parts.length > 0) {
+              resolvedParts = contentObj.parts;
+            } else if (msg.text && msg.text.trim().length > 0) {
+              resolvedParts = [{ type: "TEXT", text: msg.text }];
+            }
+
+            const contentStatus = msg.contentStatus || "READY";
+            const contentRevision = msg.contentRevision ?? 1;
+            const eventKind = msg.eventKind || "MESSAGE_CREATED";
+
             return {
               ...msg,
+              parts: resolvedParts,
+              contentStatus,
+              contentRevision,
+              eventKind,
+              sender: {
+                name: defaultSenderName,
+                avatarMediaRef: senderAvatar,
+                senderKind: part?.senderKind || msg.senderKind,
+                isVerified: part?.isVerified ?? false,
+              },
+              time: {
+                eventAt: msg.eventTimestamp ? new Date(msg.eventTimestamp).toISOString() : null,
+                observedAt: msg.observedTimestamp ? new Date(msg.observedTimestamp).toISOString() : (msg.timestamp ? new Date(msg.timestamp).toISOString() : null),
+                displayAt: msg.timestamp ? new Date(msg.timestamp).toISOString() : null,
+                source: (msg.timestampProvenance as "FACEBOOK_EVENT" | "OBSERVED" | "SYSTEM" | "UNKNOWN") || "OBSERVED",
+                precision: msg.timestampPrecision || "UNKNOWN",
+              },
               senderName: defaultSenderName,
               avatarUrl: senderAvatar,
               senderKind: part?.senderKind || msg.senderKind,
@@ -303,7 +349,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const oldestMessage = convMessages[convMessages.length - 1];
         const nextMessageCursor =
           convMessages.length >= messageLimit && oldestMessage
-            ? new Date(oldestMessage.timestamp).toISOString()
+            ? `${new Date(oldestMessage.timestamp).toISOString()}__${oldestMessage.id}`
             : null;
 
         return reply.send(

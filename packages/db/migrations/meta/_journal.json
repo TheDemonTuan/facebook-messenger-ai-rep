@@ -50,6 +50,13 @@
       "when": 1788784500484,
       "tag": "0006_thankful_cannonball",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788790469426,
+      "tag": "0007_blue_frog_thor",
+      "breakpoints": true
     }
   ]
 }

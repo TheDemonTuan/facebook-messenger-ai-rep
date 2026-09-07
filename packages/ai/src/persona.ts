@@ -1,4 +1,4 @@
-import type { SystemSettings } from "@messenger/contracts";
+import type { SystemSettings, MessagePart } from "@messenger/contracts";
 
 export interface ConversationMessageItem {
   id?: string;
@@ -7,6 +7,10 @@ export interface ConversationMessageItem {
   actor?: string;
   timestamp?: Date | string | null;
   senderParticipantId?: string | null;
+  parts?: MessagePart[];
+  contentStatus?: string;
+  contentRevision?: number;
+  eventKind?: string;
 }
 
 export interface ConversationContext {

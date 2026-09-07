@@ -8,7 +8,14 @@ import type {
   SettingsRepository,
   OutboxRepository,
 } from "@messenger/db";
-import { InboundMessagePayloadSchema, type InboundMessagePayload, type OutboundActionStatus } from "@messenger/contracts";
+import {
+  InboundMessagePayloadSchema,
+  type InboundMessagePayload,
+  type OutboundActionStatus,
+  type MessageEventKind,
+  type MessagePart,
+  type ContentStatus,
+} from "@messenger/contracts";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { requireRole } from "../auth/roles.js";
 import type { SessionUser } from "@messenger/contracts";
@@ -69,16 +76,85 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
           return reply.send(result);
         }
 
+        if (result.isUpdate) {
+          await broadcaster.broadcast("message:updated", {
+            conversationId: result.conversationId,
+            messageId: result.messageId,
+            contentRevision: result.contentRevision,
+            eventKind: result.eventKind,
+            contentStatus: result.contentStatus,
+            parts: result.parts,
+            text: result.text,
+          });
+          return reply.send(result);
+        }
+
         await broadcaster.broadcast("inbound:received", {
           conversationId: result.conversationId,
           inboundVersion: result.inboundVersion,
+          messageId: result.messageId,
           eligible: result.eligibility?.eligible,
           decision: result.eligibility?.decision,
           reasonCode: result.eligibility?.reasonCode,
           evaluationMode: result.decision?.evaluationMode,
+          parts: result.parts,
+          contentStatus: result.contentStatus,
+          contentRevision: result.contentRevision,
         });
 
         return reply.send(result);
+      }
+    );
+
+    // 1b. Update Message Enrichment/Edit/Unsend
+    fastify.post<{
+      Body: {
+        channelAccountId: string;
+        externalMessageId: string;
+        eventKind?: string;
+        text?: string;
+        parts?: unknown[];
+        contentStatus?: string;
+        contentRevision?: number;
+        timestamps?: Record<string, unknown>;
+        eventTimestamp?: string | Date;
+      };
+    }>(
+      "/api/browser/message/update",
+      { preHandler: [requireRole("OPERATOR")] },
+      async (request, reply) => {
+        const body = request.body;
+        if (!body.channelAccountId || !body.externalMessageId) {
+          return reply.status(400).send({ error: "Missing channelAccountId or externalMessageId" });
+        }
+
+        const res = await convRepo.updateMessageEnrichment({
+          channelAccountId: body.channelAccountId,
+          externalMessageId: body.externalMessageId,
+          eventKind: body.eventKind as MessageEventKind | undefined,
+          text: body.text,
+          parts: body.parts as MessagePart[] | undefined,
+          contentStatus: body.contentStatus as ContentStatus | undefined,
+          contentRevision: body.contentRevision,
+          timestamps: body.timestamps,
+          eventTimestamp: body.eventTimestamp ? new Date(body.eventTimestamp) : undefined,
+        });
+
+        if (!res.isUpdated) {
+          return reply.status(404).send({ error: "Message not found to update" });
+        }
+
+        await broadcaster.broadcast("message:updated", {
+          conversationId: res.conversationId,
+          messageId: res.messageId,
+          contentRevision: res.contentRevision,
+          eventKind: res.eventKind,
+          contentStatus: res.contentStatus,
+          parts: res.parts,
+          text: res.text,
+        });
+
+        return reply.send(res);
       }
     );
 

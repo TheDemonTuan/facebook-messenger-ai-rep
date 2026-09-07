@@ -5,6 +5,7 @@ import {
   conversations,
   messages,
   inboundMessages,
+  messageMedia,
   participants,
   conversationQueue,
   conversationEvents,
@@ -14,11 +15,17 @@ import {
   outboundActions,
   aiRuns,
 } from "../schema/index.js";
-import type {
-  InboundMessagePayload,
-  ConversationStatus,
-  ReplyEligibilityResult,
-  ReplyEligibilityDecisionRecord,
+import {
+  type InboundMessagePayload,
+  type ConversationStatus,
+  type ReplyEligibilityResult,
+  type ReplyEligibilityDecisionRecord,
+  type MessagePart,
+  type NormalizedContent,
+  type MessageEventKind,
+  type ContentStatus,
+  normalizeMessageContent,
+  isMeaningfulContent,
 } from "@messenger/contracts";
 import { createHash } from "node:crypto";
 import { ReplyPolicyService } from "../service/reply-policy-service.js";
@@ -35,6 +42,12 @@ export interface InboundIngestResult {
   disposition?: "FULL_PROCESS" | "TRACK_NO_REPLY" | "DROP";
   dropped?: boolean;
   reasonCode?: string;
+  isUpdate?: boolean;
+  contentRevision?: number;
+  eventKind?: string;
+  contentStatus?: string;
+  parts?: MessagePart[];
+  text?: string;
 }
 
 export interface InboundIngestOptions {
@@ -67,7 +80,21 @@ export class ConversationRepository {
     payload: InboundMessagePayload,
     options?: InboundIngestOptions
   ): Promise<InboundIngestResult> {
-    const textHash = createHash("sha256").update(payload.text.trim()).digest("hex");
+    // Stage 0: Reject empty meaningless message
+    const incomingParts = payload.parts ?? payload.content?.parts;
+    if (!isMeaningfulContent({ text: payload.text, parts: incomingParts, eventKind: payload.eventKind })) {
+      return {
+        isDuplicate: false,
+        dropped: true,
+        disposition: "DROP",
+        reasonCode: "EMPTY_MEANINGLESS_MESSAGE",
+        conversationId: "",
+        inboundVersion: 0,
+        messageId: "",
+      };
+    }
+
+    const textHash = createHash("sha256").update((payload.text || "").trim()).digest("hex");
     const now = payload.timestamp ?? new Date();
 
     // Stage 1: Pre-persist eligibility gate (if db supports select; skips in minimal transaction-only test doubles)
@@ -149,9 +176,20 @@ export class ConversationRepository {
     }
 
     return await this.db.transaction(async (tx) => {
-      // 1. Primary dedupe check: stable externalMessageId remains primary
+      // 1. Primary dedupe & update check: stable externalMessageId remains primary
       const existingMsg = await tx
-        .select({ id: messages.id, conversationId: messages.conversationId, inboundVersion: messages.inboundVersion })
+        .select({
+          id: messages.id,
+          conversationId: messages.conversationId,
+          inboundVersion: messages.inboundVersion,
+          contentRevision: messages.contentRevision,
+          contentStatus: messages.contentStatus,
+          text: messages.text,
+          eventKind: messages.eventKind,
+          eventTimestamp: messages.eventTimestamp,
+          timestamps: messages.timestamps,
+          content: messages.content,
+        })
         .from(messages)
         .where(
           and(
@@ -162,11 +200,119 @@ export class ConversationRepository {
         .limit(1);
 
       if (existingMsg.length > 0 && existingMsg[0]) {
+        const existing = existingMsg[0];
+        const eventKind = payload.eventKind ?? existing.eventKind ?? "MESSAGE_CREATED";
+
+        // A. Message Unsent / Recalled
+        if (eventKind === "MESSAGE_UNSENT") {
+          const newRevision = (existing.contentRevision || 1) + 1;
+          await tx
+            .update(messages)
+            .set({
+              contentStatus: "UNAVAILABLE",
+              eventKind: "MESSAGE_UNSENT",
+              contentRevision: newRevision,
+            })
+            .where(eq(messages.id, existing.id));
+
+          return {
+            isDuplicate: false,
+            isUpdate: true,
+            conversationId: existing.conversationId,
+            inboundVersion: existing.inboundVersion,
+            messageId: existing.id,
+            contentRevision: newRevision,
+            eventKind: "MESSAGE_UNSENT",
+            contentStatus: "UNAVAILABLE",
+          };
+        }
+
+        // B. Message Edited
+        if (eventKind === "MESSAGE_EDITED") {
+          const newRevision = (existing.contentRevision || 1) + 1;
+          const normalized = normalizeMessageContent(payload);
+          const newText = payload.text || "";
+          const newTextHash = createHash("sha256").update(newText.trim()).digest("hex");
+          const newContentHash = createHash("sha256").update(JSON.stringify(normalized.parts)).digest("hex");
+
+          await tx
+            .update(messages)
+            .set({
+              text: newText,
+              textHash: newTextHash,
+              content: normalized as unknown as Record<string, unknown>,
+              contentRevision: newRevision,
+              contentStatus: normalized.contentStatus,
+              contentHash: newContentHash,
+              eventKind: "MESSAGE_EDITED",
+            })
+            .where(eq(messages.id, existing.id));
+
+          return {
+            isDuplicate: false,
+            isUpdate: true,
+            conversationId: existing.conversationId,
+            inboundVersion: existing.inboundVersion,
+            messageId: existing.id,
+            contentRevision: newRevision,
+            eventKind: "MESSAGE_EDITED",
+            contentStatus: normalized.contentStatus,
+            parts: normalized.parts,
+            text: newText,
+          };
+        }
+
+        // C. Metadata Enrichment (e.g. late event timestamp or refreshed media)
+        const hasBetterTimestamp = !existing.eventTimestamp && Boolean(payload.timestamps?.facebookEvent?.timestamp || payload.eventTimestamp);
+        const hasBetterStatus = existing.contentStatus === "PENDING" && payload.contentStatus && payload.contentStatus !== "PENDING";
+        const hasNewParts = Array.isArray(payload.parts) && payload.parts.length > 0;
+
+        if (hasBetterTimestamp || hasBetterStatus || hasNewParts) {
+          const newRevision = (existing.contentRevision || 1) + (hasNewParts ? 1 : 0);
+          const normalized = normalizeMessageContent({
+            text: payload.text || existing.text,
+            parts: payload.parts,
+            content: payload.content,
+            contentStatus: (payload.contentStatus as ContentStatus) ?? (existing.contentStatus as ContentStatus),
+            contentRevision: newRevision,
+          });
+
+          const updateFields: Record<string, unknown> = {
+            contentRevision: newRevision,
+            contentStatus: normalized.contentStatus,
+            content: normalized as unknown as Record<string, unknown>,
+          };
+          if (payload.timestamps?.facebookEvent?.timestamp || payload.eventTimestamp) {
+            updateFields.eventTimestamp = payload.timestamps?.facebookEvent?.timestamp ?? payload.eventTimestamp;
+            updateFields.timestampProvenance = "FACEBOOK_EVENT";
+          }
+          if (payload.timestamps) {
+            updateFields.timestamps = payload.timestamps as unknown as Record<string, unknown>;
+          }
+
+          await tx.update(messages).set(updateFields).where(eq(messages.id, existing.id));
+
+          return {
+            isDuplicate: false,
+            isUpdate: true,
+            conversationId: existing.conversationId,
+            inboundVersion: existing.inboundVersion,
+            messageId: existing.id,
+            contentRevision: newRevision,
+            eventKind,
+            contentStatus: normalized.contentStatus,
+            parts: normalized.parts,
+            text: existing.text,
+          };
+        }
+
+        // D. Exact duplicate with no new enrichment
         return {
           isDuplicate: true,
-          conversationId: existingMsg[0].conversationId,
-          inboundVersion: existingMsg[0].inboundVersion,
-          messageId: existingMsg[0].id,
+          isUpdate: false,
+          conversationId: existing.conversationId,
+          inboundVersion: existing.inboundVersion,
+          messageId: existing.id,
         };
       }
 
@@ -234,11 +380,17 @@ export class ConversationRepository {
 
       const existingConv = await lockedConvQuery.limit(1);
 
-      // Scoped duplicate check executed under conversation lock
+      // Scoped duplicate check for WEAK identities only (never drop distinct verified source IDs)
+      const isWeakIdentity =
+        payload.normalization?.identityQuality === "UNVERIFIED" ||
+        payload.externalMessageId.startsWith("weak:") ||
+        payload.externalMessageId.startsWith("fallback:") ||
+        payload.externalMessageId.startsWith("temp:");
+
       const dedupeWindowMs = options?.dedupeWindowMs ?? 5000;
       const windowStart = new Date(Date.now() - dedupeWindowMs);
 
-      if (existingConv.length > 0 && existingConv[0]) {
+      if (isWeakIdentity && existingConv.length > 0 && existingConv[0]) {
         const convId = existingConv[0].id;
         const scopedConditions = [
           eq(messages.channelAccountId, payload.channelAccountId),
@@ -440,6 +592,14 @@ export class ConversationRepository {
       const timestampProvenance = payload.timestamps?.facebookEvent ? "FACEBOOK_EVENT" : (payload.timestampProvenance ?? "OBSERVED");
       const timestampPrecision = payload.timestamps?.facebookEvent?.precision ?? (payload.timestampPrecision ?? "UNKNOWN");
 
+      const normalizedContent = normalizeMessageContent(payload);
+      const contentHash = createHash("sha256").update(JSON.stringify(normalizedContent.parts)).digest("hex");
+      const eventKind = payload.eventKind ?? "MESSAGE_CREATED";
+      const contentStatus = normalizedContent.contentStatus ?? "READY";
+      const contentRevision = normalizedContent.contentRevision ?? 1;
+      const parserVersion = payload.parserVersion ?? (normalizedContent.normalization?.parserVersion || null);
+      const contentQuality = payload.contentQuality ?? "TRUSTED";
+
       const [newInbound] = await tx
         .insert(inboundMessages)
         .values({
@@ -460,6 +620,12 @@ export class ConversationRepository {
           inboundVersion: newInboundVersion,
           receivedAt: payload.timestamp,
           rawPayload: { ...payload },
+          contentSchemaVersion: 2,
+          content: normalizedContent as unknown as Record<string, unknown>,
+          contentStatus,
+          contentRevision,
+          contentHash,
+          eventKind,
         })
         .returning({ id: inboundMessages.id });
 
@@ -486,8 +652,60 @@ export class ConversationRepository {
           metadata: payload.senderDisplayName
             ? { senderDisplayName: payload.senderDisplayName }
             : {},
+          contentSchemaVersion: 2,
+          content: normalizedContent as unknown as Record<string, unknown>,
+          contentStatus,
+          contentRevision,
+          contentHash,
+          parserVersion,
+          contentQuality,
+          eventKind,
         })
         .returning({ id: messages.id });
+      if (!newMsg) throw new Error("Failed to insert message");
+
+      // Insert media records for ownership & ref tracking if present
+      if (normalizedContent.parts && normalizedContent.parts.length > 0) {
+        for (const part of normalizedContent.parts) {
+          if ("media" in part && part.media) {
+            try {
+              await tx.insert(messageMedia).values({
+                channelAccountId: payload.channelAccountId,
+                conversationId,
+                messageId: newMsg.id,
+                mediaRefId: part.media.mediaId,
+                role: part.media.role || "ATTACHMENT",
+                mimeType: part.media.mimeType || null,
+                byteSize: part.media.byteSize || null,
+                width: part.media.width || null,
+                height: part.media.height || null,
+                durationMs: part.media.durationMs || null,
+                sourceUrl: part.media.sourceUrl || null,
+                storagePath: part.media.storagePath || null,
+                status: part.media.status || "READY",
+                metadata: {},
+              }).onConflictDoNothing();
+            } catch {
+              // Ignore in mock or unique conflict
+            }
+          } else if (part.type === "SHARE" && part.previewMedia) {
+            try {
+              await tx.insert(messageMedia).values({
+                channelAccountId: payload.channelAccountId,
+                conversationId,
+                messageId: newMsg.id,
+                mediaRefId: part.previewMedia.mediaId,
+                role: "SHARE_PREVIEW",
+                mimeType: part.previewMedia.mimeType || null,
+                status: part.previewMedia.status || "READY",
+                metadata: {},
+              }).onConflictDoNothing();
+            } catch {
+              // Ignore in mock
+            }
+          }
+        }
+      }
       if (!newMsg) throw new Error("Failed to insert message");
 
       // 6. Abort/cancel stale queued/typing/sending work
@@ -750,6 +968,10 @@ export class ConversationRepository {
         decision: evalResult.record,
         disposition: pre?.disposition || "FULL_PROCESS",
         dropped: false,
+        parts: normalizedContent.parts,
+        contentStatus: normalizedContent.contentStatus,
+        contentRevision: 1,
+        eventKind,
       };
     });
   }
@@ -822,13 +1044,132 @@ export class ConversationRepository {
     };
   }
 
+  /**
+   * Updates an existing message with enrichment, edit, or unsend.
+   * Does NOT bump conversation inboundVersion and does NOT create a new inbound message.
+   */
+  async updateMessageEnrichment(params: {
+    channelAccountId: string;
+    externalMessageId: string;
+    eventKind?: MessageEventKind;
+    text?: string;
+    parts?: MessagePart[];
+    content?: NormalizedContent;
+    contentStatus?: ContentStatus;
+    contentRevision?: number;
+    timestamps?: Record<string, unknown>;
+    eventTimestamp?: Date | null;
+  }): Promise<{
+    isUpdated: boolean;
+    messageId?: string;
+    conversationId?: string;
+    contentRevision?: number;
+    eventKind?: string;
+    contentStatus?: string;
+    parts?: MessagePart[];
+    text?: string;
+  }> {
+    return await this.db.transaction(async (tx) => {
+      const existingRows = await tx
+        .select({
+          id: messages.id,
+          conversationId: messages.conversationId,
+          contentRevision: messages.contentRevision,
+          contentStatus: messages.contentStatus,
+          text: messages.text,
+          eventKind: messages.eventKind,
+          content: messages.content,
+        })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.channelAccountId, params.channelAccountId),
+            eq(messages.externalMessageId, params.externalMessageId)
+          )
+        )
+        .limit(1);
+
+      if (!existingRows || existingRows.length === 0 || !existingRows[0]) {
+        return { isUpdated: false };
+      }
+
+      const existing = existingRows[0];
+      const newRevision = (params.contentRevision ?? existing.contentRevision) + 1;
+      const eventKind = params.eventKind ?? existing.eventKind ?? "MESSAGE_CREATED";
+      let contentStatus = (params.contentStatus as string) ?? existing.contentStatus ?? "READY";
+      if (eventKind === "MESSAGE_UNSENT") {
+        contentStatus = "UNAVAILABLE";
+      }
+
+      const newText = params.text !== undefined ? params.text : existing.text;
+      const newTextHash = createHash("sha256").update(newText.trim()).digest("hex");
+      const normalized = normalizeMessageContent({
+        text: newText,
+        parts: params.parts,
+        content: params.content,
+        contentStatus: contentStatus as ContentStatus,
+        contentRevision: newRevision,
+      });
+      const newContentHash = createHash("sha256").update(JSON.stringify(normalized.parts)).digest("hex");
+
+      const updateData: Record<string, unknown> = {
+        text: newText,
+        textHash: newTextHash,
+        content: normalized as unknown as Record<string, unknown>,
+        contentRevision: newRevision,
+        contentStatus,
+        contentHash: newContentHash,
+        eventKind,
+      };
+
+      if (params.eventTimestamp !== undefined) {
+        updateData.eventTimestamp = params.eventTimestamp;
+        updateData.timestampProvenance = "FACEBOOK_EVENT";
+      }
+      if (params.timestamps !== undefined) {
+        updateData.timestamps = params.timestamps;
+      }
+
+      await tx.update(messages).set(updateData).where(eq(messages.id, existing.id));
+
+      return {
+        isUpdated: true,
+        messageId: existing.id,
+        conversationId: existing.conversationId,
+        contentRevision: newRevision,
+        eventKind,
+        contentStatus,
+        parts: normalized.parts,
+        text: newText,
+      };
+    });
+  }
+
   async getRecentMessages(conversationId: string, limit = 20) {
-    return await this.db
+    const rows = await this.db
       .select()
       .from(messages)
       .where(eq(messages.conversationId, conversationId))
-      .orderBy(desc(messages.timestamp))
+      .orderBy(desc(messages.timestamp), desc(messages.id))
       .limit(limit);
+
+    return rows.map((row) => {
+      let resolvedParts: MessagePart[] = [];
+      const content = row.content as { parts?: MessagePart[] } | null;
+      if (content && Array.isArray(content.parts) && content.parts.length > 0) {
+        resolvedParts = content.parts;
+      } else if (row.text && row.text.trim().length > 0) {
+        resolvedParts = [{ type: "TEXT", text: row.text }];
+      }
+
+      return {
+        ...row,
+        parts: resolvedParts,
+        contentStatus: row.contentStatus ?? "READY",
+        contentRevision: row.contentRevision ?? 1,
+        eventKind: row.eventKind ?? "MESSAGE_CREATED",
+      };
+    });
   }
 
   async updateStatus(

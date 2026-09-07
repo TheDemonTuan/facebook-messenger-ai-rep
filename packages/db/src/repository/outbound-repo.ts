@@ -351,6 +351,18 @@ export class OutboundRepository {
           inboundVersion: action.inboundVersion,
           responseIndex: action.responseIndex,
           timestamp: now,
+          contentSchemaVersion: 2,
+          content: {
+            contentSchemaVersion: 2,
+            contentRevision: 1,
+            contentStatus: "READY",
+            parts: [{ type: "TEXT", text: action.text }],
+            text: action.text,
+          },
+          contentStatus: "READY",
+          contentRevision: 1,
+          contentQuality: "TRUSTED",
+          eventKind: "MESSAGE_CREATED",
         })
         .onConflictDoNothing();
 

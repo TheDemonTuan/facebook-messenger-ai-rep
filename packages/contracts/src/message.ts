@@ -6,6 +6,18 @@ import {
   ClassificationReliabilitySchema,
   TimestampProvenanceSchema,
   TimestampPrecisionSchema,
+  ContentStatusSchema,
+  type ContentStatus,
+  MediaRoleSchema,
+  ShareOriginSchema,
+  ShareAccessSchema,
+  MessageEventKindSchema,
+  type MessageEventKind,
+  ContentQualitySchema,
+  IdentityQualitySchema,
+  DirectionQualitySchema,
+  ParseQualitySchema,
+  ReplyAvailabilitySchema,
 } from "./enums.js";
 
 export const MessageDirectionSchema = z.enum(["INBOUND", "OUTBOUND"]);
@@ -236,6 +248,273 @@ export const MessageClassificationFields = {
   senderEvidence: z.array(ClassificationEvidenceSchema).optional(),
 };
 
+// --- PR-03 Message Parts & Rich Content Schemas ---
+
+export const MediaRefSchema = z.object({
+  mediaId: z.string().min(1).max(256),
+  role: MediaRoleSchema.default("ATTACHMENT"),
+  mimeType: z.string().max(128).optional(),
+  byteSize: z.number().int().nonnegative().optional(),
+  width: z.number().int().nonnegative().optional(),
+  height: z.number().int().nonnegative().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+  status: ContentStatusSchema.default("READY"),
+  sourceUrl: z.string().max(2048).optional(),
+  storagePath: z.string().max(1024).optional(),
+  thumbnailRef: z.string().max(256).optional(),
+  fileName: z.string().max(256).optional(),
+});
+export type MediaRef = z.infer<typeof MediaRefSchema>;
+
+export const TextPartSchema = z.object({
+  type: z.literal("TEXT"),
+  text: z.string().max(10000),
+});
+export type TextPart = z.infer<typeof TextPartSchema>;
+
+export const ImagePartSchema = z.object({
+  type: z.literal("IMAGE"),
+  media: MediaRefSchema,
+  altText: z.string().max(1000).optional(),
+});
+export type ImagePart = z.infer<typeof ImagePartSchema>;
+
+export const VoicePartSchema = z.object({
+  type: z.literal("VOICE"),
+  media: MediaRefSchema,
+  transcriptRef: z.string().max(256).optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+});
+export type VoicePart = z.infer<typeof VoicePartSchema>;
+
+export const AudioPartSchema = z.object({
+  type: z.literal("AUDIO"),
+  media: MediaRefSchema,
+  transcriptRef: z.string().max(256).optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+});
+export type AudioPart = z.infer<typeof AudioPartSchema>;
+
+export const VideoPartSchema = z.object({
+  type: z.literal("VIDEO"),
+  media: MediaRefSchema,
+  posterRef: z.string().max(256).optional(),
+  analysisRef: z.string().max(256).optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+});
+export type VideoPart = z.infer<typeof VideoPartSchema>;
+
+export const StickerPartSchema = z.object({
+  type: z.literal("STICKER"),
+  label: z.string().max(256).optional(),
+  media: MediaRefSchema.optional(),
+});
+export type StickerPart = z.infer<typeof StickerPartSchema>;
+
+export const GifPartSchema = z.object({
+  type: z.literal("GIF"),
+  media: MediaRefSchema,
+});
+export type GifPart = z.infer<typeof GifPartSchema>;
+
+export const SharePartSchema = z.object({
+  type: z.literal("SHARE"),
+  origin: ShareOriginSchema.default("UNKNOWN"),
+  url: z.string().max(2048).optional(),
+  title: z.string().max(500).optional(),
+  previewText: z.string().max(2000).optional(),
+  previewMedia: MediaRefSchema.optional(),
+  access: ShareAccessSchema.default("UNKNOWN"),
+});
+export type SharePart = z.infer<typeof SharePartSchema>;
+
+export const FilePartSchema = z.object({
+  type: z.literal("FILE"),
+  media: MediaRefSchema,
+  fileName: z.string().max(256).optional(),
+  byteSize: z.number().int().nonnegative().optional(),
+});
+export type FilePart = z.infer<typeof FilePartSchema>;
+
+export const LocationPartSchema = z.object({
+  type: z.literal("LOCATION"),
+  label: z.string().max(500).optional(),
+  latitude: z.number().min(-90).max(90).optional(),
+  longitude: z.number().min(-180).max(180).optional(),
+});
+export type LocationPart = z.infer<typeof LocationPartSchema>;
+
+export const ContactPartSchema = z.object({
+  type: z.literal("CONTACT"),
+  displayName: z.string().max(256).optional(),
+  normalizedFields: z.record(z.string().max(64), z.string().max(256)).optional(),
+});
+export type ContactPart = z.infer<typeof ContactPartSchema>;
+
+export const UnknownPartSchema = z.object({
+  type: z.literal("UNKNOWN"),
+  observedLabel: z.string().max(500).optional(),
+});
+export type UnknownPart = z.infer<typeof UnknownPartSchema>;
+
+export const MessagePartSchema = z.discriminatedUnion("type", [
+  TextPartSchema,
+  ImagePartSchema,
+  VoicePartSchema,
+  AudioPartSchema,
+  VideoPartSchema,
+  StickerPartSchema,
+  GifPartSchema,
+  SharePartSchema,
+  FilePartSchema,
+  LocationPartSchema,
+  ContactPartSchema,
+  UnknownPartSchema,
+]);
+export type MessagePart = z.infer<typeof MessagePartSchema>;
+
+export const ReplyContextSchema = z.object({
+  sourceMessageId: z.string().optional(),
+  quotedText: z.string().max(1000).optional(),
+  availability: ReplyAvailabilitySchema.default("AVAILABLE"),
+});
+export type ReplyContext = z.infer<typeof ReplyContextSchema>;
+
+export const NormalizationInfoSchema = z.object({
+  parserVersion: z.string().max(64).optional(),
+  identityQuality: IdentityQualitySchema.optional(),
+  directionQuality: DirectionQualitySchema.optional(),
+  parseQuality: ParseQualitySchema.optional(),
+  warnings: z.array(z.string().max(256)).optional().default([]),
+});
+export type NormalizationInfo = z.infer<typeof NormalizationInfoSchema>;
+
+export const NormalizedContentSchema = z.object({
+  contentSchemaVersion: z.literal(2).default(2),
+  contentRevision: z.number().int().nonnegative().default(1),
+  contentStatus: ContentStatusSchema.default("READY"),
+  parts: z.array(MessagePartSchema).max(50).default([]),
+  text: z.string().max(10000).default(""),
+  replyTo: ReplyContextSchema.optional(),
+  normalization: NormalizationInfoSchema.optional(),
+});
+export type NormalizedContent = z.infer<typeof NormalizedContentSchema>;
+
+export function isMeaningfulPart(part: MessagePart): boolean {
+  if (part.type === "TEXT") return part.text.trim().length > 0;
+  if (part.type === "IMAGE" || part.type === "VOICE" || part.type === "AUDIO" || part.type === "VIDEO") return true;
+  if (part.type === "STICKER" || part.type === "GIF" || part.type === "FILE") return true;
+  if (part.type === "SHARE") {
+    return Boolean(
+      (part.url && part.url.trim()) ||
+      (part.title && part.title.trim()) ||
+      (part.previewText && part.previewText.trim()) ||
+      part.previewMedia
+    );
+  }
+  if (part.type === "LOCATION" || part.type === "CONTACT") return true;
+  if (part.type === "UNKNOWN") return Boolean(part.observedLabel && part.observedLabel.trim().length > 0);
+  return false;
+}
+
+export function isMeaningfulContent(input: {
+  text?: string | null;
+  parts?: MessagePart[] | null;
+  eventKind?: MessageEventKind | null;
+}): boolean {
+  if (
+    input.eventKind === "MESSAGE_UNSENT" ||
+    input.eventKind === "REACTION_CHANGED" ||
+    input.eventKind === "DELIVERY_UPDATED" ||
+    input.eventKind === "PRESENCE_CHANGED" ||
+    input.eventKind === "THREAD_UPDATED" ||
+    input.eventKind === "SYSTEM_NOTICE"
+  ) {
+    return true;
+  }
+  if (input.text && input.text.trim().length > 0) {
+    return true;
+  }
+  if (Array.isArray(input.parts) && input.parts.length > 0) {
+    return input.parts.some(isMeaningfulPart);
+  }
+  return false;
+}
+
+export function normalizeMessageContent(input: {
+  text?: string | null;
+  parts?: MessagePart[] | null;
+  content?: NormalizedContent | null;
+  contentStatus?: ContentStatus | null;
+  contentRevision?: number | null;
+  eventKind?: MessageEventKind | null;
+  replyTo?: ReplyContext | null;
+  normalization?: NormalizationInfo | null;
+}): NormalizedContent {
+  if (input.content) {
+    return input.content;
+  }
+
+  const rawText = input.text ?? "";
+  let resolvedParts: MessagePart[] = [];
+  if (Array.isArray(input.parts) && input.parts.length > 0) {
+    resolvedParts = [...input.parts];
+  } else if (rawText.trim().length > 0) {
+    resolvedParts = [{ type: "TEXT", text: rawText }];
+  }
+
+  return {
+    contentSchemaVersion: 2,
+    contentRevision: input.contentRevision ?? 1,
+    contentStatus: input.contentStatus ?? "READY",
+    parts: resolvedParts,
+    text: rawText,
+    replyTo: input.replyTo ?? undefined,
+    normalization: input.normalization ?? undefined,
+  };
+}
+
+export const MessageTimelineDtoSchema = z.object({
+  id: z.string().uuid(),
+  direction: MessageDirectionSchema,
+  actor: z.string(),
+  text: z.string(),
+  parts: z.array(MessagePartSchema),
+  contentStatus: ContentStatusSchema,
+  contentRevision: z.number().int().nonnegative(),
+  eventKind: MessageEventKindSchema.default("MESSAGE_CREATED"),
+  sender: z.object({
+    name: z.string().nullable(),
+    avatarMediaRef: z.string().nullable(),
+    senderKind: SenderKindSchema.optional(),
+    isVerified: z.boolean().default(false),
+  }),
+  time: z.object({
+    eventAt: z.string().nullable(),
+    observedAt: z.string().nullable(),
+    displayAt: z.string().nullable(),
+    source: z.enum(["FACEBOOK_EVENT", "OBSERVED", "SYSTEM", "UNKNOWN"]),
+    precision: z.string(),
+    rawLabel: z.string().optional(),
+  }),
+  replyDecision: z.object({
+    action: z.enum(["SKIP", "DEFER", "GENERATE", "CLARIFY", "HANDOFF"]),
+    reasonCode: z.string(),
+    displayLabel: z.string(),
+  }).optional().nullable(),
+  // Legacy aliases for backward compatibility
+  senderName: z.string().nullable().optional(),
+  avatarUrl: z.string().nullable().optional(),
+  senderKind: SenderKindSchema.optional(),
+  isVerified: z.boolean().optional(),
+  timestamp: z.coerce.date().optional(),
+  observedTimestamp: z.coerce.date().nullable().optional(),
+  eventTimestamp: z.coerce.date().nullable().optional(),
+  skipReason: z.record(z.string(), z.unknown()).nullable().optional(),
+  externalMessageId: z.string().optional(),
+});
+export type MessageTimelineDto = z.infer<typeof MessageTimelineDtoSchema>;
+
 export const MessageSchema = z.object({
   id: z.string().uuid(),
   channelAccountId: z.string(),
@@ -250,6 +529,16 @@ export const MessageSchema = z.object({
   timestamp: z.coerce.date(),
   metadata: z.record(z.string(), z.unknown()).optional().default({}),
   createdAt: z.coerce.date(),
+  // PR-03 v2 fields
+  contentSchemaVersion: z.number().int().default(1),
+  content: NormalizedContentSchema.optional().nullable(),
+  contentStatus: ContentStatusSchema.default("READY"),
+  contentRevision: z.number().int().nonnegative().default(1),
+  contentHash: z.string().nullable().optional(),
+  parserVersion: z.string().nullable().optional(),
+  contentQuality: ContentQualitySchema.default("TRUSTED"),
+  eventKind: MessageEventKindSchema.default("MESSAGE_CREATED"),
+  parts: z.array(MessagePartSchema).optional(),
 }).extend(MessageClassificationFields);
 export type Message = z.infer<typeof MessageSchema>;
 
@@ -265,6 +554,14 @@ export const InboundMessageSchema = z.object({
   receivedAt: z.coerce.date(),
   rawPayload: z.record(z.string(), z.unknown()).default({}),
   createdAt: z.coerce.date(),
+  // PR-03 v2 fields
+  contentSchemaVersion: z.number().int().default(1),
+  content: NormalizedContentSchema.optional().nullable(),
+  contentStatus: ContentStatusSchema.default("READY"),
+  contentRevision: z.number().int().nonnegative().default(1),
+  contentHash: z.string().nullable().optional(),
+  eventKind: MessageEventKindSchema.default("MESSAGE_CREATED"),
+  parts: z.array(MessagePartSchema).optional(),
 }).extend(MessageClassificationFields);
 export type InboundMessage = z.infer<typeof InboundMessageSchema>;
 
@@ -275,7 +572,33 @@ export const InboundMessagePayloadSchema = z.object({
   externalCustomerId: z.string().nullable().optional(),
   customerName: z.string().nullable().optional(),
   externalMessageId: z.string(),
-  text: z.string(),
+  text: z.string().max(10000).default(""),
   timestamp: z.coerce.date(),
-}).extend(MessageClassificationFields);
+  // PR-03 v2 additive fields
+  parts: z.array(MessagePartSchema).max(50).optional(),
+  content: NormalizedContentSchema.optional(),
+  contentStatus: ContentStatusSchema.default("READY").optional(),
+  contentRevision: z.number().int().nonnegative().default(1).optional(),
+  contentSchemaVersion: z.number().int().default(2).optional(),
+  eventKind: MessageEventKindSchema.default("MESSAGE_CREATED").optional(),
+  contentHash: z.string().max(64).optional(),
+  parserVersion: z.string().max(32).optional(),
+  contentQuality: ContentQualitySchema.default("TRUSTED").optional(),
+  replyTo: ReplyContextSchema.optional(),
+  normalization: NormalizationInfoSchema.optional(),
+}).extend(MessageClassificationFields).superRefine((data, ctx) => {
+  const parts = data.parts ?? data.content?.parts;
+  const meaningful = isMeaningfulContent({
+    text: data.text,
+    parts,
+    eventKind: data.eventKind,
+  });
+  if (!meaningful) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Empty meaningless message: must provide non-empty text, valid media parts, or supported event tombstone",
+      path: ["text"],
+    });
+  }
+});
 export type InboundMessagePayload = z.infer<typeof InboundMessagePayloadSchema>;

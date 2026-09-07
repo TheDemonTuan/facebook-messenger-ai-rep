@@ -243,3 +243,85 @@ export const ReplyPrecedenceStepSchema = z.enum([
   "ELIGIBLE",
 ]);
 export type ReplyPrecedenceStep = z.infer<typeof ReplyPrecedenceStepSchema>;
+
+// --- PR-03 v2 Contract Enums ---
+
+export const ContentStatusSchema = z.enum([
+  "PENDING",
+  "READY",
+  "PARTIAL",
+  "UNAVAILABLE",
+  "UNSUPPORTED",
+  "QUARANTINED",
+]);
+export type ContentStatus = z.infer<typeof ContentStatusSchema>;
+
+export const MediaRoleSchema = z.enum([
+  "ATTACHMENT",
+  "SHARE_PREVIEW",
+  "VIDEO_POSTER",
+]);
+export type MediaRole = z.infer<typeof MediaRoleSchema>;
+
+export const ShareOriginSchema = z.enum([
+  "FACEBOOK_GROUP",
+  "FACEBOOK_POST",
+  "REEL",
+  "EXTERNAL",
+  "UNKNOWN",
+]);
+export type ShareOrigin = z.infer<typeof ShareOriginSchema>;
+
+export const ShareAccessSchema = z.enum([
+  "PREVIEW_ONLY",
+  "READABLE",
+  "UNAVAILABLE",
+  "UNKNOWN",
+]);
+export type ShareAccess = z.infer<typeof ShareAccessSchema>;
+
+export const MessageEventKindSchema = z.enum([
+  "MESSAGE_CREATED",
+  "MESSAGE_EDITED",
+  "MESSAGE_UNSENT",
+  "REACTION_CHANGED",
+  "DELIVERY_UPDATED",
+  "PRESENCE_CHANGED",
+  "THREAD_UPDATED",
+  "SYSTEM_NOTICE",
+]);
+export type MessageEventKind = z.infer<typeof MessageEventKindSchema>;
+
+export const ContentQualitySchema = z.enum([
+  "TRUSTED",
+  "LEGACY_UNVERIFIED",
+  "QUARANTINED",
+]);
+export type ContentQuality = z.infer<typeof ContentQualitySchema>;
+
+export const IdentityQualitySchema = z.enum([
+  "VERIFIED",
+  "UNVERIFIED",
+]);
+export type IdentityQuality = z.infer<typeof IdentityQualitySchema>;
+
+export const DirectionQualitySchema = z.enum([
+  "VERIFIED",
+  "UNVERIFIED",
+]);
+export type DirectionQuality = z.infer<typeof DirectionQualitySchema>;
+
+export const ParseQualitySchema = z.enum([
+  "VERIFIED",
+  "PARTIAL",
+  "UNVERIFIED",
+]);
+export type ParseQuality = z.infer<typeof ParseQualitySchema>;
+
+export const ReplyAvailabilitySchema = z.enum([
+  "AVAILABLE",
+  "PARTIAL",
+  "UNAVAILABLE",
+]);
+export type ReplyAvailability = z.infer<typeof ReplyAvailabilitySchema>;
+
