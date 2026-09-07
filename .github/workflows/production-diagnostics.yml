@@ -36,7 +36,7 @@ jobs:
         run: |
           set -euo pipefail
           ssh vps 'bash -s' <<'REMOTE'
-          set -uo pipefail
+          set -euo pipefail
           cd /opt/facebook-messenger-ai-rep
           if [ "${{ inputs.apply_migrations }}" = "true" ]; then
             echo '=== Applying committed database migrations ==='
@@ -44,10 +44,10 @@ jobs:
           fi
           ./deploy.sh --status || true
           echo '=== HTTP health ==='
-          curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz
-          curl -sS -i --max-time 10 http://127.0.0.1:3000/readyz
+          docker exec messenger-core sh -c 'curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz'
+          docker exec messenger-core sh -c 'curl -sS -i --max-time 10 http://127.0.0.1:3000/readyz'
           echo '=== Previously failing workflow route ==='
-          curl -sS -i --max-time 10 http://127.0.0.1:3000/api/workflow/live
+          docker exec messenger-core sh -c 'curl -sS -i --max-time 10 http://127.0.0.1:3000/api/workflow/live'
           echo '=== Core recent logs ==='
           docker logs --tail 250 messenger-core 2>&1 || true
           echo '=== Browser agent recent logs ==='
