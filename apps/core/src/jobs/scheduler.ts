@@ -19,6 +19,7 @@ import { createReconcileHandler } from "./handlers/reconcile.js";
 import { createOutboxHandler } from "./handlers/outbox.js";
 import { createRetentionHandler } from "./handlers/retention.js";
 import { createHumanFallbackHandler } from "./handlers/human-fallback.js";
+import { createMediaEnrichmentHandler } from "./handlers/media-enrichment.js";
 
 export interface CoreJobServiceDeps {
   db: Database;
@@ -52,7 +53,7 @@ export class CoreJobService {
     this.deps = deps;
     this.runner = new JobRunner({
       jobRepo: deps.jobRepo,
-      queues: ["default", "debounce", "ai", "system"],
+      queues: ["default", "debounce", "ai", "system", "media_enrichment"],
       concurrency: 2,
       pollIntervalMs: 200,
       leaseDurationSeconds: 60,
@@ -107,13 +108,25 @@ export class CoreJobService {
       broadcaster: deps.broadcaster,
     });
 
-    // Register all 6 job handlers
+    const handleMediaEnrichment = createMediaEnrichmentHandler({
+      db: deps.db,
+      convRepo: deps.convRepo,
+      jobRepo: deps.jobRepo,
+      eventRepo: deps.eventRepo,
+      outboxRepo: deps.outboxRepo,
+      broadcaster: deps.broadcaster,
+      settingsRepo: deps.settingsRepo,
+      aiConfigRepo: deps.aiConfigRepo,
+    });
+
+    // Register all 7 job handlers
     this.runner.registerHandler("debounce", handleDebounce);
     this.runner.registerHandler("ai", handleAi);
     this.runner.registerHandler("reconcile", this.handleReconcile);
     this.runner.registerHandler("outbox", this.handleOutbox);
     this.runner.registerHandler("retention", this.handleRetention);
     this.runner.registerHandler("human-fallback", handleHumanFallback);
+    this.runner.registerHandler("media_enrichment", handleMediaEnrichment);
   }
 
   async start(): Promise<void> {

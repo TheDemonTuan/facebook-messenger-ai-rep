@@ -8,6 +8,13 @@ export interface ContextBuilderOptions {
   now?: Date;
 }
 
+export interface MediaCoverageManifest {
+  totalAttachments: number;
+  includedAttachments: number;
+  omittedAttachments: number;
+  capped: boolean;
+}
+
 export interface BuiltContextResult {
   messages: ConversationMessageItem[];
   manifest: {
@@ -17,6 +24,7 @@ export interface BuiltContextResult {
     droppedSenderQuotaCount: number;
     droppedBudgetCount: number;
     estimatedTokens: number;
+    mediaCoverage: MediaCoverageManifest;
   };
 }
 
@@ -33,8 +41,13 @@ export function estimateMessageTokens(m: ConversationMessageItem): number {
   let tokens = estimateTextTokens(m.text);
   if (Array.isArray(m.parts) && m.parts.length > 0) {
     for (const part of m.parts) {
-      if (part.type === "IMAGE" || part.type === "VOICE" || part.type === "VIDEO" || part.type === "AUDIO") {
-        tokens += 50;
+      if (part.type === "IMAGE") {
+        tokens += 800; // Standard vision tile budget (~768-800 tokens)
+      } else if (part.type === "VOICE" || part.type === "AUDIO") {
+        const transcriptText = part.transcript?.text || "";
+        tokens += estimateTextTokens(transcriptText) + 50;
+      } else if (part.type === "VIDEO") {
+        tokens += 400;
       } else if (part.type === "SHARE") {
         tokens += estimateTextTokens(part.title || "") + estimateTextTokens(part.previewText || "") + 20;
       } else if (part.type === "FILE") {
@@ -46,12 +59,13 @@ export function estimateMessageTokens(m: ConversationMessageItem): number {
 }
 
 /**
- * Builds a lean, budgeted conversation context for AI generation according to PLAN_TOI_UU_MESSENGER_AI.
+ * Builds a lean, budgeted conversation context for AI generation according to PLAN_TOI_UU_MESSENGER_AI & PR-06.
  * 1. Guarantees strict chronological ordering (oldest -> newest) so the latest customer question is always last.
- * 2. Filters out stale messages beyond contextHistoryMaxAgeHours (default 24h), while preserving the latest inbound.
- * 3. Enforces per-sender quota (contextMaxMessagesPerSender, default 6).
- * 4. Enforces inbound quota (contextMaxInboundMessages, default 6) and total quota (contextMaxMessages, default 12).
- * 5. Budgets input tokens safely, ensuring long system personas do not starve conversation history.
+ * 2. Retains valid media-only messages even if customer provided no accompanying text.
+ * 3. Enforces turn-level attachment caps (mediaMaxAttachmentsPerTurn, default 4) with explicit coverage tracking.
+ * 4. Filters out stale messages beyond contextHistoryMaxAgeHours (default 24h), while preserving the latest inbound.
+ * 5. Enforces per-sender quota (contextMaxMessagesPerSender, default 6) and inbound quota (contextMaxInboundMessages, default 6).
+ * 6. Enforces token budgeting by dropping oldest history turns first, never dropping the turn under processing.
  */
 export function buildLeanConversationContext(
   rawMessages: ConversationMessageItem[],
@@ -63,6 +77,7 @@ export function buildLeanConversationContext(
   const maxInbound = settings.contextMaxInboundMessages ?? 6;
   const maxPerSender = settings.contextMaxMessagesPerSender ?? 6;
   const maxInputTokens = settings.contextMaxInputTokens ?? 4096;
+  const maxAttachmentsPerTurn = settings.mediaMaxAttachmentsPerTurn ?? 4;
 
   const cutoffTime = new Date(now.getTime() - maxAgeHours * 60 * 60 * 1000);
 
@@ -144,22 +159,55 @@ export function buildLeanConversationContext(
     return 0;
   });
 
-  // 5. Token budgeting:
-  // The system persona + business profile is defined by the shop owner and can be 5,000+ tokens.
-  // We allocate an additional message headroom of at least 4,096 tokens so system persona never starves history.
+  // 5. Enforce attachment caps per turn and calculate media coverage
+  let totalAttachments = 0;
+  let includedAttachments = 0;
+  let omittedAttachments = 0;
+
+  const cappedChronological = chronological.map((msg) => {
+    if (!Array.isArray(msg.parts) || msg.parts.length === 0) {
+      return msg;
+    }
+
+    const mediaParts = msg.parts.filter(
+      (p) => p.type === "IMAGE" || p.type === "VOICE" || p.type === "AUDIO" || p.type === "VIDEO"
+    );
+    totalAttachments += mediaParts.length;
+
+    if (mediaParts.length <= maxAttachmentsPerTurn) {
+      includedAttachments += mediaParts.length;
+      return msg;
+    }
+
+    // Over attachment budget for this turn: keep up to maxAttachmentsPerTurn
+    const otherParts = msg.parts.filter(
+      (p) => p.type !== "IMAGE" && p.type !== "VOICE" && p.type !== "AUDIO" && p.type !== "VIDEO"
+    );
+    const keptMediaParts = mediaParts.slice(0, maxAttachmentsPerTurn);
+    includedAttachments += keptMediaParts.length;
+    omittedAttachments += mediaParts.length - keptMediaParts.length;
+
+    return {
+      ...msg,
+      parts: [...otherParts, ...keptMediaParts],
+    };
+  });
+
+  // 6. Token budgeting:
+  // Allocate headroom so shop owner persona never starves recent history
   const systemTokens = estimateTextTokens(settings.aiSystemPersona) + estimateTextTokens(settings.businessProfile) + 100;
   const effectiveMaxInputTokens = Math.max(systemTokens + 4096, maxInputTokens, 16384);
 
-  let totalEstimatedTokens = chronological.reduce(
+  let totalEstimatedTokens = cappedChronological.reduce(
     (sum, m) => sum + estimateMessageTokens(m),
     systemTokens
   );
 
   // If over budget, drop oldest history, but NEVER drop the latest inbound message
-  while (totalEstimatedTokens > effectiveMaxInputTokens && chronological.length > 1) {
-    const oldestIndex = chronological.findIndex((m, idx) => idx < chronological.length - 1);
+  while (totalEstimatedTokens > effectiveMaxInputTokens && cappedChronological.length > 1) {
+    const oldestIndex = cappedChronological.findIndex((m, idx) => idx < cappedChronological.length - 1);
     if (oldestIndex === -1) break;
-    const [dropped] = chronological.splice(oldestIndex, 1);
+    const [dropped] = cappedChronological.splice(oldestIndex, 1);
     if (dropped) {
       droppedBudgetCount++;
       totalEstimatedTokens -= estimateMessageTokens(dropped);
@@ -169,14 +217,20 @@ export function buildLeanConversationContext(
   }
 
   return {
-    messages: chronological,
+    messages: cappedChronological,
     manifest: {
       totalEvaluated: rawMessages.length,
-      selectedCount: chronological.length,
+      selectedCount: cappedChronological.length,
       droppedStaleCount,
       droppedSenderQuotaCount,
       droppedBudgetCount,
       estimatedTokens: totalEstimatedTokens,
+      mediaCoverage: {
+        totalAttachments,
+        includedAttachments,
+        omittedAttachments,
+        capped: omittedAttachments > 0,
+      },
     },
   };
 }

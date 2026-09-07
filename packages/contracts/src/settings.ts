@@ -68,6 +68,12 @@ export const SystemSettingsBaseShape = {
   persistenceMode: z.enum(["ELIGIBLE_ONLY", "ALL_OBSERVED"]),
   persistExcludedInbound: z.boolean(),
   persistDropTelemetry: z.boolean(),
+  // Media enrichment & vision capabilities
+  mediaMaxAttachmentsPerTurn: z.number().int().min(1).max(10).optional(),
+  mediaImageMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).optional(),
+  mediaVoiceMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).optional(),
+  mediaVoiceMaxDurationSec: z.number().int().min(10).max(600).optional(),
+  providerCapabilities: z.record(z.string(), z.boolean()).optional(),
 };
 
 // Default values for full system settings
@@ -112,6 +118,11 @@ export const SystemSettingsDefaults = {
   persistenceMode: "ELIGIBLE_ONLY" as const,
   persistExcludedInbound: false,
   persistDropTelemetry: true,
+  mediaMaxAttachmentsPerTurn: 4,
+  mediaImageMaxBytes: 10 * 1024 * 1024,
+  mediaVoiceMaxBytes: 15 * 1024 * 1024,
+  mediaVoiceMaxDurationSec: 120,
+  providerCapabilities: {},
 };
 
 // Patch schema for partial updates without default population
@@ -158,6 +169,11 @@ export const SystemSettingsSchema = z.object({
   persistenceMode: SystemSettingsBaseShape.persistenceMode.default(SystemSettingsDefaults.persistenceMode),
   persistExcludedInbound: SystemSettingsBaseShape.persistExcludedInbound.default(SystemSettingsDefaults.persistExcludedInbound),
   persistDropTelemetry: SystemSettingsBaseShape.persistDropTelemetry.default(SystemSettingsDefaults.persistDropTelemetry),
+  mediaMaxAttachmentsPerTurn: SystemSettingsBaseShape.mediaMaxAttachmentsPerTurn.default(SystemSettingsDefaults.mediaMaxAttachmentsPerTurn),
+  mediaImageMaxBytes: SystemSettingsBaseShape.mediaImageMaxBytes.default(SystemSettingsDefaults.mediaImageMaxBytes),
+  mediaVoiceMaxBytes: SystemSettingsBaseShape.mediaVoiceMaxBytes.default(SystemSettingsDefaults.mediaVoiceMaxBytes),
+  mediaVoiceMaxDurationSec: SystemSettingsBaseShape.mediaVoiceMaxDurationSec.default(SystemSettingsDefaults.mediaVoiceMaxDurationSec),
+  providerCapabilities: SystemSettingsBaseShape.providerCapabilities.default(SystemSettingsDefaults.providerCapabilities),
 });
 
 // Override .partial() so partial update callers do not get whole-object default resets

@@ -7,6 +7,26 @@ export const AiStructuredOutputSchema = z.object({
 });
 export type AiStructuredOutput = z.infer<typeof AiStructuredOutputSchema>;
 
+export const ProviderCapabilitiesSchema = z.object({
+  text: z.boolean().default(true),
+  imageInput: z.boolean().default(false),
+  audioInput: z.boolean().default(false),
+  audioTranscription: z.boolean().default(false),
+  videoInput: z.boolean().default(false),
+  structuredOutput: z.boolean().default(false),
+});
+export type ProviderCapabilities = z.infer<typeof ProviderCapabilitiesSchema>;
+
+export const DerivedTranscriptSchema = z.object({
+  text: z.string(),
+  language: z.string().default("vi"),
+  confidence: z.number().nullable().optional(),
+  provenance: z.literal("ASR").default("ASR"),
+  sourceMessageRef: z.string().optional(),
+  durationMs: z.number().int().nonnegative().optional(),
+});
+export type DerivedTranscript = z.infer<typeof DerivedTranscriptSchema>;
+
 export const AiRunSchema = z.object({
   id: z.string().uuid(),
   channelAccountId: z.string(),

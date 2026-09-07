@@ -19,6 +19,7 @@ import {
   ParseQualitySchema,
   ReplyAvailabilitySchema,
 } from "./enums.js";
+import { DerivedTranscriptSchema, type DerivedTranscript } from "./ai.js";
 
 export const MessageDirectionSchema = z.enum(["INBOUND", "OUTBOUND"]);
 export type MessageDirection = z.infer<typeof MessageDirectionSchema>;
@@ -252,6 +253,7 @@ export const MessageClassificationFields = {
 
 export const MediaRefSchema = z.object({
   mediaId: z.string().min(1).max(256),
+  mediaRefId: z.string().max(256).optional(),
   role: MediaRoleSchema.default("ATTACHMENT"),
   mimeType: z.string().max(128).optional(),
   byteSize: z.number().int().nonnegative().optional(),
@@ -283,6 +285,7 @@ export const VoicePartSchema = z.object({
   type: z.literal("VOICE"),
   media: MediaRefSchema,
   transcriptRef: z.string().max(256).optional(),
+  transcript: DerivedTranscriptSchema.optional(),
   durationMs: z.number().int().nonnegative().optional(),
 });
 export type VoicePart = z.infer<typeof VoicePartSchema>;
@@ -291,6 +294,7 @@ export const AudioPartSchema = z.object({
   type: z.literal("AUDIO"),
   media: MediaRefSchema,
   transcriptRef: z.string().max(256).optional(),
+  transcript: DerivedTranscriptSchema.optional(),
   durationMs: z.number().int().nonnegative().optional(),
 });
 export type AudioPart = z.infer<typeof AudioPartSchema>;

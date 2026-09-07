@@ -43,3 +43,14 @@ export const HumanFallbackJobPayloadSchema = z.object({
 });
 export type HumanFallbackJobPayload = z.infer<typeof HumanFallbackJobPayloadSchema>;
 
+export const MediaEnrichmentJobPayloadSchema = z.object({
+  channelAccountId: z.string(),
+  conversationId: z.string(),
+  messageId: z.string(),
+  inboundVersion: z.number().int(),
+  controlEpoch: z.number().int().optional(),
+  contentRevision: z.number().int().optional().default(1),
+  partId: z.string().optional(),
+});
+export type MediaEnrichmentJobPayload = z.infer<typeof MediaEnrichmentJobPayloadSchema>;
+

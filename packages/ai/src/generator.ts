@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import type { ConversationContext } from "./persona.js";
 import { buildChatMessages } from "./persona.js";
 import { validateAiOutput } from "./guards.js";
-import { createAiCompletion, type AiConnectionConfig } from "./client.js";
+import { createAiCompletion, type AiConnectionConfig, type AiChatMessage } from "./client.js";
+import { resolveProviderCapabilities } from "./capabilities.js";
 import { getEnv, getEffectiveAiConfig } from "@messenger/config";
-import type { AiStructuredOutput } from "@messenger/contracts";
+import type { AiStructuredOutput, ProviderCapabilities } from "@messenger/contracts";
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -72,7 +73,8 @@ export interface GenerationResult {
 export function buildSanitizedRequestSnapshot(
   provider: AiConnectionConfig,
   model: string,
-  messages: Array<{ role: string; content: string }>
+  messages: AiChatMessage[] | Array<{ role: string; content: string }>,
+  capabilities?: unknown
 ): Record<string, unknown> {
   const isAnthropic = provider.apiFormat === "ANTHROPIC_COMPATIBLE";
   let cleanBaseUrl = (provider.baseUrl || "").replace(/\/$/, "");
@@ -92,19 +94,62 @@ export function buildSanitizedRequestSnapshot(
     ? `${cleanBaseUrl}/messages`
     : `${cleanBaseUrl}/chat/completions`;
 
+  // Deep sanitize messages to ensure NO base64 data URL leaks into snapshots or logs
+  const sanitizedMessages = messages.map((m) => {
+    if (typeof m.content === "string") {
+      return {
+        role: m.role,
+        content: m.content.replace(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]{50,}/gi, "[IMAGE_DATA_REDACTED]"),
+      };
+    }
+    const parts = (m.content as unknown as Array<{ type: string; text?: string; image_url?: { url: string }; source?: { type: string; media_type: string; data: string }; mediaRefId?: string }>).map((part) => {
+      if (part.type === "text") {
+        return { type: "text", text: part.text || "" };
+      }
+      if (part.type === "image_url") {
+        const urlStr = part.image_url?.url || "";
+        const mimeMatch = /^data:([^;]+);base64,/.exec(urlStr);
+        const mime = mimeMatch?.[1] || "image/unknown";
+        return {
+          type: "image_url",
+          image_url: {
+            url: `[IMAGE_DATA_REDACTED: mime=${mime}, length=${urlStr.length}, ref=${part.mediaRefId || "none"}]`,
+          },
+          mediaRefId: part.mediaRefId,
+        };
+      }
+      if (part.type === "image" && part.source) {
+        return {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: part.source.media_type,
+            data: `[IMAGE_DATA_REDACTED: bytes=${part.source.data?.length || 0}, ref=${part.mediaRefId || "none"}]`,
+          },
+          mediaRefId: part.mediaRefId,
+        };
+      }
+      return part;
+    });
+    return { role: m.role, content: parts };
+  });
+
   const payload = isAnthropic
     ? {
         model,
         max_tokens: 1024,
         temperature: 0.3,
-        system: messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n"),
-        messages: messages
+        system: sanitizedMessages
+          .filter((m) => m.role === "system")
+          .map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content)))
+          .join("\n\n"),
+        messages: sanitizedMessages
           .filter((m) => m.role !== "system")
           .map((m) => ({ role: m.role, content: m.content })),
       }
     : {
         model,
-        messages,
+        messages: sanitizedMessages,
         temperature: 0.3,
         response_format: { type: "json_object" },
       };
@@ -115,6 +160,7 @@ export function buildSanitizedRequestSnapshot(
     method: "POST",
     model,
     payload,
+    ...(capabilities ? { capabilities } : {}),
   };
 }
 
@@ -166,9 +212,15 @@ export class AiReplyGenerator {
       timeoutMs: context.settings.aiTimeoutMs,
     };
     const startTime = Date.now();
-    const initialMessages = buildChatMessages(context);
+    const capabilities = resolveProviderCapabilities({
+      apiFormat: provider.apiFormat,
+      baseUrl: provider.baseUrl,
+      model,
+      explicitCapabilities: (context.settings as unknown as { providerCapabilities?: Partial<ProviderCapabilities> }).providerCapabilities,
+    });
+    const initialMessages = buildChatMessages(context, { capabilities });
     const promptHash = sha256(JSON.stringify(initialMessages));
-    const requestSnapshot = buildSanitizedRequestSnapshot(provider, model, initialMessages);
+    const requestSnapshot = buildSanitizedRequestSnapshot(provider, model, initialMessages, capabilities);
 
     console.log(`[AI Proxy] ---> ${provider.apiFormat} | Model: ${model} | Timeout: ${context.settings.aiTimeoutMs}ms`);
 

@@ -110,6 +110,9 @@ export const EventTypeSchema = z.enum([
   "HUMAN_SESSION_EXPIRED",
   "AI_RESUMED_AFTER_HUMAN",
   "INBOUND_DROPPED_POLICY",
+  "MEDIA_ENRICHED",
+  "MEDIA_ENRICHMENT_FAILED",
+  "CLARIFICATION_ENQUEUED",
 ]);
 export type EventType = z.infer<typeof EventTypeSchema>;
 

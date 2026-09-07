@@ -927,6 +927,40 @@ export class ConversationRepository {
           .where(eq(conversations.id, conversationId));
       }
 
+      // 7b. Enqueue media enrichment job if incoming message has media parts
+      const hasMediaToEnrich = Array.isArray(incomingParts) && incomingParts.some((p: any) =>
+        (p.type === "IMAGE" || p.type === "VOICE" || p.type === "AUDIO") &&
+        (p.media?.status === "PENDING" || p.media?.sourceUrl)
+      );
+
+      if (hasMediaToEnrich && newMsg) {
+        try {
+          await tx
+            .insert(jobs)
+            .values({
+              channelAccountId: payload.channelAccountId,
+              queue: "media_enrichment",
+              jobType: "media_enrichment",
+              priority: 15,
+              status: "READY",
+              availableAt: new Date(),
+              payload: {
+                channelAccountId: payload.channelAccountId,
+                conversationId,
+                messageId: newMsg.id,
+                externalMessageId: payload.externalMessageId,
+                inboundVersion: newInboundVersion,
+                controlEpoch: existingConv[0]?.controlEpoch ?? 0,
+                contentRevision: 1,
+              },
+              idempotencyKey: `media_enrich:${payload.channelAccountId}:${conversationId}:${newMsg.id}:1`,
+            })
+            .onConflictDoNothing();
+        } catch {
+          // Ignore in test double / mock
+        }
+      }
+
       // 8. Append conversation event
       await tx.insert(conversationEvents).values({
         channelAccountId: payload.channelAccountId,

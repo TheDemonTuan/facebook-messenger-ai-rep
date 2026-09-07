@@ -11,6 +11,24 @@ export interface AiConnectionConfig {
   signal?: AbortSignal;
 }
 
+export type AiContentPart =
+  | { type: "text"; text: string }
+  | {
+      type: "image_url";
+      image_url: { url: string; detail?: "auto" | "low" | "high" };
+      mediaRefId?: string;
+    }
+  | {
+      type: "image";
+      source: { type: "base64"; media_type: string; data: string };
+      mediaRefId?: string;
+    };
+
+export interface AiChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string | AiContentPart[];
+}
+
 export interface AiCompletionResult {
   content: string;
   promptTokens: number;
@@ -47,7 +65,7 @@ async function readError(response: Response): Promise<string> {
 
 export async function createAiCompletion(
   config: AiConnectionConfig,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>
+  messages: AiChatMessage[]
 ): Promise<AiCompletionResult> {
   if (config.apiFormat === "OPENAI_COMPATIBLE") {
     const client = getAiClient({
@@ -55,9 +73,33 @@ export async function createAiCompletion(
       baseUrl: config.baseUrl,
       apiKey: config.apiKey,
     });
+    const formattedMessages = messages.map((msg) => {
+      if (typeof msg.content === "string") {
+        return { role: msg.role, content: msg.content };
+      }
+      const parts = msg.content.map((part) => {
+        if (part.type === "text") {
+          return { type: "text" as const, text: part.text };
+        }
+        if (part.type === "image_url") {
+          return { type: "image_url" as const, image_url: part.image_url };
+        }
+        if (part.type === "image") {
+          return {
+            type: "image_url" as const,
+            image_url: {
+              url: `data:${part.source.media_type};base64,${part.source.data}`,
+            },
+          };
+        }
+        return { type: "text" as const, text: "" };
+      });
+      return { role: msg.role, content: parts };
+    });
+
     const completion = await client.chat.completions.create({
       model: config.model,
-      messages,
+      messages: formattedMessages as unknown as OpenAI.ChatCompletionMessageParam[],
       temperature: 0.3,
       response_format: { type: "json_object" },
     }, { signal: config.signal });
@@ -75,10 +117,49 @@ export async function createAiCompletion(
     };
   }
 
-  const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+  const system = messages
+    .filter((message) => message.role === "system")
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .filter((p) => p.type === "text")
+            .map((p) => (p as { text: string }).text)
+            .join("\n")
+    )
+    .join("\n\n");
+
   const anthropicMessages = messages
     .filter((message) => message.role !== "system")
-    .map((message) => ({ role: message.role as "user" | "assistant", content: message.content }));
+    .map((message) => {
+      if (typeof message.content === "string") {
+        return { role: message.role as "user" | "assistant", content: message.content };
+      }
+      const parts = message.content.map((part) => {
+        if (part.type === "text") {
+          return { type: "text" as const, text: part.text };
+        }
+        if (part.type === "image") {
+          return { type: "image" as const, source: part.source };
+        }
+        if (part.type === "image_url") {
+          const match = /^data:([^;]+);base64,(.+)$/.exec(part.image_url.url);
+          if (match && match[1] && match[2]) {
+            return {
+              type: "image" as const,
+              source: {
+                type: "base64" as const,
+                media_type: match[1],
+                data: match[2],
+              },
+            };
+          }
+          return { type: "text" as const, text: `[Image: ${part.image_url.url}]` };
+        }
+        return { type: "text" as const, text: "" };
+      });
+      return { role: message.role as "user" | "assistant", content: parts };
+    });
   const response = await fetch(endpoint(config.baseUrl, "messages"), {
     method: "POST",
     headers: {
