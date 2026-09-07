@@ -1,773 +1,646 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch } from "../api";
-import type { WorkflowLiveData, WorkflowNode } from "../types";
-import { useSseWakeup } from "../context/SseContext";
-import { useAuth } from "../context/AuthContext";
+import "./WorkflowPage.css";
 import {
-  Workflow,
-  Radio,
-  Layers,
+  useWorkflowData,
+} from "../features/workflow/useWorkflowData";
+import {
+  stateLabels,
+  eventLabel,
+  formatTime,
+  shortStatus,
+  itemNeedsAttention,
+  itemIsActive,
+  type WorkflowStageId,
+  type WorkflowStage,
+} from "../features/workflow/model";
+import {
+  RefreshCw,
+  Pause,
+  Play,
+  Inbox,
+  Activity,
+  AlertTriangle,
   ShieldCheck,
-  BookOpen,
-  Cpu,
-  CheckCircle2,
+  Layers,
+  Sparkles,
   Keyboard,
   Send,
-  AlertTriangle,
-  User,
-  ArrowRight,
-  RefreshCw,
-  Loader2,
-  ChevronRight,
-  X,
-  Activity,
-  CheckCheck,
-  Sparkles,
+  HelpCircle,
+  Search,
+  ExternalLink,
+  Copy,
+  Check,
+  AlertCircle,
 } from "lucide-react";
 
-export const WorkflowPage: React.FC = () => {
-  const [data, setData] = useState<WorkflowLiveData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [selectedNode, setSelectedNode] = useState<WorkflowNode | null>(null);
-  const [viewMode, setViewMode] = useState<"graph" | "trace">("graph");
-  const [resolvingAll, setResolvingAll] = useState(false);
-  const { user } = useAuth();
-  const canResolveIncidents = user?.role === "OWNER" || user?.role === "OPERATOR";
-
-  const loadWorkflow = useCallback(async () => {
-    try {
-      const res = await apiFetch<WorkflowLiveData>("/api/workflow/live");
-      setData(res);
-      if (selectedNode) {
-        const updated = res.nodes.find((n) => n.id === selectedNode.id);
-        if (updated) setSelectedNode(updated);
-      }
-    } catch (err: unknown) {
-      setError((err as Error).message || "Không thể tải dữ liệu luồng xử lý");
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedNode]);
-
-  useEffect(() => {
-    loadWorkflow();
-    const interval = setInterval(loadWorkflow, 4000);
-    return () => clearInterval(interval);
-  }, [loadWorkflow]);
-
-  useSseWakeup(() => true, loadWorkflow);
-
-  const handleResolveAllIncidents = async () => {
-    if (!canResolveIncidents || !data?.openIncidents?.length) return;
-    if (!confirm(`Bạn có chắc muốn đóng và giải quyết TOÀN BỘ ${data.openIncidents.length} sự cố đang mở?`)) {
-      return;
-    }
-    setResolvingAll(true);
-    try {
-      await apiFetch("/api/incidents/resolve-all", { method: "POST" });
-      await loadWorkflow();
-    } catch (err: unknown) {
-      alert((err as Error).message);
-    } finally {
-      setResolvingAll(false);
-    }
-  };
-
-  const getNodeIcon = (id: string) => {
-    const iconSize = 20;
-    switch (id) {
-      case "inbound":
-        return <Radio size={iconSize} />;
-      case "debounce":
-        return <Layers size={iconSize} />;
-      case "policy":
-        return <ShieldCheck size={iconSize} />;
-      case "context":
-        return <BookOpen size={iconSize} />;
-      case "llm":
-        return <Cpu size={iconSize} />;
-      case "guards":
-        return <CheckCircle2 size={iconSize} />;
-      case "typing":
-        return <Keyboard size={iconSize} />;
-      case "delivery":
-        return <Send size={iconSize} />;
-      default:
-        return <Workflow size={iconSize} />;
-    }
-  };
-
-  const renderStatusBadge = (status: WorkflowNode["status"]) => {
-    const badgeStyle: React.CSSProperties = {
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "6px",
-      padding: "3px 10px",
-      borderRadius: "9999px",
-      fontSize: "0.75rem",
-      fontWeight: 600,
-    };
-
-    switch (status) {
-      case "active":
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: "#dbeafe", color: "#1e40af", border: "1px solid #93c5fd" }}>
-            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#2563eb", display: "inline-block" }}></span>
-            Đang xử lý
-          </span>
-        );
-      case "waiting":
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: "#fef3c7", color: "#92400e", border: "1px solid #fcd34d" }}>
-            <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#d97706", display: "inline-block" }}></span>
-            Đang chờ
-          </span>
-        );
-      case "completed":
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: "#d1fae5", color: "#065f46", border: "1px solid #6ee7b7" }}>
-            <CheckCheck size={14} color="#059669" />
-            Đã xong
-          </span>
-        );
-      case "error":
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: "#fee2e2", color: "#991b1b", border: "1px solid #fca5a5" }}>
-            <AlertTriangle size={14} color="#dc2626" />
-            Sự cố
-          </span>
-        );
-      default:
-        return (
-          <span style={{ ...badgeStyle, backgroundColor: "#f1f5f9", color: "#475569", border: "1px solid #e2e8f0" }}>
-            <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#94a3b8", display: "inline-block" }}></span>
-            Sẵn sàng
-          </span>
-        );
-    }
-  };
-
-  if (loading && !data) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "350px", gap: "10px", color: "#64748b" }}>
-        <Loader2 size={24} className="animate-spin" />
-        <span style={{ fontWeight: 500, fontSize: "1rem" }}>Đang tải sơ đồ luồng workflow...</span>
-      </div>
-    );
+function getStageIcon(stageId: WorkflowStageId, size = 16) {
+  switch (stageId) {
+    case "inbound":
+      return <Inbox size={size} />;
+    case "policy":
+      return <ShieldCheck size={size} />;
+    case "debounce":
+      return <Layers size={size} />;
+    case "ai":
+      return <Sparkles size={size} />;
+    case "typing":
+      return <Keyboard size={size} />;
+    case "delivery":
+      return <Send size={size} />;
+    default:
+      return <Activity size={size} />;
   }
-
-  if (error && !data) {
-    return (
-      <div style={{ padding: "24px", maxWidth: "600px", margin: "32px auto", backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "12px", color: "#991b1b" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: "bold", fontSize: "1.1rem", marginBottom: "8px" }}>
-          <AlertTriangle size={20} color="#dc2626" />
-          Không thể tải luồng xử lý
-        </div>
-        <p style={{ fontSize: "0.875rem", marginBottom: "16px" }}>{error}</p>
-        <button
-          onClick={loadWorkflow}
-          style={{ padding: "8px 16px", backgroundColor: "#dc2626", color: "#ffffff", borderRadius: "8px", border: "none", fontWeight: 600, cursor: "pointer" }}
-        >
-          Thử lại
-        </button>
-      </div>
-    );
-  }
-
-  const nodes = data?.nodes || [];
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "20px", paddingBottom: "40px" }}>
-      {/* 1. Header & Live Telemetry Bar */}
-      <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", padding: "20px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px", paddingBottom: "16px", borderBottom: "1px solid #f1f5f9" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <div style={{ padding: "10px", backgroundColor: "#eff6ff", color: "#2563eb", borderRadius: "12px", border: "1px solid #dbeafe" }}>
-              <Workflow size={24} />
-            </div>
-            <div>
-              <h1 style={{ margin: 0, fontSize: "1.35rem", fontWeight: "bold", color: "#0f172a" }}>
-                Luồng xử lý AI (Workflow Graph)
-              </h1>
-              <div style={{ fontSize: "0.85rem", color: "#64748b", marginTop: "2px" }}>
-                Sơ đồ thời gian thực: tiếp nhận tin nhắn, hàng đợi, suy luận AI, kiểm tra an toàn đến gõ phím & gửi
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-            {/* View switcher */}
-            <div style={{ display: "inline-flex", padding: "3px", backgroundColor: "#f1f5f9", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-              <button
-                onClick={() => setViewMode("graph")}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: "8px",
-                  fontSize: "0.8rem",
-                  fontWeight: viewMode === "graph" ? 700 : 500,
-                  border: "none",
-                  cursor: "pointer",
-                  backgroundColor: viewMode === "graph" ? "#ffffff" : "transparent",
-                  color: viewMode === "graph" ? "#1d4ed8" : "#64748b",
-                  boxShadow: viewMode === "graph" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                }}
-              >
-                Sơ đồ n8n
-              </button>
-              <button
-                onClick={() => setViewMode("trace")}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: "8px",
-                  fontSize: "0.8rem",
-                  fontWeight: viewMode === "trace" ? 700 : 500,
-                  border: "none",
-                  cursor: "pointer",
-                  backgroundColor: viewMode === "trace" ? "#ffffff" : "transparent",
-                  color: viewMode === "trace" ? "#1d4ed8" : "#64748b",
-                  boxShadow: viewMode === "trace" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-                }}
-              >
-                Nhật ký vết (Trace)
-              </button>
-            </div>
-
-            <button
-              onClick={loadWorkflow}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-                padding: "7px 12px",
-                fontSize: "0.8rem",
-                fontWeight: 600,
-                color: "#334155",
-                backgroundColor: "#ffffff",
-                border: "1px solid #cbd5e1",
-                borderRadius: "10px",
-                cursor: "pointer",
-              }}
-            >
-              <RefreshCw size={14} />
-              Làm mới
-            </button>
-
-            <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "7px 12px", backgroundColor: "#ecfdf5", color: "#065f46", border: "1px solid #a7f3d0", borderRadius: "10px", fontSize: "0.8rem", fontWeight: 600 }}>
-              <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981", display: "inline-block" }}></span>
-              Thời gian thực
-            </div>
-          </div>
-        </div>
-
-        {/* Real-time Status Callout */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "12px", marginTop: "16px" }}>
-          {/* Waiting For / Stage */}
-          <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", display: "flex", alignItems: "flex-start", gap: "12px" }}>
-            <div style={{ padding: "8px", backgroundColor: "#16a34a", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <Activity size={18} />
-            </div>
-            <div style={{ minWidth: 0, flex: 1 }}>
-              <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#15803d", letterSpacing: "0.05em", marginBottom: "2px" }}>
-                Đang xử lý & Chờ đợi
-              </div>
-              <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#0f172a", wordBreak: "break-word" }}>
-                {data?.waitingReason}
-              </div>
-              {data?.activeConversation && (
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.8rem", color: "#475569", marginTop: "4px" }}>
-                  <User size={14} color="#2563eb" />
-                  <span>Đối tượng: <strong style={{ color: "#0f172a" }}>{data.activeConversation.title}</strong></span>
-                  <Link
-                    to={`/inbox/${data.activeConversation.id}`}
-                    style={{ color: "#2563eb", textDecoration: "underline", display: "inline-flex", alignItems: "center", gap: "2px" }}
-                  >
-                    Xem chat <ChevronRight size={12} />
-                  </Link>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Incidents / Alert bar */}
-          {data?.openIncidents && data.openIncidents.length > 0 ? (
-            <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#fef2f2", border: "1px solid #fecaca", display: "flex", alignItems: "flex-start", gap: "12px" }}>
-              <div style={{ padding: "8px", backgroundColor: "#dc2626", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <AlertTriangle size={18} />
-              </div>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#b91c1c", letterSpacing: "0.05em" }}>
-                    Cảnh báo sự cố ({data.openIncidents.length})
-                  </div>
-                  {canResolveIncidents ? (
-                    <button
-                      onClick={handleResolveAllIncidents}
-                      disabled={resolvingAll}
-                      style={{
-                        padding: "3px 8px",
-                        fontSize: "0.75rem",
-                        fontWeight: 600,
-                        backgroundColor: "#fee2e2",
-                        color: "#991b1b",
-                        border: "1px solid #f87171",
-                        borderRadius: "6px",
-                        cursor: resolvingAll ? "wait" : "pointer",
-                      }}
-                    >
-                      {resolvingAll ? "Đang đóng..." : "Đóng tất cả"}
-                    </button>
-                  ) : (
-                    <span
-                      title="Chỉ Quản trị viên hoặc Chủ sở hữu mới có thể đóng sự cố"
-                      style={{ fontSize: "0.75rem", color: "#991b1b", fontWeight: 600 }}
-                    >
-                      Chỉ xem
-                    </span>
-                  )}
-                </div>
-                <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#7f1d1d", marginTop: "2px", wordBreak: "break-word" }}>
-                  {data.openIncidents[0]!.title}
-                </div>
-                <div style={{ marginTop: "4px" }}>
-                  <Link
-                    to="/incidents"
-                    style={{ fontSize: "0.75rem", fontWeight: 600, color: "#dc2626", textDecoration: "underline", display: "inline-flex", alignItems: "center", gap: "4px" }}
-                  >
-                    Đối soát trong trang Sự cố <ChevronRight size={12} />
-                  </Link>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div style={{ padding: "14px", borderRadius: "12px", backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", display: "flex", alignItems: "flex-start", gap: "12px" }}>
-              <div style={{ padding: "8px", backgroundColor: "#059669", color: "#ffffff", borderRadius: "8px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <ShieldCheck size={18} />
-              </div>
-              <div>
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#047857", letterSpacing: "0.05em", marginBottom: "2px" }}>
-                  Tình trạng kiểm soát
-                </div>
-                <div style={{ fontSize: "0.9rem", fontWeight: 700, color: "#0f172a" }}>
-                  Không có sự cố nào bị kẹt
-                </div>
-                <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
-                  Tất cả 8 cổng xử lý đang sẵn sàng và hoạt động bình thường
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 2. Visual Workflow Graph (n8n canvas style with rich dark theme) */}
-      {viewMode === "graph" ? (
-        <div
-          style={{
-            position: "relative",
-            backgroundColor: "#0f172a",
-            border: "1px solid #1e293b",
-            borderRadius: "20px",
-            padding: "24px",
-            boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.3)",
-            overflowX: "auto",
-            color: "#f8fafc",
-          }}
-        >
-          {/* Canvas header banner */}
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px", paddingBottom: "12px", borderBottom: "1px solid #1e293b" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", fontWeight: 700, color: "#94a3b8" }}>
-              <Sparkles size={16} color="#38bdf8" />
-              <span>SƠ ĐỒ TIẾN TRÌNH XỬ LÝ (PIPELINE DAG - 8 NODES)</span>
-            </div>
-            <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
-              Bấm vào từng Node để xem chi tiết thông số và dữ liệu thô
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "28px", minWidth: "980px" }}>
-            {/* Giai đoạn 1: Nodes 1 -> 4 */}
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#38bdf8", marginBottom: "12px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#38bdf8", display: "inline-block" }}></span>
-                Giai đoạn 1: Tiếp nhận tin nhắn & Chuẩn bị ngữ cảnh
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px", position: "relative" }}>
-                {nodes.slice(0, 4).map((node, idx) => (
-                  <div key={node.id} style={{ position: "relative" }}>
-                    <NodeCardComponent
-                      node={node}
-                      icon={getNodeIcon(node.id)}
-                      statusBadge={renderStatusBadge(node.status)}
-                      isSelected={selectedNode?.id === node.id}
-                      onClick={() => setSelectedNode(node)}
-                    />
-                    {idx < 3 && (
-                      <div
-                        style={{
-                          position: "absolute",
-                          right: "-12px",
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                          zIndex: 10,
-                          color: "#64748b",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        <ArrowRight size={18} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Connecting Transition Connector */}
-            <div style={{ display: "flex", justifyContent: "flex-end", paddingRight: "40px" }}>
-              <div
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  fontSize: "0.75rem",
-                  fontFamily: "monospace",
-                  color: "#a5b4fc",
-                  backgroundColor: "#1e1b4b",
-                  border: "1px solid #4338ca",
-                  padding: "4px 14px",
-                  borderRadius: "9999px",
-                }}
-              >
-                <ArrowRight size={14} color="#818cf8" />
-                <span>Nạp Prompt & Lịch sử sang Giai đoạn 2 (Inference & Gửi)</span>
-              </div>
-            </div>
-
-            {/* Giai đoạn 2: Nodes 5 -> 8 */}
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", color: "#34d399", marginBottom: "12px" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#34d399", display: "inline-block" }}></span>
-                Giai đoạn 2: Suy luận AI, Chuẩn hóa gộp/tách tin & Gõ phím gửi
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px", position: "relative" }}>
-                {nodes.slice(4, 8).map((node, idx) => (
-                  <div key={node.id} style={{ position: "relative" }}>
-                    <NodeCardComponent
-                      node={node}
-                      icon={getNodeIcon(node.id)}
-                      statusBadge={renderStatusBadge(node.status)}
-                      isSelected={selectedNode?.id === node.id}
-                      onClick={() => setSelectedNode(node)}
-                    />
-                    {idx < 3 && (
-                      <div
-                        style={{
-                          position: "absolute",
-                          right: "-12px",
-                          top: "50%",
-                          transform: "translateY(-50%)",
-                          zIndex: 10,
-                          color: "#64748b",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        <ArrowRight size={18} />
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* 3. Live Execution Trace View */
-        <div style={{ backgroundColor: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "16px", padding: "24px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "16px", borderBottom: "1px solid #f1f5f9", marginBottom: "16px" }}>
-            <div>
-              <h2 style={{ margin: 0, fontSize: "1.15rem", fontWeight: "bold", color: "#0f172a" }}>
-                Vết xử lý gần nhất (Execution Trace)
-              </h2>
-              <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
-                Chi tiết dữ liệu chuyển giao qua từng bước của tin nhắn gần nhất
-              </div>
-            </div>
-            <div style={{ fontSize: "0.8rem", color: "#475569", fontFamily: "monospace", padding: "4px 10px", backgroundColor: "#f1f5f9", borderRadius: "8px" }}>
-              Model: {data?.latestTrace.aiModel || "auto"}
-            </div>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-            {/* Step 1 */}
-            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
-              <div style={{ padding: "10px", backgroundColor: "#dbeafe", color: "#1d4ed8", borderRadius: "10px", height: "fit-content" }}>
-                <Radio size={20} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
-                    1. Khách hàng gửi tin nhắn đến
-                  </div>
-                  <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
-                    {data?.latestTrace.inboundTime ? new Date(data.latestTrace.inboundTime).toLocaleTimeString("vi-VN") : "—"}
-                  </div>
-                </div>
-                <div style={{ marginTop: "8px", padding: "12px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.85rem", color: "#1e293b", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-                  {data?.latestTrace.inboundText || "Chưa có nội dung tin nhắn gần đây"}
-                </div>
-              </div>
-            </div>
-
-            {/* Step 2 */}
-            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
-              <div style={{ padding: "10px", backgroundColor: "#f3e8ff", color: "#7e22ce", borderRadius: "10px", height: "fit-content" }}>
-                <Cpu size={20} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
-                    2. Mô hình AI suy luận & Tạo câu trả lời
-                  </div>
-                  <div style={{ fontSize: "0.8rem", color: "#475569" }}>
-                    Thời gian phản hồi: <strong style={{ color: "#0f172a" }}>{data?.latestTrace.aiLatencyMs || 0}ms</strong>
-                  </div>
-                </div>
-                <div style={{ marginTop: "6px", fontSize: "0.8rem", color: "#64748b" }}>
-                  Đã kiểm tra an toàn, áp dụng quy tắc gộp toàn bộ danh sách sản phẩm thành 1 tin nhắn và tách câu hỏi gợi mở kết thúc làm tin nhắn thứ 2.
-                </div>
-              </div>
-            </div>
-
-            {/* Step 3 */}
-            <div style={{ padding: "16px", backgroundColor: "#f8fafc", borderRadius: "12px", border: "1px solid #e2e8f0", display: "flex", gap: "14px" }}>
-              <div style={{ padding: "10px", backgroundColor: "#d1fae5", color: "#047857", borderRadius: "10px", height: "fit-content" }}>
-                <Send size={20} />
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <div style={{ fontWeight: 700, fontSize: "0.95rem", color: "#0f172a" }}>
-                    3. Gõ phím ảo & Đã gửi đến khách hàng
-                  </div>
-                  <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#065f46", backgroundColor: "#d1fae5", padding: "2px 8px", borderRadius: "6px" }}>
-                    {data?.latestTrace.outboundStatus || "CONFIRMED"}
-                  </div>
-                </div>
-                <div style={{ marginTop: "8px", padding: "12px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "0.85rem", color: "#1e293b", fontFamily: "monospace", whiteSpace: "pre-wrap" }}>
-                  {data?.latestTrace.outboundText || "Chưa có nội dung tin gửi gần đây"}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* 4. Selected Node Inspector Drawer (Slide-out panel) */}
-      {selectedNode && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            right: 0,
-            bottom: 0,
-            width: "440px",
-            maxWidth: "90vw",
-            backgroundColor: "#ffffff",
-            borderLeft: "1px solid #cbd5e1",
-            boxShadow: "-8px 0 25px rgba(0,0,0,0.2)",
-            zIndex: 100,
-            display: "flex",
-            flexDirection: "column",
-            justifyContent: "space-between",
-            padding: "24px",
-            overflowY: "auto",
-          }}
-        >
-          <div>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingBottom: "16px", borderBottom: "1px solid #e2e8f0" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <div style={{ padding: "8px", backgroundColor: "#eff6ff", color: "#2563eb", borderRadius: "10px" }}>
-                  {getNodeIcon(selectedNode.id)}
-                </div>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: "bold", color: "#0f172a" }}>
-                    {selectedNode.name}
-                  </h3>
-                  <div style={{ fontSize: "0.75rem", color: "#64748b", fontFamily: "monospace" }}>
-                    {selectedNode.subtitle}
-                  </div>
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedNode(null)}
-                style={{ background: "none", border: "none", color: "#94a3b8", cursor: "pointer", padding: "4px" }}
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "18px", marginTop: "20px" }}>
-              {/* Status */}
-              <div>
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                  Trạng thái hiện tại
-                </div>
-                <div>{renderStatusBadge(selectedNode.status)}</div>
-              </div>
-
-              {/* Activity */}
-              <div>
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                  Hoạt động tức thì
-                </div>
-                <div style={{ padding: "12px", backgroundColor: "#f8fafc", borderRadius: "10px", fontSize: "0.8rem", fontFamily: "monospace", color: "#1e293b", border: "1px solid #e2e8f0", wordBreak: "break-word" }}>
-                  {selectedNode.activity}
-                </div>
-              </div>
-
-              {/* Metrics */}
-              <div>
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                  Chỉ số thời gian thực
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-                  {selectedNode.metrics.map((m, i) => (
-                    <div key={i} style={{ padding: "10px", backgroundColor: "#f8fafc", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: "0.75rem", color: "#64748b" }}>{m.label}</div>
-                      <div style={{ fontSize: "0.95rem", fontWeight: "bold", color: "#0f172a", marginTop: "2px" }}>
-                        {m.value}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Technical Details JSON */}
-              <div>
-                <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#64748b", letterSpacing: "0.05em", marginBottom: "6px" }}>
-                  Chi tiết cấu hình & Thông số
-                </div>
-                <pre style={{ padding: "12px", backgroundColor: "#0f172a", color: "#38bdf8", borderRadius: "10px", fontSize: "0.75rem", fontFamily: "monospace", overflowX: "auto", maxHeight: "200px" }}>
-                  {JSON.stringify(selectedNode.details, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ paddingTop: "16px", borderTop: "1px solid #e2e8f0" }}>
-            <button
-              onClick={() => setSelectedNode(null)}
-              style={{
-                width: "100%",
-                padding: "10px",
-                backgroundColor: "#f1f5f9",
-                color: "#334155",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                borderRadius: "10px",
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              Đóng chi tiết
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
-interface NodeCardProps {
-  node: WorkflowNode;
-  icon: React.ReactNode;
-  statusBadge: React.ReactNode;
-  isSelected: boolean;
-  onClick: () => void;
 }
 
-const NodeCardComponent: React.FC<NodeCardProps> = ({ node, icon, statusBadge, isSelected, onClick }) => {
-  const isGlowing = node.status === "active";
-  const isError = node.status === "error";
+function getInitials(name: string): string {
+  const clean = name.trim();
+  if (!clean) return "KH";
+  const parts = clean.split(/\s+/);
+  if (parts.length === 1) return Array.from(parts[0])[0]?.toUpperCase() || "KH";
+  const first = Array.from(parts[parts.length - 2])[0] || "";
+  const second = Array.from(parts[parts.length - 1])[0] || "";
+  return (first + second).toUpperCase();
+}
+
+export const WorkflowPage: React.FC = () => {
+  const {
+    conversations,
+    selectedConversationId,
+    setSelectedConversationId,
+    selectedStageId,
+    setSelectedStageId,
+    selectedVersion,
+    setSelectedVersion,
+    viewData,
+    listLoading,
+    detailLoading,
+    error,
+    query,
+    setQuery,
+    filter,
+    setFilter,
+    tab,
+    setTab,
+    isPaused,
+    togglePause,
+    refresh,
+    notice,
+    setNotice,
+  } = useWorkflowData();
+
+  const [copied, setCopied] = useState(false);
+
+  // Filter conversations based on query and filter tab
+  const filteredConversations = useMemo(() => {
+    const q = query.trim().toLocaleLowerCase("vi");
+    return conversations.filter((item) => {
+      const name = (item.customer?.name || item.conversation?.title || "").toLocaleLowerCase("vi");
+      const lastText = (item.latestInboundMessage?.text || "").toLocaleLowerCase("vi");
+      const matchQuery = !q || name.includes(q) || lastText.includes(q);
+      if (!matchQuery) return false;
+
+      if (filter === "active") return itemIsActive(item);
+      if (filter === "attention") return itemNeedsAttention(item);
+      return true;
+    });
+  }, [conversations, query, filter]);
+
+  const activeCount = useMemo(
+    () => conversations.filter(itemIsActive).length,
+    [conversations]
+  );
+
+  const attentionCount = useMemo(
+    () => conversations.filter(itemNeedsAttention).length,
+    [conversations]
+  );
+
+  const currentStage: WorkflowStage | undefined = useMemo(() => {
+    if (!viewData) return undefined;
+    return (
+      viewData.stages.find((s) => s.id === selectedStageId) ||
+      viewData.stages[0]
+    );
+  }, [viewData, selectedStageId]);
+
+  const handleCopyCorrelationKey = async () => {
+    if (!viewData?.correlationKey) return;
+    try {
+      await navigator.clipboard.writeText(viewData.correlationKey);
+      setCopied(true);
+      setNotice("Đã sao chép mã lượt.");
+      setTimeout(() => {
+        setCopied(false);
+        setNotice(null);
+      }, 2500);
+    } catch {
+      setNotice("Mã lượt: " + viewData.correlationKey);
+    }
+  };
 
   return (
-    <div
-      onClick={onClick}
-      style={{
-        width: "100%",
-        padding: "14px",
-        borderRadius: "14px",
-        cursor: "pointer",
-        transition: "all 0.2s ease",
-        backgroundColor: isError ? "rgba(153, 27, 27, 0.2)" : isGlowing ? "rgba(30, 58, 138, 0.3)" : "#1e293b",
-        border: isSelected
-          ? "2px solid #60a5fa"
-          : isError
-          ? "1px solid #f87171"
-          : isGlowing
-          ? "1px solid #60a5fa"
-          : "1px solid #334155",
-        boxShadow: isSelected
-          ? "0 0 16px rgba(96, 165, 250, 0.5)"
-          : isGlowing
-          ? "0 0 12px rgba(59, 130, 246, 0.3)"
-          : "none",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <div
-            style={{
-              padding: "7px",
-              borderRadius: "8px",
-              backgroundColor: isError ? "#dc2626" : isGlowing ? "#2563eb" : "#334155",
-              color: "#ffffff",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
+    <div className="wf">
+      {/* Header */}
+      <header className="wf-heading">
+        <div>
+          <div className="wf-eyebrow">Giám sát thời gian thực</div>
+          <h1>Theo dõi trả lời</h1>
+          <p>
+            Tiến trình một khách · đúng lượt · từ lúc nhận đến khi xác nhận gửi trên Messenger
+          </p>
+        </div>
+        <div className="wf-toolbar">
+          <button
+            className="wf-button"
+            onClick={refresh}
+            disabled={listLoading || detailLoading}
+            title="Tải lại danh sách và lượt hiện tại"
           >
-            {icon}
+            <RefreshCw size={14} className={listLoading ? "animate-spin" : ""} />
+            Làm mới
+          </button>
+          <button
+            className={`wf-button ${isPaused ? "primary" : ""}`}
+            onClick={togglePause}
+            title={isPaused ? "Bấm để tiếp tục cập nhật màn hình" : "Bấm để dừng cập nhật màn hình (không dừng bot)"}
+          >
+            {isPaused ? <Play size={14} /> : <Pause size={14} />}
+            {isPaused ? "Tiếp tục cập nhật" : "Dừng cập nhật"}
+          </button>
+        </div>
+      </header>
+
+      {/* Notice Banner */}
+      {notice && (
+        <div className="wf-notice" role="alert">
+          <span>{notice}</span>
+          <button
+            className="wf-filter"
+            style={{ padding: "2px 6px" }}
+            onClick={() => setNotice(null)}
+          >
+            Đóng
+          </button>
+        </div>
+      )}
+
+      {/* Error Alert */}
+      {error && (
+        <div className="wf-warning wf-error" role="alert">
+          <AlertCircle size={16} />
+          <div>{error}</div>
+        </div>
+      )}
+
+      {/* Stats Cards */}
+      <section className="wf-stats" aria-label="Thống kê hội thoại">
+        <div className="wf-stat">
+          <div>
+            <strong>{conversations.length}</strong>
+            <span>Hội thoại đã tải</span>
           </div>
-          <span style={{ fontSize: "0.75rem", fontWeight: 700, color: "#94a3b8" }}>Node {node.step}</span>
-        </div>
-        <div>{statusBadge}</div>
-      </div>
-
-      <div style={{ marginBottom: "8px" }}>
-        <div style={{ fontWeight: 700, fontSize: "0.9rem", color: "#ffffff", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {node.name}
-        </div>
-        <div style={{ fontSize: "0.75rem", color: "#94a3b8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "2px" }}>
-          {node.subtitle}
-        </div>
-      </div>
-
-      <div
-        style={{
-          padding: "8px",
-          borderRadius: "8px",
-          backgroundColor: "rgba(15, 23, 42, 0.7)",
-          border: "1px solid #334155",
-          fontSize: "0.75rem",
-          fontFamily: "monospace",
-          color: "#cbd5e1",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          marginBottom: "10px",
-        }}
-      >
-        {node.activity}
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px", paddingTop: "8px", borderTop: "1px solid #334155", fontSize: "0.75rem" }}>
-        {node.metrics.slice(0, 2).map((m, i) => (
-          <div key={i} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            <span style={{ color: "#94a3b8" }}>{m.label}:</span>{" "}
-            <strong style={{ color: "#f8fafc" }}>{m.value}</strong>
+          <div className="wf-stat-icon">
+            <Inbox size={20} />
           </div>
-        ))}
+        </div>
+        <div className="wf-stat">
+          <div>
+            <strong>{activeCount}</strong>
+            <span>Đang trong luồng</span>
+          </div>
+          <div className="wf-stat-icon">
+            <Activity size={20} />
+          </div>
+        </div>
+        <div className="wf-stat">
+          <div>
+            <strong>{attentionCount}</strong>
+            <span>Cần kiểm tra</span>
+          </div>
+          <div className="wf-stat-icon">
+            <AlertTriangle size={20} />
+          </div>
+        </div>
+      </section>
+
+      {/* 3-Column Workspace */}
+      <div className="wf-workspace">
+        {/* Left Column: Conversation List */}
+        <aside className="wf-sidebar" aria-label="Danh sách hội thoại">
+          <div className="wf-panel-head">
+            <h3>Hội thoại</h3>
+            <span className="wf-muted">
+              {filteredConversations.length}/{conversations.length}
+            </span>
+          </div>
+
+          <div className="wf-search">
+            <Search size={14} />
+            <input
+              type="text"
+              placeholder="Tìm theo tên hoặc nội dung tin..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Tìm theo tên hoặc nội dung tin"
+            />
+          </div>
+
+          <div className="wf-filters" role="group" aria-label="Bộ lọc hội thoại">
+            <button
+              className="wf-filter"
+              aria-pressed={filter === "all"}
+              onClick={() => setFilter("all")}
+            >
+              Tất cả ({conversations.length})
+            </button>
+            <button
+              className="wf-filter"
+              aria-pressed={filter === "active"}
+              onClick={() => setFilter("active")}
+            >
+              Đang chạy ({activeCount})
+            </button>
+            <button
+              className="wf-filter"
+              aria-pressed={filter === "attention"}
+              onClick={() => setFilter("attention")}
+            >
+              Cần xem ({attentionCount})
+            </button>
+          </div>
+
+          <div className="wf-list">
+            {listLoading && conversations.length === 0 ? (
+              <div className="wf-empty">Đang tải danh sách...</div>
+            ) : filteredConversations.length === 0 ? (
+              <div className="wf-empty">Không có hội thoại phù hợp.</div>
+            ) : (
+              filteredConversations.map((item) => {
+                const id = item.conversation.id;
+                const name = item.customer?.name || item.conversation?.title || "Khách hàng Messenger";
+                const isSelected = selectedConversationId === id;
+                const needsAtt = itemNeedsAttention(item);
+                const isActive = itemIsActive(item);
+                const previewText = item.latestInboundMessage?.text || "Chưa có tin nhắn mới";
+
+                return (
+                  <button
+                    key={id}
+                    className="wf-person"
+                    aria-pressed={isSelected}
+                    onClick={() => setSelectedConversationId(id)}
+                  >
+                    <div className="wf-person-line">
+                      <span className="wf-avatar">{getInitials(name)}</span>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div className="wf-person-name">{name}</div>
+                        <div className="wf-person-sub">
+                          {shortStatus(item.conversation.status, item.conversation.manualMode)}
+                        </div>
+                      </div>
+                      <span
+                        className={`wf-dot ${
+                          needsAtt ? "warning" : isActive ? "active" : ""
+                        }`}
+                        title={
+                          needsAtt
+                            ? "Hội thoại có lỗi hoặc bị chặn"
+                            : isActive
+                            ? "Đang trong luồng xử lý"
+                            : "Bình thường"
+                        }
+                      />
+                    </div>
+                    <div className="wf-person-preview">{previewText}</div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </aside>
+
+        {/* Center Column: Workflow Timeline & Details */}
+        <main className="wf-main">
+          {detailLoading && !viewData ? (
+            <div className="wf-skeleton" />
+          ) : !viewData ? (
+            <section className="wf-panel wf-current">
+              <div className="wf-empty">
+                Chọn một hội thoại bên trái để xem tiến trình xử lý.
+              </div>
+            </section>
+          ) : (
+            <>
+              {/* Current Conversation Banner */}
+              <section className="wf-panel wf-current">
+                <div className="wf-current-top">
+                  <div className="wf-person-line">
+                    <span className="wf-avatar">{getInitials(viewData.name)}</span>
+                    <div>
+                      <h2>{viewData.name}</h2>
+                      <div className="wf-muted">
+                        Messenger · Lượt #{viewData.version}{" "}
+                        {!viewData.current && "(Lượt lịch sử)"}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    {viewData.versions.length > 1 ? (
+                      <select
+                        className="wf-version-select"
+                        value={viewData.version}
+                        onChange={(e) => setSelectedVersion(Number(e.target.value))}
+                        aria-label="Chọn lượt xử lý"
+                      >
+                        {viewData.versions.map((v) => (
+                          <option key={v} value={v}>
+                            Lượt #{v} {v === viewData.versions[0] ? "(Mới nhất)" : ""}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="wf-version">Lượt mới nhất</span>
+                    )}
+                  </div>
+                </div>
+
+                <span className={`wf-chip ${viewData.tone}`}>
+                  {stateLabels[viewData.tone]}
+                </span>
+
+                <h2 className="wf-current-title">{viewData.title}</h2>
+
+                <p className="wf-current-description">
+                  {viewData.hasUncertain
+                    ? "Chưa chắc tin đã gửi. Cần kiểm tra đối soát trước khi thử lại."
+                    : viewData.allExpectedConfirmed
+                    ? "Đã có bằng chứng gửi xuất hiện trên Messenger. Không đồng nghĩa khách đã đọc."
+                    : "Chọn một bước để xem nội dung, trạng thái và lý do đang chờ."}
+                </p>
+
+                <div className="wf-current-bottom">
+                  <span className="wf-muted">
+                    {viewData.current ? "Đang theo dõi lượt hiện tại" : `Đang xem lại lượt #${viewData.version}`}
+                  </span>
+                  <Link
+                    to={`/inbox/${encodeURIComponent(viewData.conversationId)}`}
+                    className="wf-button"
+                  >
+                    <ExternalLink size={13} />
+                    Mở hội thoại
+                  </Link>
+                </div>
+              </section>
+
+              {/* Step-by-Step Flow */}
+              <section className="wf-panel">
+                <div className="wf-panel-head">
+                  <h3>Hành trình trả lời</h3>
+                  <span className="wf-muted">Đúng khách · đúng lượt</span>
+                </div>
+
+                <div className="wf-flow-wrap">
+                  <div className="wf-flow">
+                    {viewData.stages.map((stage) => {
+                      const isSelected = currentStage?.id === stage.id;
+                      return (
+                        <button
+                          key={stage.id}
+                          className={`wf-stage ${stage.state}`}
+                          aria-pressed={isSelected}
+                          onClick={() => setSelectedStageId(stage.id)}
+                        >
+                          <span className="wf-stage-icon">
+                            {getStageIcon(stage.id, 16)}
+                          </span>
+                          <strong>{stage.label}</strong>
+                          <span>{stateLabels[stage.state]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="wf-flow-note">
+                  <HelpCircle size={12} />
+                  Màu xám: chưa có bằng chứng, không phải đã hoàn tất.
+                </div>
+              </section>
+
+              {/* Tabs: Messages & Responses vs Event Timeline */}
+              <section className="wf-panel">
+                <div className="wf-tabs" role="tablist">
+                  <button
+                    className="wf-tab"
+                    role="tab"
+                    aria-pressed={tab === "messages"}
+                    onClick={() => setTab("messages")}
+                  >
+                    Tin nhắn & câu trả lời
+                  </button>
+                  <button
+                    className="wf-tab"
+                    role="tab"
+                    aria-pressed={tab === "events"}
+                    onClick={() => setTab("events")}
+                  >
+                    Nhật ký theo thời gian ({viewData.events.length})
+                  </button>
+                </div>
+
+                {tab === "events" ? (
+                  <ol className="wf-timeline">
+                    {viewData.events.length === 0 ? (
+                      <div className="wf-empty">Chưa có sự kiện nào cho lượt này.</div>
+                    ) : (
+                      viewData.events.map((e) => (
+                        <li key={e.id}>
+                          <time>{formatTime(e.createdAt)}</time>
+                          <div>{eventLabel(e.type)}</div>
+                        </li>
+                      ))
+                    )}
+                  </ol>
+                ) : (
+                  <div className="wf-messages">
+                    {viewData.messages.length === 0 ? (
+                      <div className="wf-empty">Chưa có tin nhắn nào trong lượt này.</div>
+                    ) : (
+                      viewData.messages.map((m) => (
+                        <article key={m.id} className="wf-message">
+                          <div className="wf-message-meta">
+                            <span>{viewData.name}</span>
+                            <time>{formatTime(m.timestamp)}</time>
+                          </div>
+                          <div className="wf-bubble">{m.text}</div>
+                          {m.skipReason && !m.skipReason.eligible && (
+                            <div className="wf-output-note" style={{ textAlign: "left", color: "#a96b20" }}>
+                              Kiểm tra: {m.skipReason.humanReadableReason}
+                            </div>
+                          )}
+                        </article>
+                      ))
+                    )}
+
+                    {viewData.actions.length > 0 ? (
+                      viewData.actions.map((a, idx) => {
+                        const isSent = ["CONFIRMED", "SENT"].includes(String(a.status));
+                        const isUncertain = ["SEND_UNCERTAIN", "UNCONFIRMED"].includes(String(a.status));
+                        const statusText = isSent
+                          ? "Đã xác nhận gửi"
+                          : isUncertain
+                          ? "Chưa rõ kết quả gửi"
+                          : a.status === "TYPING"
+                          ? "Đang soạn tin"
+                          : "Chưa gửi";
+
+                        return (
+                          <article key={a.id || a.actionId} className="wf-message outbound">
+                            <div className="wf-message-meta">
+                              <span>Trợ lý · Tin {idx + 1}</span>
+                              <span
+                                style={{
+                                  color: isSent ? "#267656" : isUncertain ? "#9b6112" : "inherit",
+                                  fontWeight: isSent || isUncertain ? 600 : "normal",
+                                }}
+                              >
+                                {statusText}
+                              </span>
+                            </div>
+                            <div className="wf-bubble">{a.text}</div>
+                          </article>
+                        );
+                      })
+                    ) : (
+                      <div className="wf-empty">
+                        {viewData.tone === "active"
+                          ? "Đang chuẩn bị câu trả lời từ AI…"
+                          : "Chưa có câu trả lời của lượt này."}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </section>
+            </>
+          )}
+        </main>
+
+        {/* Right Column: Step Inspector */}
+        <aside className="wf-inspector" aria-label="Chi tiết bước xử lý">
+          <div className="wf-eyebrow">Chi tiết bước</div>
+          {currentStage ? (
+            <>
+              <div className="wf-inspector-symbol">
+                {getStageIcon(currentStage.id, 22)}
+              </div>
+              <h2>{currentStage.label}</h2>
+              <p>{currentStage.description}</p>
+              <div className={`wf-chip ${currentStage.state}`}>
+                {stateLabels[currentStage.state]}
+              </div>
+
+              <div className="wf-evidence">{currentStage.evidence}</div>
+
+              <div className="wf-rule" />
+
+              <h3>Thông tin của lượt này</h3>
+              <dl className="wf-keyvalues">
+                <div>
+                  <dt>Khách hàng</dt>
+                  <dd>{viewData?.name || "Chưa có"}</dd>
+                </div>
+                <div>
+                  <dt>Lượt xử lý</dt>
+                  <dd>
+                    #{viewData?.version}{" "}
+                    {viewData?.current ? "(Mới nhất)" : ""}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Mô hình AI</dt>
+                  <dd>{viewData?.run?.model || "Chưa có"}</dd>
+                </div>
+                <div>
+                  <dt>Token đầu vào</dt>
+                  <dd>{viewData?.run?.promptTokens ?? "Chưa có"}</dd>
+                </div>
+                <div>
+                  <dt>Token đầu ra</dt>
+                  <dd>{viewData?.run?.completionTokens ?? "Chưa có"}</dd>
+                </div>
+                <div>
+                  <dt>Độ trễ AI</dt>
+                  <dd>
+                    {viewData?.run?.latencyMs
+                      ? `${viewData.run.latencyMs} ms`
+                      : "Chưa có"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Xác nhận gửi</dt>
+                  <dd>
+                    {viewData
+                      ? `${viewData.confirmedCount}/${viewData.expectedCount ?? "?"}`
+                      : "0"}
+                  </dd>
+                </div>
+              </dl>
+
+              <div className="wf-rule" />
+
+              {viewData && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <Link
+                    to={`/inbox/${encodeURIComponent(viewData.conversationId)}`}
+                    className="wf-button"
+                    style={{ width: "100%" }}
+                  >
+                    <ExternalLink size={13} />
+                    Mở hội thoại đầy đủ
+                  </Link>
+
+                  <button
+                    className="wf-button"
+                    style={{ width: "100%" }}
+                    onClick={handleCopyCorrelationKey}
+                  >
+                    {copied ? <Check size={13} /> : <Copy size={13} />}
+                    {copied ? "Đã sao chép" : "Sao chép mã lượt"}
+                  </button>
+                </div>
+              )}
+
+              <div className="wf-rule" />
+
+              <details>
+                <summary>Chi tiết kỹ thuật (JSON)</summary>
+                <div className="wf-code">
+                  {JSON.stringify(
+                    {
+                      correlationKey: viewData?.correlationKey,
+                      runStatus: viewData?.run?.status,
+                      manifest: viewData?.manifest,
+                      skipReason: viewData?.policy,
+                      actionsCount: viewData?.actions.length,
+                    },
+                    null,
+                    2
+                  )}
+                </div>
+              </details>
+
+              <div className="wf-footer">
+                <span>
+                  Phạm vi: API giới hạn 10 AI runs / 10 actions / 30 events.
+                </span>
+              </div>
+            </>
+          ) : (
+            <div className="wf-empty">Chọn một bước để xem chi tiết.</div>
+          )}
+        </aside>
       </div>
     </div>
   );

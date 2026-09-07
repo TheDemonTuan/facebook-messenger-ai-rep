@@ -1,0 +1,547 @@
+<!doctype html><html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><title>Thiết kế mới · Theo dõi trả lời Messenger</title><style>/* Scoped styles. No Tailwind, external fonts, remote icons, or graph framework required. */
+.wf {
+  --wf-bg:#f6f7fa; --wf-surface:#fff; --wf-text:#202435; --wf-muted:#687086;
+  --wf-border:#e5e8ef; --wf-accent:#6654d9; --wf-soft:#f0edff; --wf-success:#267656;
+  --wf-warning:#9b6112; --wf-error:#bf4455;
+  color:var(--wf-text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  line-height:1.5;max-width:1600px;margin:0 auto;padding:4px 0 24px;min-width:0;
+}
+.wf *{box-sizing:border-box}
+.wf button,.wf input,.wf select{font:inherit}
+.wf button,.wf a,.wf input,.wf select{outline-offset:4px}
+.wf :focus-visible{outline:3px solid #9585ef}
+.wf button{cursor:pointer}
+.wf button:disabled{cursor:wait;opacity:.65}
+.wf a{color:var(--wf-accent);text-decoration:none}
+.wf h1,.wf h2,.wf h3,.wf p{margin:0}
+.wf h1{font-size:27px;letter-spacing:-.8px;line-height:1.2;font-weight:720}
+.wf h2{font-size:17px;letter-spacing:-.3px}
+.wf h3{font-size:14px;letter-spacing:-.1px}
+.wf small{font-size:11px;color:var(--wf-muted)}
+.wf-muted{color:var(--wf-muted);font-size:12px}
+.wf-eyebrow{color:var(--wf-muted);font-size:10px;text-transform:uppercase;letter-spacing:1.4px;font-weight:700;margin-bottom:6px}
+.wf-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:20px}
+.wf-heading p{font-size:13px;color:var(--wf-muted);margin-top:7px}
+.wf-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wf-button{border:1px solid var(--wf-border);border-radius:9px;background:white;color:var(--wf-text);padding:8px 11px;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:12px;white-space:nowrap}
+.wf-button:hover{border-color:#b8b2df;background:#faf9ff}
+.wf-button-primary{background:var(--wf-accent);color:white!important;border-color:var(--wf-accent)}
+.wf-button-primary:hover{background:#5545c5}
+.wf-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:6px;font-size:11px;font-weight:650;background:#eef0f5;color:#5e6578}
+.wf-chip::before{content:"";width:5px;height:5px;background:currentColor;border-radius:50%;flex-shrink:0}
+.wf-chip.active{background:#eeeaff;color:#6550ce}
+.wf-chip.done{background:#eaf5ef;color:#287557}
+.wf-chip.waiting,.wf-chip.warning{background:#fff3df;color:#956015}
+.wf-chip.error{background:#fdeef0;color:#b24051}
+.wf-chip.cancelled{background:#eef0f5;color:#646c7f}
+.wf-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));border:1px solid var(--wf-border);border-radius:12px;background:white;margin-bottom:20px;overflow:hidden}
+.wf-stat{padding:15px 20px;border-right:1px solid var(--wf-border);display:flex;align-items:center;justify-content:space-between;gap:10px}
+.wf-stat:last-child{border-right:0}
+.wf-stat strong{font-size:25px;letter-spacing:-1px;font-weight:650}
+.wf-stat span{font-size:12px;color:var(--wf-muted);display:block}
+.wf-stat-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:#f5f4fa;color:#746e93}
+.wf-workspace{display:grid;grid-template-columns:238px minmax(0,1fr) 268px;gap:16px;align-items:start;min-width:0}
+.wf-panel{border:1px solid var(--wf-border);border-radius:12px;background:white;overflow:hidden;min-width:0}
+.wf-panel-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:17px 17px 13px}
+.wf-list{padding:0 8px 10px;max-height:640px;overflow:auto;scrollbar-width:thin}
+.wf-search{display:flex;align-items:center;gap:7px;margin:0 12px 12px;border:1px solid var(--wf-border);border-radius:8px;padding:7px 10px;color:var(--wf-muted)}
+.wf-search input{border:0;background:transparent;outline:none;min-width:0;width:100%;font-size:12px;color:var(--wf-text)}
+.wf-filters{display:flex;gap:4px;padding:0 12px 12px;flex-wrap:wrap}
+.wf-filter{border:0;background:none;border-radius:6px;padding:5px 8px;font-size:11px;color:var(--wf-muted)}
+.wf-filter[aria-pressed=true]{color:var(--wf-accent);background:var(--wf-soft);font-weight:650}
+.wf-person{display:block;width:100%;border:1px solid transparent;background:white;padding:12px 9px;text-align:left;border-radius:9px;margin-bottom:4px}
+.wf-person:hover{background:#f8f8fc}
+.wf-person[aria-pressed=true]{border-color:#ded7fd;background:#f4f1ff}
+.wf-person-line{display:flex;align-items:center;gap:9px;min-width:0}
+.wf-person-name{font-size:12px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wf-avatar{display:grid;place-items:center;flex-shrink:0;width:34px;height:34px;border-radius:11px;background:#e8e7f2;color:#655d82;font-size:11px;font-weight:700}
+.wf-person:nth-child(3n+2) .wf-avatar{background:#f6eadf;color:#967445}
+.wf-person:nth-child(3n) .wf-avatar{background:#e5efeb;color:#56776b}
+.wf-person-sub{font-size:10px;color:var(--wf-muted);margin-top:2px}
+.wf-person-preview{font-size:11px;color:#72788a;margin:8px 0 0 43px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.wf-dot{width:6px;height:6px;border-radius:50%;background:#a8aeba;display:inline-block;margin-left:auto;flex-shrink:0}
+.wf-dot.active{background:var(--wf-accent)}
+.wf-dot.warning{background:#c78326}
+.wf-main{display:flex;flex-direction:column;gap:16px;min-width:0}
+.wf-current{padding:21px}
+.wf-current-top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:18px}
+.wf-current-top .wf-avatar{width:42px;height:42px;font-size:14px;background:#eeeaff;color:#6550ce}
+.wf-current-title{font-size:21px!important;letter-spacing:-.6px!important;margin:4px 0 8px!important}
+.wf-current-description{font-size:12px;color:var(--wf-muted);max-width:600px}
+.wf-current-bottom{display:flex;align-items:center;justify-content:space-between;gap:10px;border-top:1px solid #f0f1f5;margin-top:18px;padding-top:13px;flex-wrap:wrap}
+.wf-version{background:#f8f9fc;border:1px solid var(--wf-border);border-radius:7px;padding:5px 8px;color:#60677b;font-size:11px;max-width:150px}
+.wf-flow-wrap{padding:18px 12px 17px;background:radial-gradient(circle,#d9ddea .7px,transparent .8px);background-size:14px 14px;border-top:1px solid var(--wf-border);border-bottom:1px solid var(--wf-border);overflow-x:auto}
+.wf-flow{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;min-width:490px}
+.wf-stage{position:relative;background:#fff;border:1px solid var(--wf-border);border-radius:9px;padding:12px 3px;display:flex;align-items:center;flex-direction:column;gap:7px;text-align:center;min-width:0;transition:border-color .12s,box-shadow .12s}
+.wf-stage:not(:last-child)::after{content:"›";position:absolute;right:-10px;top:36%;font-size:19px;color:#a6a6bb;pointer-events:none}
+.wf-stage .wf-stage-icon{display:grid;place-items:center;width:29px;height:29px;border-radius:8px;background:#f2f3f7;color:#8d94a3}
+.wf-stage strong{font-size:10px;font-weight:650;white-space:nowrap}
+.wf-stage span:last-child{font-size:9px;color:var(--wf-muted)}
+.wf-stage.done .wf-stage-icon{color:#287557;background:#eaf5ef}
+.wf-stage.active{border-color:#a99bea}
+.wf-stage.active .wf-stage-icon{color:#6654d9;background:#eeeaff}
+.wf-stage.warning .wf-stage-icon,.wf-stage.error .wf-stage-icon{color:#a96b20;background:#fff3df}
+.wf-stage[aria-pressed=true]{border-color:var(--wf-accent);box-shadow:0 0 0 2px #e9e4ff}
+.wf-flow-note{padding:10px 16px;display:flex;gap:6px;align-items:center;color:#767d8e;font-size:10px;background:#fff}
+.wf-trace-metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));padding:0 17px 16px;gap:10px}
+.wf-trace-metrics>div{border-top:1px solid #edeff5;padding-top:10px}
+.wf-trace-metrics small{display:block;margin-bottom:4px;font-size:10px}
+.wf-trace-metrics strong{font-size:14px;font-weight:650}
+.wf-tabs{display:flex;gap:16px;padding:0 17px;border-bottom:1px solid var(--wf-border)}
+.wf-tab{background:none;border:0;border-bottom:2px solid transparent;color:var(--wf-muted);padding:13px 0;font-size:12px}
+.wf-tab[aria-pressed=true]{color:var(--wf-accent);border-bottom-color:var(--wf-accent);font-weight:650}
+.wf-messages{padding:19px;display:flex;flex-direction:column;gap:15px;max-height:360px;overflow:auto}
+.wf-message{max-width:92%;align-self:flex-start}
+.wf-message.outbound{align-self:flex-end}
+.wf-message-meta{font-size:10px;color:var(--wf-muted);margin-bottom:5px;display:flex;gap:8px}
+.wf-message.outbound .wf-message-meta{justify-content:flex-end}
+.wf-bubble{background:#f3f4f8;border:1px solid #ebeef3;padding:12px 14px;border-radius:3px 12px 12px;font-size:13px;white-space:pre-wrap;overflow-wrap:anywhere}
+.wf-message.outbound .wf-bubble{background:#f0edff;border-color:#e5dffd;border-radius:12px 3px 12px 12px}
+.wf-output-note{font-size:10px;color:#7a7495;text-align:right;margin-top:5px}
+.wf-timeline{list-style:none;padding:17px;margin:0;max-height:360px;overflow:auto}
+.wf-timeline li{display:grid;grid-template-columns:66px 1fr;gap:12px;font-size:12px;padding:0 0 15px}
+.wf-timeline time{font-size:10px;color:var(--wf-muted);padding-top:2px;font-variant-numeric:tabular-nums}
+.wf-timeline li>div{position:relative;border-left:1px solid #ded8f4;padding-left:16px}
+.wf-timeline li>div::before{content:"";position:absolute;left:-4px;top:5px;width:7px;height:7px;border:2px solid #d7cff8;background:white;border-radius:50%}
+.wf-inspector{padding:18px}
+.wf-inspector-symbol{width:41px;height:41px;display:grid;place-items:center;background:var(--wf-soft);color:var(--wf-accent);border-radius:11px;margin:17px 0 12px}
+.wf-inspector h2{margin-bottom:8px}
+.wf-inspector p{font-size:12px;color:var(--wf-muted)}
+.wf-inspector .wf-chip{margin:14px 0}
+.wf-rule{height:1px;background:var(--wf-border);margin:17px 0}
+.wf-evidence{border:1px solid #e7e2f8;background:#faf9fe;padding:12px;border-radius:8px;margin-top:12px;font-size:12px;overflow-wrap:anywhere}
+.wf-keyvalues{margin:14px 0 0;display:grid;gap:10px;font-size:11px}
+.wf-keyvalues>div{display:flex;justify-content:space-between;gap:10px}
+.wf-keyvalues dt{color:var(--wf-muted)}
+.wf-keyvalues dd{margin:0;max-width:62%;text-align:right;overflow-wrap:anywhere}
+.wf-inspector details{font-size:11px;color:var(--wf-muted)}
+.wf-inspector summary{cursor:pointer}
+.wf-code{font-size:10px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;background:#f5f6fa;padding:10px;border-radius:8px}
+.wf-warning{border:1px solid #f2d9ab;background:#fff9ed;border-radius:8px;padding:11px 13px;font-size:12px;color:#966520;display:flex;gap:8px;align-items:flex-start;margin-bottom:14px}
+.wf-error{border-color:#f4cbd2;background:#fff3f4;color:#ae4050}
+.wf-empty{padding:28px 18px;color:var(--wf-muted);font-size:12px;text-align:center}
+.wf-footer{display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#858b9a;margin-top:14px;flex-wrap:wrap}
+.wf-skeleton{background:linear-gradient(90deg,#f4f4f8,#e9eaf0,#f4f4f8);background-size:200% 100%;height:340px;border-radius:12px;animation:wf-shimmer 1.6s infinite}
+@keyframes wf-shimmer{to{background-position:-200% 0}}
+@media(max-width:1250px){
+ .wf-workspace{grid-template-columns:210px minmax(0,1fr)}
+ .wf-inspector{grid-column:2;display:block}
+ .wf-sidebar{grid-row:1 / 3}
+ .wf-main{grid-column:2;grid-row:1}
+}
+@media(max-width:760px){
+ .wf-heading{align-items:flex-start;flex-direction:column}
+ .wf-workspace{grid-template-columns:1fr}
+ .wf-sidebar,.wf-main,.wf-inspector{grid-column:1;grid-row:auto}
+ .wf-list{max-height:230px}
+ .wf-stat{padding:12px}
+ .wf-stat-icon{display:none}
+ .wf-stat strong{font-size:21px}
+ .wf-stat span{font-size:10px}
+ .wf-heading h1{font-size:25px}
+ .wf-current{padding:17px}
+ .wf-current-top{align-items:flex-start;flex-wrap:wrap}
+ .wf-current-title{font-size:19px!important}
+}
+@media(prefers-reduced-motion:reduce){.wf *{animation:none!important;transition:none!important}}
+
+.wf{container-name:workflow;container-type:inline-size}
+.wf-stage strong{font-size:11px;white-space:normal;min-height:28px;line-height:1.3;display:grid;place-items:center}
+.wf-stage span:last-child{font-size:10px}
+.wf-person-sub{font-size:11px}
+.wf-person-preview{font-size:12px}
+@container workflow (max-width:1040px){
+ .wf-workspace{grid-template-columns:210px minmax(0,1fr)}
+ .wf-sidebar{grid-row:1 / 3}
+ .wf-main{grid-column:2;grid-row:1}
+ .wf-inspector{grid-column:2;grid-row:2}
+}
+@container workflow (max-width:700px){
+ .wf-workspace{grid-template-columns:1fr}
+ .wf-sidebar,.wf-main,.wf-inspector{grid-column:1;grid-row:auto}
+ .wf-list{max-height:230px}
+ .wf-heading{align-items:flex-start;flex-direction:column}
+}
+
+html,body{margin:0;background:#f6f7fa;min-height:100%;font-family:system-ui,sans-serif}body{display:grid;grid-template-columns:66px minmax(0,1fr)}
+.demo-rail{background:#232331;display:flex;align-items:center;flex-direction:column;gap:25px;padding:23px 0;min-height:100vh;color:#9694ad}
+.demo-logo{background:#7b69dc;color:white;font-size:15px;font-weight:800;width:35px;height:35px;border-radius:10px;display:grid;place-items:center;margin-bottom:22px;letter-spacing:-1px}
+.demo-rail-icon{width:36px;height:36px;display:grid;place-items:center;border-radius:9px;color:#9b99b0}
+.demo-rail-icon.selected{background:#3b354f;color:#c4b7ff}
+.demo-main{padding:27px 30px;min-width:0}
+.demo-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px;font-size:11px;color:#747b8a;gap:12px}
+.demo-brand{font-size:13px;color:#474b5d;font-weight:700}
+.demo-disclaimer{color:#766833;background:#f4efdf;padding:5px 10px;border-radius:6px;font-size:10px}
+@media(max-width:760px){body{grid-template-columns:1fr}.demo-rail{display:none}.demo-main{padding:18px 14px}.demo-top{flex-direction:column;align-items:flex-start;margin-bottom:23px}}@container workflow (max-width:700px){
+ .wf-flow{grid-template-columns:1fr;min-width:0;gap:8px}
+ .wf-stage{display:grid;grid-template-columns:30px 1fr auto;gap:10px;padding:9px 12px;text-align:left}
+ .wf-stage strong{font-size:12px;display:block;min-height:0}
+ .wf-stage span:last-child{font-size:11px}
+ .wf-stage:not(:last-child)::after{display:none}
+}
+
+</style></head><body>
+<aside class="demo-rail" aria-label="Khung ứng dụng minh họa"><div class="demo-logo">ss.</div><div class="demo-rail-icon">▦</div><div class="demo-rail-icon">☷</div><div class="demo-rail-icon selected">⌘</div><div class="demo-rail-icon">◷</div><div class="demo-rail-icon">⚙</div></aside>
+<div class="demo-main"><div class="demo-top"><span class="demo-brand">Sin Sin / Không gian hỗ trợ</span><span class="demo-disclaimer">BẢN THIẾT KẾ TƯƠNG TÁC · DỮ LIỆU GIẢ · KHÔNG KẾT NỐI FACEBOOK</span></div><section id="app" class="wf"></section></div>
+<script>const stateLabels = {
+    done: "Đã ghi nhận", active: "Đang xử lý", waiting: "Đang chờ",
+    warning: "Cần kiểm tra", error: "Có lỗi", unknown: "Chưa có dữ liệu", cancelled: "Đã dừng",
+};
+const eventLabels = {
+    INBOUND_RECEIVED: "Đã nhận tin nhắn của khách",
+    DEBOUNCE_STARTED: "Bắt đầu chờ khách nhắn thêm",
+    DEBOUNCE_RESET: "Có tin mới, cập nhật lượt trả lời",
+    CONVERSATION_QUEUED: "Đã xếp lượt hỗ trợ",
+    CONVERSATION_CLAIMED: "Bắt đầu xử lý hội thoại",
+    AI_STARTED: "Bắt đầu chuẩn bị câu trả lời",
+    AI_COMPLETED: "AI đã tạo câu trả lời",
+    AI_CANCELLED_STALE: "Dừng lượt cũ để xử lý thông tin mới",
+    DRAFT_CREATED: "Câu trả lời đã sẵn sàng",
+    TYPING_STARTED: "Bắt đầu soạn tin trên Messenger",
+    TYPING_ABORTED: "Đã dừng soạn tin",
+    SEND_STARTED: "Bắt đầu gửi tin",
+    SEND_INTENT: "Đã bắt đầu thao tác gửi",
+    SEND_CONFIRMED: "Đã xác nhận tin xuất hiện trên Messenger",
+    SEND_UNCERTAIN: "Chưa xác định được kết quả gửi",
+    SEND_UNCONFIRMED: "Chưa xác định được kết quả gửi",
+    CONVERSATION_RELEASED: "Đã kết thúc lượt xử lý",
+    ERROR: "Có lỗi cần kiểm tra",
+    SESSION_SUSPENDED: "Kênh đã tạm dừng để kiểm tra",
+    SESSION_RESUMED: "Kênh được cho phép hoạt động trở lại",
+    MANUAL_TAKEOVER: "Nhân viên bắt đầu hỗ trợ",
+    MANUAL_RELEASED: "Nhân viên chuyển lại cho trợ lý",
+    SETTING_CHANGED: "Đã cập nhật cài đặt",
+};
+const eventLabel = (type) => eventLabels[type] || "Cập nhật hệ thống";
+function timestamp(value) {
+    if (typeof value !== "string" && !(value instanceof Date))
+        return null;
+    const n = new Date(value).getTime();
+    return Number.isFinite(n) ? n : null;
+}
+function formatTime(value) {
+    const n = timestamp(value);
+    return n === null ? "Chưa có thời gian" : new Intl.DateTimeFormat("vi-VN", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Ho_Chi_Minh",
+    }).format(n);
+}
+function shortStatus(status, manual = false) {
+    if (manual)
+        return "Nhân viên hỗ trợ";
+    const labels = {
+        QUEUED: "Chờ đến lượt", CLAIMED: "Đang xử lý", DEBOUNCING: "Đang gom tin",
+        READING: "Đang đọc tin", THINKING: "AI đang trả lời", DRAFT_READY: "Chờ soạn tin",
+        TYPING: "Đang soạn tin", SENDING: "Đang xác nhận gửi", WAITING_CUSTOMER: "Chờ khách phản hồi",
+        MANUAL: "Nhân viên hỗ trợ", BLOCKED: "Không tự động trả lời", ERROR: "Cần kiểm tra",
+    };
+    return labels[status] || "Chưa rõ trạng thái";
+}
+function itemNeedsAttention(item) {
+    return item.conversation.status === "ERROR" || item.conversation.isBlocked;
+}
+function itemIsActive(item) {
+    return !item.conversation.manualMode && [
+        "QUEUED", "CLAIMED", "DEBOUNCING", "READING", "THINKING", "DRAFT_READY", "TYPING", "SENDING",
+    ].includes(item.conversation.status);
+}
+function numberField(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+function safeObject(value) {
+    return value && typeof value === "object" && !Array.isArray(value)
+        ? value : null;
+}
+const confirmed = new Set(["CONFIRMED", "SENT"]);
+const uncertain = new Set(["SEND_UNCERTAIN", "UNCONFIRMED"]);
+const stopped = new Set(["CANCELLED", "ABORTED"]);
+/**
+ * Compatibility projection over existing, bounded conversation-detail API.
+ * NEVER combine channel-wide "latest" records; NEVER infer that AI success means delivery.
+ * This is not a complete distributed trace. Missing evidence stays visibly unknown.
+ */
+function buildWorkflowView(data, requestedVersion) {
+    const conv = data.conversation;
+    const version = requestedVersion ?? conv.inboundVersion;
+    const current = version === conv.inboundVersion;
+    const events = (data.events || []).filter(e => e.inboundVersion === version)
+        .sort((a, b) => (timestamp(a.createdAt) ?? 0) - (timestamp(b.createdAt) ?? 0));
+    const messages = (data.messages || []).filter(m => m.inboundVersion === version)
+        .sort((a, b) => (timestamp(a.timestamp) ?? 0) - (timestamp(b.timestamp) ?? 0));
+    const runs = (data.aiRuns || []).filter(r => r.conversationId === conv.id && r.channelAccountId === conv.channelAccountId && r.inboundVersion === version).sort((a, b) => (timestamp(b.createdAt) ?? 0) - (timestamp(a.createdAt) ?? 0));
+    const actions = (data.outboundActions || []).filter(a => a.inboundVersion === version)
+        .sort((a, b) => a.responseIndex - b.responseIndex);
+    const run = runs[0] || null;
+    const inbound = messages.filter(m => m.direction === "INBOUND");
+    const has = (type) => events.some(e => e.type === type);
+    const workerStarted = events.some(e => e.type === "AI_STARTED" && e.actor === "AI_WORKER");
+    const policy = inbound.find(m => m.skipReason)?.skipReason ?? null;
+    const manifest = safeObject(run?.requestSnapshot?.contextManifest);
+    const expectedCount = run?.usedResult?.messages?.length
+        ?? numberField(run?.parsedOutput?.messageCount) ?? null;
+    const confirmedCount = actions.filter(a => confirmed.has(String(a.status))).length;
+    const hasUncertain = actions.some(a => uncertain.has(String(a.status)));
+    const hasFailed = actions.some(a => String(a.status) === "FAILED");
+    const sending = actions.some(a => ["SEND_INTENT", "SENDING"].includes(String(a.status)));
+    const typing = actions.some(a => String(a.status) === "TYPING");
+    const allCancelled = actions.length > 0 && actions.every(a => stopped.has(String(a.status)));
+    const allExpectedConfirmed = expectedCount !== null && expectedCount > 0 &&
+        actions.length === expectedCount && confirmedCount === expectedCount;
+    const cancelled = has("AI_CANCELLED_STALE") || allCancelled || run?.status === "STALE_ABORTED";
+    const eligibleToRun = current && !conv.manualMode && !conv.isBlocked && !cancelled;
+    const stages = [
+        {
+            id: "inbound", label: "Nhận tin", state: inbound.length || has("INBOUND_RECEIVED") ? "done" : "unknown",
+            description: "Nội dung khách gửi trong đúng lượt đang xem.",
+            evidence: inbound.length ? `Đã tải ${inbound.length} tin của lượt này.` : "Chưa tải được nội dung của lượt này.",
+        },
+        {
+            id: "policy", label: "Kiểm tra",
+            state: policy ? (policy.eligible ? "done" : "warning") : "unknown",
+            description: "Kiểm tra lượt này có được phép trả lời tự động hay không.",
+            evidence: policy?.humanReadableReason || "API hiện tại chưa cung cấp kết quả kiểm tra cho lượt này.",
+        },
+        {
+            id: "debounce", label: "Gom tin",
+            state: has("DEBOUNCE_STARTED") || has("DEBOUNCE_RESET")
+                ? (eligibleToRun && conv.status === "DEBOUNCING" ? "waiting" : workerStarted || run ? "done" : cancelled ? "cancelled" : "unknown")
+                : "unknown",
+            description: "Chờ ngắn để gom các tin khách gửi liên tiếp.",
+            evidence: eligibleToRun && conv.status === "DEBOUNCING"
+                ? "Hội thoại đang chờ khách nhắn thêm; chưa có hạn chờ chính xác từ API."
+                : has("DEBOUNCE_STARTED") ? "Có sự kiện gom tin trong lượt này." : "Chưa có sự kiện gom tin trong dữ liệu đã tải.",
+        },
+        {
+            id: "ai", label: "AI trả lời",
+            state: cancelled ? "cancelled" : run
+                ? run.status === "SUCCESS" ? "done" : "error"
+                : eligibleToRun && conv.status === "THINKING" ? "active" : "unknown",
+            description: "Chuẩn bị ngữ cảnh, gọi dịch vụ AI và kiểm tra câu trả lời.",
+            evidence: run ? `Kết quả của lần gọi ${run.id.slice(0, 8)}: ${run.status === "SUCCESS" ? "đã tạo câu trả lời" : "cần kiểm tra"}.`
+                : workerStarted ? "Đã có sự kiện bắt đầu; chưa nhận được kết quả AI." : "Chưa có kết quả AI cho lượt này.",
+        },
+        {
+            id: "typing", label: "Soạn tin",
+            state: cancelled ? "cancelled" : typing && eligibleToRun ? "active"
+                : allExpectedConfirmed || hasUncertain || sending ? "done"
+                    : confirmedCount > 0 && actions.some(a => String(a.status) === "PENDING") ? "waiting"
+                        : has("TYPING_ABORTED") ? "cancelled" : "unknown",
+            description: "Đưa câu trả lời đã duyệt vào ô soạn tin Messenger.",
+            evidence: typing && eligibleToRun ? "Có thao tác soạn tin đang hoạt động."
+                : actions.length ? `Có ${actions.length} thao tác gửi trong dữ liệu đã tải.` : "Chưa có thao tác soạn tin.",
+        },
+        {
+            id: "delivery", label: "Xác nhận gửi",
+            state: hasUncertain ? "warning" : hasFailed ? "error" : allExpectedConfirmed ? "done"
+                : sending ? "active" : allCancelled ? "cancelled" : "unknown",
+            description: "Chỉ xác nhận khi có bằng chứng gửi. Không đồng nghĩa khách đã đọc.",
+            evidence: hasUncertain ? "Chưa chắc tin đã gửi. Không tự động gửi lại."
+                : allExpectedConfirmed ? `Đã xác nhận ${confirmedCount}/${expectedCount} tin dự kiến.`
+                    : confirmedCount > 0 ? `Đã xác nhận ${confirmedCount} tin; chưa đủ bằng chứng hoàn tất cả lượt.`
+                        : sending ? "Đã bắt đầu thao tác gửi; đang chờ xác nhận." : "Chưa có bằng chứng gửi thành công.",
+        },
+    ];
+    let title = shortStatus(conv.status, conv.manualMode);
+    let tone = "unknown";
+    if (!current)
+        title = `Lượt trước #${version}`;
+    if (hasUncertain) {
+        title = "Cần xác nhận kết quả gửi";
+        tone = "warning";
+    }
+    else if (cancelled) {
+        title = "Lượt này đã dừng";
+        tone = "cancelled";
+    }
+    else if (hasFailed || run?.status === "ERROR" || run?.status === "GUARD_REJECTED") {
+        title = "Có lỗi cần kiểm tra";
+        tone = "error";
+    }
+    else if (allExpectedConfirmed) {
+        title = "Đã xác nhận các tin của lượt này";
+        tone = "done";
+    }
+    else if (confirmedCount > 0 && expectedCount !== null && confirmedCount < expectedCount) {
+        title = "Còn tin chưa xác nhận gửi";
+        tone = "waiting";
+    }
+    else if (eligibleToRun && ["THINKING", "TYPING", "SENDING", "DRAFT_READY", "READING"].includes(conv.status))
+        tone = "active";
+    else if (eligibleToRun && ["DEBOUNCING", "QUEUED"].includes(conv.status))
+        tone = "waiting";
+    const versions = Array.from(new Set([
+        conv.inboundVersion, ...(data.messages || []).map(m => m.inboundVersion),
+        ...(data.aiRuns || []).map(r => r.inboundVersion),
+        ...(data.events || []).map(e => e.inboundVersion),
+        ...(data.outboundActions || []).map(a => a.inboundVersion),
+    ].filter((v) => typeof v === "number" && Number.isInteger(v) && v > 0))).sort((a, b) => b - a);
+    return {
+        conversationId: conv.id, version, current, versions, stages, title, tone,
+        correlationKey: `${conv.channelAccountId}:${conv.id}:${version}`,
+        name: data.customer?.name || conv.title || "Khách hàng Messenger",
+        messages, inbound, runs, run, actions, events, policy, manifest,
+        selectedCount: numberField(manifest?.selectedCount),
+        estimatedTokens: numberField(manifest?.estimatedTokens),
+        confirmedCount, expectedCount, hasUncertain, allExpectedConfirmed,
+        limited: true, // Existing API caps AI runs/actions/events; never claim a full trace.
+    };
+}
+
+
+const base = Date.UTC(2026,8,7,2,41,0);
+const iso = (delta=0) => new Date(base+delta).toISOString();
+function makeFixture(id,name,version,mode,text) {
+  const conv={id,channelAccountId:"demo-shop",inboundVersion:version,status:mode,
+    lastInboundAt:iso(),lastOutboundAt:null,isBlocked:false,manualMode:false,unreadCount:1,title:name};
+  const customer={id:"customer-"+id,name,avatarUrl:null};
+  const inbound={id:"message-"+id,direction:"INBOUND",actor:"SYSTEM",text,inboundVersion:version,responseIndex:0,timestamp:iso(),
+    skipReason:{decision:"ELIGIBLE",eligible:true,reasonCode:"ELIGIBLE",humanReadableReason:"Được phép trả lời tự động",reason:"",precedenceStep:"ELIGIBLE"}};
+  const events=[];
+  function event(type,offset,actor="AI_WORKER") {
+    events.push({id:id+"-"+events.length,type,inboundVersion:version,actor,payload:{},createdAt:iso(offset)});
+  }
+  event("INBOUND_RECEIVED",0,"CUSTOMER");event("DEBOUNCE_STARTED",40,"BROWSER_AGENT");
+  const response=["Dạ, shop kiểm tra đúng mẫu và màu kem giúp mình nhé.","Bạn gửi shop hình hoặc mã mẫu váy mình đang xem được không ạ?"];
+  const run={id:"run-"+id,channelAccountId:"demo-shop",conversationId:id,inboundVersion:version,model:"shop-assistant",
+    promptTokens:1128,completionTokens:186,totalTokens:1314,latencyMs:1840,status:"SUCCESS",
+    createdAt:iso(4840),requestSnapshot:{contextManifest:{selectedCount:8,estimatedTokens:1100}},
+    usedResult:{messages:response,needsClarification:true},parsedOutput:{messageCount:2},errorMessage:null};
+  const actions=[];
+  if(mode!=="DEBOUNCING") {
+    event("AI_STARTED",3000);
+    if(mode!=="THINKING") {
+      event("DRAFT_CREATED",4840);
+      response.forEach((text,index)=>actions.push({id:"uuid-"+id+index,actionId:"action-"+id+index,
+        inboundVersion:version,responseIndex:index,text,actor:"AI",status:index===0?"TYPING":"PENDING",
+        unconfirmedReason:null,errorMessage:null,createdAt:iso(4900+index)}));
+      event("TYPING_STARTED",5000,"AI");
+    }
+  }
+  if(mode==="WAITING_CUSTOMER") {
+    actions.forEach(a=>a.status="CONFIRMED");event("SEND_INTENT",7000,"AI");event("SEND_CONFIRMED",7800,"AI");event("CONVERSATION_RELEASED",7900);
+  }
+  if(mode==="ERROR") {
+    actions[0].status="SEND_UNCERTAIN";event("SEND_INTENT",7000,"AI");event("SEND_UNCERTAIN",17000,"AI");
+    actions[0].unconfirmedReason="Chưa tìm thấy bằng chứng gửi đáng tin cậy.";
+  }
+  return {conversation:conv,customer,messages:[inbound],aiRuns:["DEBOUNCING","THINKING"].includes(mode)?[]:[run],
+    outboundActions:actions,events,hasMoreMessages:false};
+}
+const demoRecords=[
+  makeFixture("conv-mai-anh","Mai Anh",18,"TYPING","Shop còn mẫu váy này màu kem, size M không ạ?"),
+  makeFixture("conv-thanh-truc","Thanh Trúc",7,"THINKING","Mình muốn hỏi về chính sách đổi size của shop."),
+  makeFixture("conv-hoang-nam","Hoàng Nam",12,"ERROR","Shop kiểm tra giúp mình đơn hôm qua với nhé."),
+  makeFixture("conv-thu-ha","Thu Hà",3,"DEBOUNCING","Mình gửi thêm hình mẫu này nha shop."),
+  makeFixture("conv-ngoc-linh","Ngọc Linh",9,"WAITING_CUSTOMER","Cho mình xin thông tin về mẫu áo này."),
+  makeFixture("conv-duy-khang","Duy Khang",2,"WAITING_CUSTOMER","Cảm ơn shop đã hỗ trợ mình nhé."),
+];
+
+
+const iconPaths={
+ inbox:'<path d="M4 4h16v16H4z"/><path d="M4 13h5l2 3h2l2-3h5"/>',
+ ai:'<path d="m12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5Z"/>',
+ policy:'<path d="m12 3 8 4v5c0 5-8 9-8 9s-8-4-8-9V7Z"/><path d="m8 12 3 3 5-6"/>',
+ debounce:'<path d="m3 8 9-5 9 5-9 5-9-5Zm0 5 9 5 9-5M3 18l9 5 9-5"/>',
+ typing:'<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h1m3 0h1m3 0h1m3 0h1M6 13h1m3 0h1m3 0h1M7 16h10"/>',
+ delivery:'<path d="m2 12 5 5 10-11M12 16l3 3 8-11"/>',
+ activity:'<path d="M2 13h5l3-8 5 15 3-7h4"/>',
+ search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+ arrow:'<path d="M6 18 18 6M6 6h12v12"/>',
+ help:'<circle cx="12" cy="12" r="9"/><path d="M9 9a3 3 0 0 1 6 0c0 2-3 2-3 4m0 3h.01"/>',
+ refresh:'<path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/>',
+ pause:'<path d="M8 5v14M16 5v14"/>',
+ play:'<path d="m8 4 12 8-12 8Z"/>',
+ copy:'<rect x="7" y="7" width="13" height="14" rx="2"/><path d="M16 7V3H3v13h4"/>',
+ chat:'<path d="M21 11a9 9 0 0 1-9 9H3l1-6A9 9 0 1 1 21 11Z"/>',
+ gear:'<path d="m9 3-1 4-4 1 1 4-1 4 4 1 1 4h6l1-4 4-1-1-4 1-4-4-1-1-4Z"/><circle cx="12" cy="12" r="3"/>',
+};
+const icon=(id,size=17)=>`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${iconPaths[id]||iconPaths.ai}</svg>`;
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const initials=s=>s.trim().split(/\s+/).slice(-2).map(v=>Array.from(v)[0]).join("").toUpperCase();
+let selected=0,stageId="ai",tab="messages",filter="all",query="",paused=false,notice="";
+const badge=(state,label)=>`<span class="wf-chip ${state}">${esc(label||stateLabels[state])}</span>`;
+const selectedView=()=>buildWorkflowView(demoRecords[selected]);
+function renderList(){
+ const items=demoRecords.map((d,index)=>({d,index,item:{conversation:d.conversation,customer:d.customer,latestInboundMessage:d.messages[0]}}));
+ document.getElementById("customer-list").innerHTML=items.filter(({d,item})=>
+   `${d.customer.name} ${d.messages[0].text}`.toLocaleLowerCase("vi").includes(query.toLocaleLowerCase("vi"))
+   &&(filter==="all"||filter==="active"&&itemIsActive(item)||filter==="attention"&&itemNeedsAttention(item))
+ ).map(({d,index,item})=>`<button class="wf-person" aria-pressed="${selected===index}" data-customer="${index}">
+ <div class="wf-person-line"><span class="wf-avatar">${initials(d.customer.name)}</span><div style="min-width:0">
+ <div class="wf-person-name">${esc(d.customer.name)}</div><div class="wf-person-sub">${esc(shortStatus(d.conversation.status))}</div></div>
+ <span class="wf-dot ${itemNeedsAttention(item)?"warning":itemIsActive(item)?"active":""}"></span></div>
+ <div class="wf-person-preview">${esc(d.messages[0].text)}</div></button>`).join("")||'<div class="wf-empty">Không có hội thoại phù hợp.</div>';
+}
+function renderMain(){
+ const v=selectedView(),stage=v.stages.find(s=>s.id===stageId)||v.stages[0];
+ document.getElementById("workflow-main").innerHTML=`
+ <section class="wf-panel wf-current">
+  <div class="wf-current-top"><div class="wf-person-line"><span class="wf-avatar">${initials(v.name)}</span>
+   <div><h2>${esc(v.name)}</h2><div class="wf-muted">Messenger · Lượt #${v.version}</div></div></div><span class="wf-version">Lượt mới nhất</span></div>
+  ${badge(v.tone)}<h2 class="wf-current-title">${esc(v.title)}</h2>
+  <p class="wf-current-description">${v.hasUncertain?"Chưa chắc tin đã gửi. Cần kiểm tra trước khi thử lại.":v.allExpectedConfirmed?"Đã có bằng chứng gửi. Không đồng nghĩa khách đã đọc.":"Chọn một bước để xem nội dung, trạng thái và lý do đang chờ."}</p>
+  <div class="wf-current-bottom"><span class="wf-muted">Bản mô phỏng · Không gửi tin thật</span><button class="wf-button" data-action="simulate">${icon("play",13)} Chạy đến bước gửi</button></div>
+ </section>
+ <section class="wf-panel"><div class="wf-panel-head"><h3>Hành trình trả lời</h3><span class="wf-muted">Đúng khách · đúng lượt</span></div>
+  <div class="wf-flow-wrap"><div class="wf-flow">${v.stages.map(s=>`<button class="wf-stage ${s.state}" aria-pressed="${stage.id===s.id}" data-stage="${s.id}">
+    <span class="wf-stage-icon">${icon(s.id==="inbound"?"inbox":s.id)}</span><strong>${esc(s.label)}</strong><span>${esc(stateLabels[s.state])}</span></button>`).join("")}</div></div>
+  <div class="wf-flow-note">${icon("help",12)} Màu xám: chưa có bằng chứng, không phải đã hoàn tất.</div>
+  <div class="wf-trace-metrics"><div><small>Thời gian AI báo cáo</small><strong>${v.run?(v.run.latencyMs/1000).toFixed(2)+" giây":"Chưa có"}</strong></div><div><small>Tin đưa vào ngữ cảnh</small><strong>${v.selectedCount??"Chưa có"}</strong></div><div><small>Đã xác nhận gửi</small><strong>${v.confirmedCount} / ${v.expectedCount??"?"} tin</strong></div></div>
+ </section>
+ <section class="wf-panel"><div class="wf-tabs"><button class="wf-tab" data-tab="messages" aria-pressed="${tab==="messages"}">Tin nhắn & câu trả lời</button><button class="wf-tab" data-tab="events" aria-pressed="${tab==="events"}">Nhật ký theo thời gian</button></div>
+ ${tab==="events"?`<ol class="wf-timeline">${v.events.map(e=>`<li><time>${formatTime(e.createdAt)}</time><div>${esc(eventLabel(e.type))}</div></li>`).join("")}</ol>`:
+ `<div class="wf-messages">${v.messages.map(m=>`<article class="wf-message"><div class="wf-message-meta"><span>${esc(v.name)}</span><time>${formatTime(m.timestamp)}</time></div><div class="wf-bubble">${esc(m.text)}</div></article>`).join("")}
+ ${v.actions.length?v.actions.map((a,index)=>`<article class="wf-message outbound"><div class="wf-message-meta"><span>Trợ lý · Tin ${index+1}</span><span>${["CONFIRMED","SENT"].includes(a.status)?"Đã xác nhận gửi":a.status==="SEND_UNCERTAIN"?"Chưa rõ kết quả gửi":"Chưa gửi"}</span></div><div class="wf-bubble">${esc(a.text)}</div></article>`).join(""):`<div class="wf-empty">${v.tone==="active"?"Đang chờ câu trả lời từ AI…":"Chưa có câu trả lời của lượt này."}</div>`}
+ </div>`}
+ </section>`;
+ document.getElementById("workflow-inspector").innerHTML=`
+ <div class="wf-eyebrow">Chi tiết bước</div><div class="wf-inspector-symbol">${icon(stage.id==="inbound"?"inbox":stage.id,23)}</div>
+ <h2>${esc(stage.label)}</h2><p>${esc(stage.description)}</p>${badge(stage.state)}
+ <div class="wf-evidence">${esc(stage.evidence)}</div><div class="wf-rule"></div><h3>Thông tin của lượt này</h3>
+ <dl class="wf-keyvalues"><div><dt>Khách hàng</dt><dd>${esc(v.name)}</dd></div><div><dt>Lượt xử lý</dt><dd>#${v.version}</dd></div><div><dt>Mô hình</dt><dd>${esc(v.run?.model||"Chưa có")}</dd></div><div><dt>Token đầu vào</dt><dd>${v.run?.promptTokens??"Chưa có"}</dd></div><div><dt>Token đầu ra</dt><dd>${v.run?.completionTokens??"Chưa có"}</dd></div></dl>
+ <div class="wf-rule"></div><button class="wf-button" style="width:100%" data-action="events">Xem nhật ký của lượt ${icon("arrow",13)}</button>
+ <button class="wf-button" style="width:100%;margin-top:8px" data-action="copy">${icon("copy",13)} Sao chép mã lượt</button>
+ <p style="font-size:10px;margin-top:8px" role="status" id="copy-notice">${esc(notice)}</p>
+ <div class="wf-rule"></div><details><summary>Chi tiết kỹ thuật</summary><pre class="wf-code">${esc(JSON.stringify({correlationKey:v.correlationKey,source:"DEMO ONLY",selectedStep:stage.id},null,2))}</pre></details>
+ <p style="font-size:10px;margin-top:14px">Mọi tên, tin nhắn và số liệu trong bản xem trước đều là dữ liệu giả để kiểm tra giao diện.</p>`;
+}
+function setup(){
+ document.getElementById("app").innerHTML=`
+ <div class="wf-heading"><div><div class="wf-eyebrow">Vận hành / Hội thoại</div><h1>Theo dõi trả lời</h1><p>Mỗi khách hàng, một lượt xử lý rõ ràng.</p></div><div class="wf-toolbar">
+ <span class="wf-chip">Dữ liệu minh họa</span><button class="wf-button" data-action="pause" id="pause">${icon("pause",14)} Dừng mô phỏng</button><button class="wf-button" data-action="reset">${icon("refresh",14)} Đặt lại</button></div></div>
+ <div class="wf-stats"><div class="wf-stat"><div><span>Hội thoại đang hiển thị</span><strong>6</strong></div><span class="wf-stat-icon">${icon("chat",20)}</span></div>
+ <div class="wf-stat"><div><span>Đang chờ hoặc xử lý</span><strong>3</strong></div><span class="wf-stat-icon">${icon("activity",20)}</span></div>
+ <div class="wf-stat"><div><span>Cần xem lại hội thoại</span><strong>1</strong></div><span class="wf-stat-icon">${icon("help",20)}</span></div></div>
+ <div class="wf-workspace"><aside class="wf-panel wf-sidebar"><div class="wf-panel-head"><h3>Hội thoại gần đây</h3><span class="wf-muted">6</span></div><label class="wf-search">${icon("search",14)}<input id="search" aria-label="Tìm khách hoặc nội dung" placeholder="Tìm khách, nội dung…"></label>
+ <div class="wf-filters">${[["all","Tất cả"],["active","Đang xử lý"],["attention","Cần xem"]].map(([key,label])=>`<button class="wf-filter" data-filter="${key}" aria-pressed="${key===filter}">${label}</button>`).join("")}</div><div class="wf-list" id="customer-list"></div></aside>
+ <main class="wf-main" id="workflow-main"></main><aside class="wf-panel wf-inspector" id="workflow-inspector"></aside></div>
+ <footer class="wf-footer"><span>6 hội thoại minh họa · Không kết nối tài khoản hoặc dữ liệu thật.</span><span>Thiết kế mới / 07.09.2026</span></footer>`;
+ document.getElementById("search").addEventListener("input",e=>{query=e.target.value;renderList()});
+ renderList();renderMain();
+}
+document.addEventListener("click",async event=>{
+ const button=event.target.closest("button");if(!button)return;
+ if(button.dataset.customer!==undefined){selected=Number(button.dataset.customer);notice="";renderList();renderMain()}
+ if(button.dataset.stage){stageId=button.dataset.stage;renderMain()}
+ if(button.dataset.tab){tab=button.dataset.tab;renderMain()}
+ if(button.dataset.filter){filter=button.dataset.filter;document.querySelectorAll("[data-filter]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.filter===filter)));renderList()}
+ const action=button.dataset.action;
+ if(action==="events"){tab="events";renderMain()}
+ if(action==="reset"){location.reload()}
+ if(action==="pause"){paused=!paused;button.innerHTML=icon(paused?"play":"pause",14)+(paused?" Tiếp tục mô phỏng":" Dừng mô phỏng")}
+ if(action==="simulate"){
+  if(paused){notice="Đang dừng mô phỏng. Bấm Tiếp tục mô phỏng.";renderMain();return}
+  const d=demoRecords[selected];
+  if(d.outboundActions.some(a=>a.status==="SEND_UNCERTAIN")){notice="Bản thiết kế không cho gửi lại khi chưa rõ kết quả.";renderMain();return}
+  if(!d.outboundActions.length){notice="Chọn Mai Anh để thử bước xác nhận gửi.";renderMain();return}
+  d.outboundActions.forEach(a=>a.status="CONFIRMED");d.conversation.status="WAITING_CUSTOMER";
+  d.events.push({id:"demo-confirm-"+Date.now(),type:"SEND_CONFIRMED",inboundVersion:d.conversation.inboundVersion,actor:"AI",payload:{},createdAt:iso(8000)});
+  renderList();renderMain();
+  const active=demoRecords.filter(d=>itemIsActive({conversation:d.conversation})).length;
+  document.querySelectorAll(".wf-stat strong")[1].textContent=String(active);
+ }
+ if(action==="copy"){
+  try{await navigator.clipboard.writeText(selectedView().correlationKey);notice="Đã sao chép mã lượt."}catch{notice="Mã lượt có trong Chi tiết kỹ thuật."}renderMain();
+ }
+});
+setup();
+</script></body></html>

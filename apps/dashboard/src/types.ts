@@ -42,6 +42,7 @@ export interface ConversationItem {
     unreadCount: number;
     isBlocked: boolean;
     manualMode: boolean;
+    title?: string | null;
     claimedAt?: string | null;
     claimToken?: string | null;
   };
