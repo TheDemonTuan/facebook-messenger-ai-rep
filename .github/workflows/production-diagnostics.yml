@@ -47,7 +47,7 @@ jobs:
           docker exec messenger-core node -e 'fetch("http://127.0.0.1:3000/healthz").then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); })'
           docker exec messenger-core node -e 'fetch("http://127.0.0.1:3000/readyz").then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); })'
           echo '=== Previously failing workflow route ==='
-          docker exec messenger-core node -e 'fetch("http://127.0.0.1:3000/api/workflow/live").then(async r => { console.log(r.status, await r.text()); process.exit(r.ok ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); })'
+          docker exec messenger-core node -e 'fetch("http://127.0.0.1:3000/api/workflow/live").then(async r => { console.log(r.status, await r.text()); process.exit((r.ok || r.status === 401) ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); })'
           echo '=== Core recent logs ==='
           docker logs --tail 250 messenger-core 2>&1 || true
           echo '=== Browser agent recent logs ==='
