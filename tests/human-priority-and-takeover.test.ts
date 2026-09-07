@@ -16,6 +16,8 @@ import type {
   OutboxRepository,
   JobRepository,
   JobExecutionContext,
+  AiConfigRepository,
+  ReplyPolicyService,
 } from "../packages/db/src/index.js";
 import type { ChannelAdapter } from "@messenger/channel";
 import type { AiReplyGenerator } from "@messenger/ai";
@@ -138,9 +140,9 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         aiConfigRepo: {
           getConfig: vi.fn().mockResolvedValue({ apiKey: "test" }),
           getResolvedConfig: vi.fn().mockResolvedValue({ apiKey: "test" }),
-        } as any,
+        } as unknown as AiConfigRepository,
         jobRepo: mockJobRepo,
-        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as any,
+        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
       });
 
       await aiHandler({
@@ -254,7 +256,7 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         {} as unknown as IncidentRepository,
         {} as unknown as JobRepository,
         undefined,
-        mockReplyPolicy as any
+        mockReplyPolicy as unknown as ReplyPolicyService
       );
 
       const payload: OutboundJobPayload = {
@@ -343,7 +345,7 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         {} as unknown as IncidentRepository,
         {} as unknown as JobRepository,
         undefined,
-        { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as any
+        { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService
       );
 
       const payload: OutboundJobPayload = {
@@ -488,7 +490,7 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
       let updatedConversation = false;
 
       const mockDb = {
-        select: vi.fn((selector) => ({
+        select: vi.fn((_selector) => ({
           from: vi.fn(() => ({
             where: vi.fn(() => ({
               limit: vi.fn().mockImplementation(async () => {
@@ -548,7 +550,7 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         outboxRepo: mockOutboxRepo,
         eventRepo: mockEventRepo,
         broadcaster: mockBroadcaster,
-        replyPolicyService: mockReplyPolicy as any,
+        replyPolicyService: mockReplyPolicy as unknown as ReplyPolicyService,
       });
 
       await debounceHandler({

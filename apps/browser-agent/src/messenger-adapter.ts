@@ -292,7 +292,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (!lastBubble || !lastBubble.isOutgoing) return false;
 
       const outText = lastBubble.text.trim();
-      const now = Date.now();
       const isBotSent = this.recentBotSentTexts.some((botMsg) => {
         return (
           botMsg.text === outText ||
