@@ -6,7 +6,7 @@ export interface FetchMediaOptions {
   maxBytes?: number;
   timeoutMs?: number;
   maxRedirects?: number;
-  expectedCategory?: "IMAGE" | "VOICE" | "AUDIO" | "VIDEO";
+  expectedCategory?: "IMAGE" | "VOICE" | "AUDIO" | "VIDEO" | "FILE";
   browserContextBridge?: (blobUrl: string) => Promise<Buffer | Uint8Array | null>;
   dnsResolver?: DnsResolver;
   fetchFn?: typeof fetch;
@@ -31,7 +31,13 @@ export async function fetchMediaSecurely(
   rawUrl: string,
   options: FetchMediaOptions = {}
 ): Promise<FetchMediaResult> {
-  const maxBytes = options.maxBytes ?? (options.expectedCategory === "IMAGE" ? 10 * 1024 * 1024 : 15 * 1024 * 1024);
+  const maxBytes =
+    options.maxBytes ??
+    (options.expectedCategory === "IMAGE"
+      ? 10 * 1024 * 1024
+      : options.expectedCategory === "FILE"
+      ? 10 * 1024 * 1024
+      : 25 * 1024 * 1024);
   const timeoutMs = options.timeoutMs ?? 10000;
   const maxRedirects = options.maxRedirects ?? 3;
   const expectedCategory = options.expectedCategory ?? "IMAGE";
@@ -120,7 +126,12 @@ export async function fetchMediaSecurely(
       const response = await fetchImpl(currentUrl, {
         method: "GET",
         headers: {
-          Accept: expectedCategory === "IMAGE" ? "image/*" : "audio/*,video/*",
+          Accept:
+            expectedCategory === "IMAGE"
+              ? "image/*"
+              : expectedCategory === "FILE"
+              ? "text/plain, text/csv, application/json, application/pdf, */*"
+              : "audio/*,video/*",
           "User-Agent": "MessengerMediaFetcher/1.0",
         },
         redirect: "manual",

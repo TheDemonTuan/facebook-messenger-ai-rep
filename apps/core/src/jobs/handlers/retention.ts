@@ -1,5 +1,6 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { JobRepository, OutboxRepository, ConversationRepository } from "@messenger/db";
+import { globalMediaCache, checkResourceQuota } from "@messenger/ai";
 
 export interface RetentionJobPayload {
   jobRetentionDays?: number;
@@ -36,13 +37,27 @@ export function createRetentionHandler(deps: RetentionHandlerDeps) {
       cleanedAiRuns = await convRepo.cleanOldAiRuns(aiRunRetentionDays);
     }
 
+    // Media cache eviction of expired items and resource quota checking
+    const evictedMediaCacheItems = globalMediaCache.evictExpired();
+    const quotaMetrics = checkResourceQuota();
+
+    if (quotaMetrics.warnings.length > 0) {
+      console.warn("[RetentionHandler] Resource quota warnings:", quotaMetrics.warnings);
+    }
+
     console.log(
-      `[RetentionHandler] Cleaned ${cleanedJobs} old jobs, ${cleanedOutbox} processed outbox events, ${cleanedMessages} old messages, ${cleanedAiRuns} old AI runs.`
+      `[RetentionHandler] Cleaned ${cleanedJobs} old jobs, ${cleanedOutbox} processed outbox events, ${cleanedMessages} old messages, ${cleanedAiRuns} old AI runs, evicted ${evictedMediaCacheItems} expired media cache items.`
     );
 
     const output: Record<string, unknown> = {
       cleanedJobs,
       cleanedOutboxEvents: cleanedOutbox,
+      evictedMediaCacheItems,
+      mediaCacheBytes: quotaMetrics.metrics.mediaCache.totalBytes,
+      mediaCacheBytesMb: quotaMetrics.metrics.mediaCache.totalBytesMb,
+      mediaCacheCount: quotaMetrics.metrics.mediaCache.itemCount,
+      systemMemoryMb: quotaMetrics.metrics.memory.rssMb,
+      warnings: quotaMetrics.warnings,
     };
 
     if (convRepo) {

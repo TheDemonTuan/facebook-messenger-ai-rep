@@ -11,7 +11,14 @@ import type {
 import { conversations, messages, jobs } from "@messenger/db";
 import { eq, and } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
-import { fetchMediaSecurely, transcribeAudio, globalMediaCache } from "@messenger/ai";
+import {
+  fetchMediaSecurely,
+  transcribeAudio,
+  globalMediaCache,
+  extractVideoMetadataAndFrames,
+  extractFileTextSafely,
+  checkResourceQuota,
+} from "@messenger/ai";
 import type { MessagePart, ContentStatus } from "@messenger/contracts";
 
 export interface MediaEnrichmentJobPayload {
@@ -114,6 +121,10 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
 
     const maxImageBytes = settings.mediaImageMaxBytes ?? 10 * 1024 * 1024;
     const maxVoiceBytes = settings.mediaVoiceMaxBytes ?? 15 * 1024 * 1024;
+    const maxVideoBytes = settings.mediaVideoMaxBytes ?? 25 * 1024 * 1024;
+    const maxVideoDurationSec = settings.mediaVideoMaxDurationSec ?? 60;
+    const maxFileBytes = settings.mediaFileMaxBytes ?? 10 * 1024 * 1024;
+    const maxFileChars = settings.mediaFileMaxExtractedChars ?? 10000;
 
     let hasAnyChanges = false;
     let allPartsSuccessful = true;
@@ -231,6 +242,204 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
             media: {
               ...media,
               status: (fetchRes.status as ContentStatus) || "ERROR",
+            },
+          });
+        }
+      } else if (part.type === "VIDEO") {
+        const media = part.media;
+        if (media.status === "READY" && part.coverage && part.coverage.coverageStatus !== "UNSUPPORTED") {
+          updatedParts.push(part);
+          continue;
+        }
+
+        const sourceUrl = media.sourceUrl;
+        const posterUrl = part.posterRef || (media as { thumbnailRef?: string })?.thumbnailRef;
+
+        // Check if system resource limits allow video processing
+        const quotaCheck = checkResourceQuota(settings);
+        if (!quotaCheck.withinLimits) {
+          hasAnyChanges = true;
+          allPartsSuccessful = false;
+          updatedParts.push({
+            ...part,
+            media: {
+              ...media,
+              status: "UNAVAILABLE",
+            },
+            coverage: {
+              container: "video/mp4",
+              codecs: [],
+              hasVideoTrack: true,
+              hasAudioTrack: false,
+              framesExtracted: 0,
+              audioExtracted: false,
+              coverageStatus: "UNSUPPORTED",
+              limitationReason: quotaCheck.throttledReason || "RESOURCE_CONSTRAINED",
+            },
+          });
+          continue;
+        }
+
+        // Fetch poster frame if posterUrl exists
+        let posterBuffer: Buffer | undefined;
+        if (posterUrl && (posterUrl.startsWith("http://") || posterUrl.startsWith("https://") || posterUrl.startsWith("blob:"))) {
+          const posterRes = await fetchMediaSecurely(posterUrl, {
+            expectedCategory: "IMAGE",
+            maxBytes: maxImageBytes,
+            timeoutMs: 8000,
+            browserContextBridge: browserBridge,
+          });
+          if (posterRes.success && posterRes.buffer) {
+            posterBuffer = posterRes.buffer;
+          }
+        }
+
+        if (!sourceUrl) {
+          if (posterBuffer) {
+            hasAnyChanges = true;
+            const extractionRes = await extractVideoMetadataAndFrames(posterBuffer, "video/mp4", {
+              maxBytes: maxVideoBytes,
+              maxDurationSec: maxVideoDurationSec,
+              posterBuffer,
+              posterUrl,
+            });
+            updatedParts.push({
+              ...part,
+              posterRef: extractionRes.posterMediaRefId || part.posterRef,
+              coverage: extractionRes.coverage,
+              media: {
+                ...media,
+                status: "READY",
+              },
+            });
+          } else {
+            updatedParts.push(part);
+          }
+          continue;
+        }
+
+        // Fetch video stream securely
+        const fetchRes = await fetchMediaSecurely(sourceUrl, {
+          expectedCategory: "VIDEO",
+          maxBytes: maxVideoBytes,
+          timeoutMs: 15000,
+          browserContextBridge: browserBridge,
+        });
+
+        if (fetchRes.success && fetchRes.buffer) {
+          hasAnyChanges = true;
+          const extractionRes = await extractVideoMetadataAndFrames(
+            fetchRes.buffer,
+            fetchRes.mimeType || media.mimeType || "video/mp4",
+            {
+              maxBytes: maxVideoBytes,
+              maxDurationSec: maxVideoDurationSec,
+              posterBuffer,
+              posterUrl,
+              transcribeIfAudio: !conv.manualMode,
+            }
+          );
+
+          if (extractionRes.status === "READY") {
+            updatedParts.push({
+              ...part,
+              durationMs: extractionRes.coverage.durationMs ?? part.durationMs,
+              posterRef: extractionRes.posterMediaRefId || part.posterRef,
+              coverage: extractionRes.coverage,
+              transcript: extractionRes.transcript || part.transcript,
+              media: {
+                ...media,
+                mediaId: fetchRes.mediaRefId || media.mediaId,
+                mimeType: fetchRes.mimeType || media.mimeType,
+                byteSize: fetchRes.byteSize ?? media.byteSize,
+                status: "READY",
+              },
+            });
+          } else {
+            allPartsSuccessful = false;
+            updatedParts.push({
+              ...part,
+              coverage: extractionRes.coverage,
+              media: {
+                ...media,
+                status: extractionRes.status,
+              },
+            });
+          }
+        } else {
+          hasAnyChanges = true;
+          allPartsSuccessful = false;
+          updatedParts.push({
+            ...part,
+            media: {
+              ...media,
+              status: (fetchRes.status as ContentStatus) || "UNAVAILABLE",
+            },
+          });
+        }
+      } else if (part.type === "FILE") {
+        const media = part.media;
+        if (media.status === "READY" && part.extractedText) {
+          updatedParts.push(part);
+          continue;
+        }
+
+        const sourceUrl = media.sourceUrl;
+        if (!sourceUrl) {
+          updatedParts.push(part);
+          continue;
+        }
+
+        // Fetch file content securely
+        const fetchRes = await fetchMediaSecurely(sourceUrl, {
+          expectedCategory: "FILE",
+          maxBytes: maxFileBytes,
+          timeoutMs: 10000,
+          browserContextBridge: browserBridge,
+        });
+
+        if (fetchRes.success && fetchRes.buffer) {
+          hasAnyChanges = true;
+          const extractRes = extractFileTextSafely(
+            fetchRes.buffer,
+            part.fileName || fetchRes.mimeType || "text/plain",
+            {
+              maxBytes: maxFileBytes,
+              maxExtractedChars: maxFileChars,
+            }
+          );
+
+          if (extractRes.status === "READY") {
+            updatedParts.push({
+              ...part,
+              extractedText: extractRes.extractedText,
+              extractedChars: extractRes.characterCount,
+              media: {
+                ...media,
+                mediaId: fetchRes.mediaRefId || media.mediaId,
+                mimeType: extractRes.mimeType,
+                byteSize: fetchRes.byteSize ?? media.byteSize,
+                status: "READY",
+              },
+            });
+          } else {
+            allPartsSuccessful = false;
+            updatedParts.push({
+              ...part,
+              media: {
+                ...media,
+                status: extractRes.status,
+              },
+            });
+          }
+        } else {
+          hasAnyChanges = true;
+          allPartsSuccessful = false;
+          updatedParts.push({
+            ...part,
+            media: {
+              ...media,
+              status: (fetchRes.status as ContentStatus) || "UNAVAILABLE",
             },
           });
         }

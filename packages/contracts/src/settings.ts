@@ -73,6 +73,13 @@ export const SystemSettingsBaseShape = {
   mediaImageMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).optional(),
   mediaVoiceMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).optional(),
   mediaVoiceMaxDurationSec: z.number().int().min(10).max(600).optional(),
+  mediaVideoMaxBytes: z.number().int().min(1024).max(100 * 1024 * 1024).optional(),
+  mediaVideoMaxDurationSec: z.number().int().min(5).max(300).optional(),
+  mediaFileMaxBytes: z.number().int().min(1024).max(50 * 1024 * 1024).optional(),
+  mediaFileMaxExtractedChars: z.number().int().min(100).max(100000).optional(),
+  mediaEnrichmentConcurrency: z.number().int().min(1).max(10).optional(),
+  mediaMaxRamMb: z.number().int().min(128).max(16384).optional(),
+  mediaStorageQuotaMb: z.number().int().min(64).max(10240).optional(),
   providerCapabilities: z.record(z.string(), z.boolean()).optional(),
 };
 
@@ -122,6 +129,13 @@ export const SystemSettingsDefaults = {
   mediaImageMaxBytes: 10 * 1024 * 1024,
   mediaVoiceMaxBytes: 15 * 1024 * 1024,
   mediaVoiceMaxDurationSec: 120,
+  mediaVideoMaxBytes: 25 * 1024 * 1024,
+  mediaVideoMaxDurationSec: 60,
+  mediaFileMaxBytes: 10 * 1024 * 1024,
+  mediaFileMaxExtractedChars: 10000,
+  mediaEnrichmentConcurrency: 2,
+  mediaMaxRamMb: 1024,
+  mediaStorageQuotaMb: 512,
   providerCapabilities: {},
 };
 
@@ -173,6 +187,13 @@ export const SystemSettingsSchema = z.object({
   mediaImageMaxBytes: SystemSettingsBaseShape.mediaImageMaxBytes.default(SystemSettingsDefaults.mediaImageMaxBytes),
   mediaVoiceMaxBytes: SystemSettingsBaseShape.mediaVoiceMaxBytes.default(SystemSettingsDefaults.mediaVoiceMaxBytes),
   mediaVoiceMaxDurationSec: SystemSettingsBaseShape.mediaVoiceMaxDurationSec.default(SystemSettingsDefaults.mediaVoiceMaxDurationSec),
+  mediaVideoMaxBytes: SystemSettingsBaseShape.mediaVideoMaxBytes.default(SystemSettingsDefaults.mediaVideoMaxBytes),
+  mediaVideoMaxDurationSec: SystemSettingsBaseShape.mediaVideoMaxDurationSec.default(SystemSettingsDefaults.mediaVideoMaxDurationSec),
+  mediaFileMaxBytes: SystemSettingsBaseShape.mediaFileMaxBytes.default(SystemSettingsDefaults.mediaFileMaxBytes),
+  mediaFileMaxExtractedChars: SystemSettingsBaseShape.mediaFileMaxExtractedChars.default(SystemSettingsDefaults.mediaFileMaxExtractedChars),
+  mediaEnrichmentConcurrency: SystemSettingsBaseShape.mediaEnrichmentConcurrency.default(SystemSettingsDefaults.mediaEnrichmentConcurrency),
+  mediaMaxRamMb: SystemSettingsBaseShape.mediaMaxRamMb.default(SystemSettingsDefaults.mediaMaxRamMb),
+  mediaStorageQuotaMb: SystemSettingsBaseShape.mediaStorageQuotaMb.default(SystemSettingsDefaults.mediaStorageQuotaMb),
   providerCapabilities: SystemSettingsBaseShape.providerCapabilities.default(SystemSettingsDefaults.providerCapabilities),
 });
 

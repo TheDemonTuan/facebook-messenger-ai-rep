@@ -630,7 +630,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
       const result = await retentionHandler();
       expect(mockJobRepo.cleanOldJobs).toHaveBeenCalledWith(7);
       expect(mockOutboxRepo.cleanProcessedEvents).toHaveBeenCalledWith(7);
-      expect(result).toEqual({ cleanedJobs: 15, cleanedOutboxEvents: 30 });
+      expect(result).toMatchObject({ cleanedJobs: 15, cleanedOutboxEvents: 30 });
     });
   });
 

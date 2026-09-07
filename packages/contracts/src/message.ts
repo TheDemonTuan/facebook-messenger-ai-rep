@@ -299,12 +299,27 @@ export const AudioPartSchema = z.object({
 });
 export type AudioPart = z.infer<typeof AudioPartSchema>;
 
+export const VideoCoverageSchema = z.object({
+  container: z.string().max(32),
+  codecs: z.array(z.string().max(32)).default([]),
+  durationMs: z.number().int().nonnegative().optional(),
+  hasVideoTrack: z.boolean().default(true),
+  hasAudioTrack: z.boolean().default(false),
+  framesExtracted: z.number().int().nonnegative().default(0),
+  audioExtracted: z.boolean().default(false),
+  coverageStatus: z.enum(["FULL", "POSTER_ONLY", "AUDIO_ONLY", "FRAMES_AND_AUDIO", "UNSUPPORTED"]).default("POSTER_ONLY"),
+  limitationReason: z.string().max(256).optional(),
+});
+export type VideoCoverage = z.infer<typeof VideoCoverageSchema>;
+
 export const VideoPartSchema = z.object({
   type: z.literal("VIDEO"),
   media: MediaRefSchema,
   posterRef: z.string().max(256).optional(),
   analysisRef: z.string().max(256).optional(),
   durationMs: z.number().int().nonnegative().optional(),
+  transcript: DerivedTranscriptSchema.optional(),
+  coverage: VideoCoverageSchema.optional(),
 });
 export type VideoPart = z.infer<typeof VideoPartSchema>;
 
@@ -337,6 +352,8 @@ export const FilePartSchema = z.object({
   media: MediaRefSchema,
   fileName: z.string().max(256).optional(),
   byteSize: z.number().int().nonnegative().optional(),
+  extractedText: z.string().max(50000).optional(),
+  extractedChars: z.number().int().nonnegative().optional(),
 });
 export type FilePart = z.infer<typeof FilePartSchema>;
 

@@ -138,6 +138,37 @@ export function buildChatMessages(
                 );
               }
             }
+          } else if (part.type === "VIDEO") {
+            const durationStr = part.durationMs ? `${Math.round(part.durationMs / 1000)}s` : "";
+            const posterRefId = part.posterRef || (part.media as { thumbnailRef?: string })?.thumbnailRef;
+            const cachedPoster = posterRefId ? globalMediaCache.get(posterRefId) : undefined;
+
+            if (canReadImages && cachedPoster && cachedPoster.base64) {
+              imageContentParts.push({
+                type: "image_url",
+                image_url: {
+                  url: `data:${cachedPoster.mimeType};base64,${cachedPoster.base64}`,
+                },
+                mediaRefId: cachedPoster.mediaRefId,
+              });
+              textSnippets.push(
+                `[Video khách gửi${durationStr ? ` (thời lượng: ${durationStr})` : ""}: Đã trích xuất khung hình/ảnh đại diện. Lưu ý: Chỉ là khung hình tĩnh, KHÔNG đại diện cho toàn bộ nội dung chuyển động của video]`
+              );
+            } else if (
+              part.media?.status === "UNSUPPORTED" ||
+              (part.coverage && part.coverage.coverageStatus === "UNSUPPORTED")
+            ) {
+              const reason = part.coverage?.limitationReason || "Định dạng/thời lượng video vượt quá giới hạn hỗ trợ";
+              textSnippets.push(`[Video khách gửi: ${reason}. Không giả định nội dung video; lịch sự hỏi khách mô tả chi tiết]`);
+            } else {
+              textSnippets.push(
+                `[Video khách gửi${durationStr ? ` (${durationStr})` : ""}: Chưa có dữ liệu phân tích khung hình chuyển động]`
+              );
+            }
+
+            if (part.transcript?.text) {
+              textSnippets.push(`[Lời thoại trong video (ASR)]: ${part.transcript.text.trim()}`);
+            }
           } else if (part.type === "SHARE") {
             const title = part.title ? `Tiêu đề: ${part.title}` : "";
             const preview = part.previewText ? `Mô tả: ${part.previewText}` : "";
@@ -148,7 +179,17 @@ export function buildChatMessages(
             textSnippets.push(`[Khách chia sẻ liên kết / bài viết${restriction}: ${[title, preview].filter(Boolean).join(" - ")}]`);
           } else if (part.type === "FILE") {
             const sizeStr = part.byteSize ? ` (${Math.round(part.byteSize / 1024)} KB)` : "";
-            textSnippets.push(`[Khách gửi tệp tin: ${part.fileName || "Tệp đính kèm"}${sizeStr}]`);
+            if (part.extractedText && part.extractedText.trim()) {
+              textSnippets.push(
+                `[Nội dung trích xuất từ tệp tin "${part.fileName || "tệp đính kèm"}"${sizeStr}]:\n${part.extractedText.trim()}`
+              );
+            } else if (part.media?.status === "UNSUPPORTED") {
+              textSnippets.push(
+                `[Khách gửi tệp tin "${part.fileName || "tệp đính kèm"}"${sizeStr}: Định dạng chưa được hỗ trợ trích xuất văn bản tự động]`
+              );
+            } else {
+              textSnippets.push(`[Khách gửi tệp tin: ${part.fileName || "Tệp đính kèm"}${sizeStr}]`);
+            }
           }
         }
 

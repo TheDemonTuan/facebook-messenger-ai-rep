@@ -1,4 +1,4 @@
-export type MediaCategory = "image" | "audio" | "video" | "unknown";
+export type MediaCategory = "image" | "audio" | "video" | "file" | "unknown";
 
 export interface SniffResult {
   mimeType: string | null;
@@ -190,6 +190,41 @@ export function sniffMimeType(buffer: Buffer | Uint8Array): SniffResult {
     return { mimeType: "video/webm", category: "video", isSafe: true };
   }
 
+  // 4. DOCUMENT & TEXT formats
+  // PDF: %PDF- (25 50 44 46 2D)
+  if (
+    len >= 5 &&
+    buffer[0] === 0x25 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x44 &&
+    buffer[3] === 0x46 &&
+    buffer[4] === 0x2d
+  ) {
+    return { mimeType: "application/pdf", category: "file", isSafe: true };
+  }
+
+  // Text formats: check if buffer is valid UTF-8 without binary control bytes
+  let isBinary = false;
+  const sampleLen = Math.min(len, 512);
+  for (let i = 0; i < sampleLen; i++) {
+    const byte = buffer[i];
+    if (byte === 0x00 || (byte !== undefined && byte < 0x09 && byte !== 0x0a && byte !== 0x0d)) {
+      isBinary = true;
+      break;
+    }
+  }
+
+  if (!isBinary) {
+    const sampleStr = Buffer.from(buffer.slice(0, sampleLen)).toString("utf8").trimStart();
+    if (sampleStr.startsWith("{") || sampleStr.startsWith("[")) {
+      return { mimeType: "application/json", category: "file", isSafe: true };
+    }
+    if (sampleStr.includes(",") && (sampleStr.includes("\n") || sampleStr.includes("\r"))) {
+      return { mimeType: "text/csv", category: "file", isSafe: true };
+    }
+    return { mimeType: "text/plain", category: "file", isSafe: true };
+  }
+
   return {
     mimeType: null,
     category: "unknown",
@@ -203,7 +238,7 @@ export function sniffMimeType(buffer: Buffer | Uint8Array): SniffResult {
  */
 export function isAllowedPartMimeType(
   mimeType: string,
-  partType: "IMAGE" | "VOICE" | "AUDIO" | "VIDEO"
+  partType: "IMAGE" | "VOICE" | "AUDIO" | "VIDEO" | "FILE"
 ): boolean {
   const cleanMime = mimeType.toLowerCase().trim();
 
@@ -235,6 +270,17 @@ export function isAllowedPartMimeType(
       "video/mp4",
       "video/webm",
       "video/quicktime",
+    ].includes(cleanMime);
+  }
+
+  if (partType === "FILE") {
+    return [
+      "text/plain",
+      "text/csv",
+      "application/csv",
+      "application/json",
+      "text/json",
+      "application/pdf",
     ].includes(cleanMime);
   }
 

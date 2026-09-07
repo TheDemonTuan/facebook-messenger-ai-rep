@@ -51,10 +51,11 @@ export class CoreJobService {
 
   constructor(deps: CoreJobServiceDeps) {
     this.deps = deps;
+    const concurrency = Math.max(1, Math.min(4, Number(process.env.MEDIA_ENRICHMENT_CONCURRENCY) || 2));
     this.runner = new JobRunner({
       jobRepo: deps.jobRepo,
       queues: ["default", "debounce", "ai", "system", "media_enrichment"],
-      concurrency: 2,
+      concurrency,
       pollIntervalMs: 200,
       leaseDurationSeconds: 60,
     });

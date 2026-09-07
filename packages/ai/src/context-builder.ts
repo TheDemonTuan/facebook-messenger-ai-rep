@@ -48,10 +48,14 @@ export function estimateMessageTokens(m: ConversationMessageItem): number {
         tokens += estimateTextTokens(transcriptText) + 50;
       } else if (part.type === "VIDEO") {
         tokens += 400;
+        if (part.transcript?.text) {
+          tokens += estimateTextTokens(part.transcript.text) + 20;
+        }
       } else if (part.type === "SHARE") {
         tokens += estimateTextTokens(part.title || "") + estimateTextTokens(part.previewText || "") + 20;
       } else if (part.type === "FILE") {
-        tokens += estimateTextTokens(part.fileName || "") + 10;
+        const fileContent = (part as { extractedText?: string }).extractedText || "";
+        tokens += estimateTextTokens(fileContent || part.fileName || "") + 10;
       }
     }
   }
