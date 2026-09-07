@@ -1,10 +1,10 @@
-import { getDb, conversations, messages, inboundMessages, aiRuns, conversationEvents, replyPolicyMembers } from "@messenger/db";
+import { getDb, conversations, messages, inboundMessages, aiRuns, conversationEvents } from "@messenger/db";
 import { SettingsRepository } from "@messenger/db";
-import { eq, inArray, sql } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 async function main() {
   const isApply = process.argv.includes("--apply");
-  const isDryRun = !isApply || process.argv.includes("--dry-run");
+  const _isDryRun = !isApply || process.argv.includes("--dry-run");
 
   console.log(`[Prune Script] Starting out-of-scope conversation cleanup (mode: ${isApply ? "APPLY" : "DRY-RUN"})...`);
 

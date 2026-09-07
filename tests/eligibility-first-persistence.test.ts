@@ -3,7 +3,6 @@ import { ConversationRepository } from "../packages/db/src/repository/conversati
 import { ReplyPolicyService } from "../packages/db/src/service/reply-policy-service.js";
 import { InboundMessagePayloadSchema } from "../packages/contracts/src/message.js";
 import type { Database } from "@messenger/db";
-import { conversations, customers, messages, inboundMessages, jobs, channelAccounts, settings, replyPolicyMembers } from "../packages/db/src/schema/index.js";
 
 describe("Eligibility-First Persistence & Storage Optimization (P1 - P9)", () => {
   function setupTestHarness(customSettings: Record<string, unknown> = {}, existingConvList: Record<string, unknown>[] = []) {
@@ -53,7 +52,11 @@ describe("Eligibility-First Persistence & Storage Optimization (P1 - P9)", () =>
         from: vi.fn((table: unknown) => ({
           where: vi.fn(() => ({
             limit: vi.fn().mockImplementation(() => {
-              const tableName = (table as any)?.[Symbol.for("drizzle:Name")] || (table as any)?._?.name || (table as any)?.name;
+              const tableRecord = table as Record<string, unknown> | undefined;
+              const tableName =
+                (tableRecord?.[Symbol.for("drizzle:Name")] as string | undefined) ||
+                ((tableRecord?._ as Record<string, unknown> | undefined)?.name as string | undefined) ||
+                (tableRecord?.name as string | undefined);
               if (tableName === "channel_accounts") return Promise.resolve(dbState.channelAccounts);
               if (tableName === "settings") return Promise.resolve(dbState.settings);
               if (tableName === "reply_policy_members") return Promise.resolve(dbState.policyMembers);
@@ -67,7 +70,11 @@ describe("Eligibility-First Persistence & Storage Optimization (P1 - P9)", () =>
       })),
       insert: vi.fn((table: unknown) => ({
         values: vi.fn((val: Record<string, unknown>) => {
-          const tableName = (table as any)?.[Symbol.for("drizzle:Name")] || (table as any)?._?.name || (table as any)?.name;
+          const tableRecord = table as Record<string, unknown> | undefined;
+          const tableName =
+            (tableRecord?.[Symbol.for("drizzle:Name")] as string | undefined) ||
+            ((tableRecord?._ as Record<string, unknown> | undefined)?.name as string | undefined) ||
+            (tableRecord?.name as string | undefined);
           if (tableName === "conversations") dbState.conversations.push(val);
           if (tableName === "customers") dbState.customers.push(val);
           if (tableName === "messages") dbState.messages.push(val);

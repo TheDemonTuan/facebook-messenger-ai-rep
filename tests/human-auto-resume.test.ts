@@ -1,8 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { ConversationControlService } from "../packages/db/src/service/conversation-control-service.js";
 import { createHumanFallbackHandler } from "../apps/core/src/jobs/handlers/human-fallback.js";
-import type { Database, JobRepository, EventRepository, OutboxRepository, JobExecutionContext } from "@messenger/db";
-import { conversations, conversationQueue, jobs, outboundActions } from "../packages/db/src/schema/index.js";
+import type { Database, EventRepository, JobExecutionContext } from "@messenger/db";
+import { conversations } from "../packages/db/src/schema/index.js";
+import type { OutboxBroadcaster } from "../apps/core/src/sse/outbox-broadcaster.js";
 
 describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
   // Mock DB factory
@@ -43,7 +44,11 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
       update: vi.fn((table) => ({
         set: vi.fn((values: Record<string, unknown>) => {
           state.updates.push(values);
-          const name = (table as any)?.[Symbol.for("drizzle:Name")] || (table as any)?._?.name || (table as any)?.name;
+          const tableRecord = table as Record<string, unknown> | undefined;
+          const name =
+            (tableRecord?.[Symbol.for("drizzle:Name")] as string | undefined) ||
+            ((tableRecord?._ as Record<string, unknown> | undefined)?.name as string | undefined) ||
+            (tableRecord?.name as string | undefined);
           if (name === "conversations" || table === conversations || (!name && ("replyControlMode" in values || "manualMode" in values))) {
             Object.assign(state.conv, values);
           }
@@ -128,16 +133,12 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     });
 
     const mockEventRepo = { recordEvent: vi.fn() } as unknown as EventRepository;
-    const mockJobRepo = { enqueue: vi.fn() } as unknown as JobRepository;
-    const mockOutboxRepo = {} as unknown as OutboxRepository;
     const mockBroadcaster = { broadcast: vi.fn() };
 
     const fallbackHandler = createHumanFallbackHandler({
       db: mockDb,
-      jobRepo: mockJobRepo,
       eventRepo: mockEventRepo,
-      outboxRepo: mockOutboxRepo,
-      broadcaster: mockBroadcaster as any,
+      broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
     });
 
     const mockContext = {
@@ -173,16 +174,12 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     });
 
     const mockEventRepo = { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository;
-    const mockJobRepo = { enqueue: vi.fn() } as unknown as JobRepository;
-    const mockOutboxRepo = {} as unknown as OutboxRepository;
     const mockBroadcaster = { broadcast: vi.fn() };
 
     const fallbackHandler = createHumanFallbackHandler({
       db: mockDb,
-      jobRepo: mockJobRepo,
       eventRepo: mockEventRepo,
-      outboxRepo: mockOutboxRepo,
-      broadcaster: mockBroadcaster as any,
+      broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
     });
 
     const mockContext = {
@@ -254,7 +251,7 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
   it("H7: repeated human sends refresh session and respect maxSessionMs cap", async () => {
     const now = new Date();
     const sessionStart = new Date(now.getTime() - 500000); // 500s ago
-    const { mockDb, state } = createMockDb({
+    const { mockDb } = createMockDb({
       replyControlMode: "HUMAN_SESSION",
       humanSessionStartedAt: sessionStart,
       controlEpoch: 50,

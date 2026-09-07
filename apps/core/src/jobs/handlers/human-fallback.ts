@@ -1,5 +1,5 @@
 import type { JobExecutionContext } from "@messenger/db";
-import type { Database, JobRepository, EventRepository, OutboxRepository } from "@messenger/db";
+import type { Database, EventRepository } from "@messenger/db";
 import { conversations, conversationQueue, jobs, ConversationControlService } from "@messenger/db";
 import { eq } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
@@ -7,15 +7,13 @@ import type { HumanFallbackJobPayload } from "@messenger/contracts";
 
 export interface HumanFallbackHandlerDeps {
   db: Database;
-  jobRepo: JobRepository;
   eventRepo: EventRepository;
-  outboxRepo: OutboxRepository;
   broadcaster: OutboxBroadcaster;
   controlService?: ConversationControlService;
 }
 
 export function createHumanFallbackHandler(deps: HumanFallbackHandlerDeps) {
-  const { db, jobRepo, eventRepo, outboxRepo, broadcaster } = deps;
+  const { db, eventRepo, broadcaster } = deps;
   const controlService = deps.controlService ?? new ConversationControlService(db);
 
   return async function handleHumanFallback(context: JobExecutionContext): Promise<void> {

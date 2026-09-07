@@ -103,9 +103,7 @@ export class CoreJobService {
 
     const handleHumanFallback = createHumanFallbackHandler({
       db: deps.db,
-      jobRepo: deps.jobRepo,
       eventRepo: deps.eventRepo,
-      outboxRepo: deps.outboxRepo,
       broadcaster: deps.broadcaster,
     });
 

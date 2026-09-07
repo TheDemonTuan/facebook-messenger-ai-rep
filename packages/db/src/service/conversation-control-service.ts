@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql, or, lte } from "drizzle-orm";
+import { and, eq, inArray, or, lte } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { conversations, conversationQueue, outboundActions } from "../schema/index.js";
 import type { ReplyControlMode } from "@messenger/contracts";
