@@ -2,6 +2,12 @@ name: Production Diagnostics
 
 on:
   workflow_dispatch:
+    inputs:
+      apply_migrations:
+        description: Apply already-committed database migrations before collecting diagnostics
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +38,10 @@ jobs:
           ssh vps 'bash -s' <<'REMOTE'
           set -uo pipefail
           cd /opt/facebook-messenger-ai-rep
+          if [ "${{ inputs.apply_migrations }}" = "true" ]; then
+            echo '=== Applying committed database migrations ==='
+            docker compose --env-file .env --env-file .deploy.env -f compose.prod.yml run --rm migrate
+          fi
           ./deploy.sh --status || true
           echo '=== HTTP health ==='
           curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz || true
