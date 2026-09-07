@@ -9,7 +9,31 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-const demoRecords: Record<string, any> = {
+interface MockConversationRecord {
+  conversation: {
+    id: string;
+    channelAccountId: string;
+    inboundVersion: number;
+    status: string;
+    lastInboundAt: string;
+    lastOutboundAt: string | null;
+    isBlocked: boolean;
+    manualMode: boolean;
+    unreadCount: number;
+    title: string;
+  };
+  customer: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+  };
+  messages: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+  aiRuns: Array<Record<string, unknown>>;
+  outboundActions: Array<Record<string, unknown>>;
+}
+
+const demoRecords: Record<string, MockConversationRecord> = {
   "conv-mai-anh": {
     conversation: {
       id: "conv-mai-anh",

@@ -70,7 +70,6 @@ export const WorkflowPage: React.FC = () => {
     setSelectedConversationId,
     selectedStageId,
     setSelectedStageId,
-    selectedVersion,
     setSelectedVersion,
     viewData,
     listLoading,
