@@ -4,6 +4,7 @@ import type {
   ConversationItem,
   ConversationDetailData,
   PaginatedInboxResponse,
+  SettingItem,
 } from "../../types";
 import {
   buildWorkflowView,
@@ -40,6 +41,7 @@ export interface UseWorkflowDataResult {
   refresh: () => Promise<void>;
   notice: string | null;
   setNotice: (n: string | null) => void;
+  settings: SettingItem | null;
 }
 
 const LIST_INTERVAL_MS = 20000;
@@ -60,6 +62,7 @@ export function useWorkflowData(): UseWorkflowDataResult {
   const [tab, setTab] = useState<"messages" | "events">("messages");
   const [isPaused, setIsPaused] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [settings, setSettings] = useState<SettingItem | null>(null);
 
   const detailAbortRef = useRef<AbortController | null>(null);
   const listAbortRef = useRef<AbortController | null>(null);
@@ -76,6 +79,15 @@ export function useWorkflowData(): UseWorkflowDataResult {
 
   const togglePause = useCallback(() => {
     setIsPaused((prev) => !prev);
+  }, []);
+
+  const fetchSettings = useCallback(async () => {
+    try {
+      const res = await apiFetch<SettingItem>("/api/settings");
+      setSettings(res);
+    } catch {
+      // Ignore
+    }
   }, []);
 
   // Fetch list of conversations
@@ -146,7 +158,8 @@ export function useWorkflowData(): UseWorkflowDataResult {
   // Initial load
   useEffect(() => {
     fetchList();
-  }, [fetchList]);
+    fetchSettings();
+  }, [fetchList, fetchSettings]);
 
   // When selected conversation changes, fetch its detail
   useEffect(() => {
@@ -231,11 +244,11 @@ export function useWorkflowData(): UseWorkflowDataResult {
 
   const refresh = useCallback(async () => {
     setListLoading(true);
-    await fetchList();
+    await Promise.all([fetchList(), fetchSettings()]);
     if (selectedConvIdRef.current) {
       await fetchDetail(selectedConvIdRef.current);
     }
-  }, [fetchList, fetchDetail]);
+  }, [fetchList, fetchDetail, fetchSettings]);
 
   // Build projected workflow view from rawDetail
   const viewData: WorkflowViewData | null = rawDetail
@@ -266,5 +279,6 @@ export function useWorkflowData(): UseWorkflowDataResult {
     refresh,
     notice,
     setNotice,
+    settings,
   };
 }

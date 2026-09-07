@@ -1205,8 +1205,15 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
         const [items, totalRes] = await Promise.all([
           db
-            .select()
+            .select({
+              run: aiRuns,
+              conversationTitle: conversations.title,
+              customerName: customers.name,
+              customerAvatarUrl: customers.avatarUrl,
+            })
             .from(aiRuns)
+            .leftJoin(conversations, eq(aiRuns.conversationId, conversations.id))
+            .leftJoin(customers, eq(conversations.customerId, customers.id))
             .where(and(...conditions))
             .orderBy(desc(aiRuns.createdAt))
             .limit(limit)
@@ -1220,11 +1227,14 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const total = totalRes[0]?.count || 0;
         const hasMore = offset + items.length < total;
 
-        const sanitizedItems = items.map((item) => ({
-          ...item,
-          requestSnapshot: item.requestSnapshot ? stripSensitiveData(item.requestSnapshot) : null,
-          responseSnapshot: item.responseSnapshot ? stripSensitiveData(item.responseSnapshot) : null,
-          usedResult: item.usedResult ? sanitizeCustomerOutput(item.usedResult) : null,
+        const sanitizedItems = items.map((row) => ({
+          ...row.run,
+          conversationTitle: row.conversationTitle || null,
+          customerName: row.customerName || row.conversationTitle || "Khách hàng Messenger",
+          customerAvatarUrl: row.customerAvatarUrl || null,
+          requestSnapshot: row.run.requestSnapshot ? stripSensitiveData(row.run.requestSnapshot) : null,
+          responseSnapshot: row.run.responseSnapshot ? stripSensitiveData(row.run.responseSnapshot) : null,
+          usedResult: row.run.usedResult ? sanitizeCustomerOutput(row.run.usedResult) : null,
         }));
 
         return reply.send({

@@ -55,6 +55,7 @@ export interface ConversationItem {
   latestInboundMessage?: {
     text: string;
     timestamp: string;
+    skipReason?: SkipReasonInfo | null;
   } | null;
 }
 
@@ -180,6 +181,9 @@ export interface AiRunItem {
   id: string;
   channelAccountId: string;
   conversationId: string;
+  conversationTitle?: string | null;
+  customerName?: string | null;
+  customerAvatarUrl?: string | null;
   inboundVersion: number;
   model: string;
   promptTokens: number;

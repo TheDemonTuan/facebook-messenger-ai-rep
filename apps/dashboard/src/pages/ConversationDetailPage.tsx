@@ -19,6 +19,7 @@ import {
 import { shouldRefetchConversationDetail } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import { formatTime } from "../helpers/date-helpers";
+import { eventLabel } from "../helpers/event-helpers";
 import {
   ArrowLeft,
   User,
@@ -332,28 +333,7 @@ export const ConversationDetailPage: React.FC = () => {
   };
 
   const formatEventType = (type: string) => {
-    switch (type) {
-      case "INBOUND_MESSAGE":
-        return "Khách gửi tin";
-      case "OUTBOUND_MESSAGE":
-        return "Gửi phản hồi";
-      case "AI_RUN":
-        return "AI xử lý";
-      case "TAKEOVER_STARTED":
-        return "Bắt đầu hỗ trợ trực tiếp";
-      case "TAKEOVER_RELEASED":
-        return "Chuyển lại cho AI";
-      case "TAKEOVER_CANCEL_ACK":
-        return "Đã dừng AI phản hồi";
-      case "ACTION_RECONCILED":
-        return "Xác nhận gửi tin";
-      case "INCIDENT_CREATED":
-        return "Phát sinh sự cố";
-      case "INCIDENT_RESOLVED":
-        return "Đã xử lý sự cố";
-      default:
-        return type.replace(/_/g, " ").toLowerCase();
-    }
+    return eventLabel(type);
   };
 
   return (

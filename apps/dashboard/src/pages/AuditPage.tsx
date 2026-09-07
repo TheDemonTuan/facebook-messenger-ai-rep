@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import { Search, Loader2, AlertCircle, Shield } from "lucide-react";
 import { formatDateTime } from "../helpers/date-helpers";
+import { eventLabel } from "../helpers/event-helpers";
 
 interface AuditEventItem {
   id: string;
@@ -51,24 +52,10 @@ export const AuditPage: React.FC = () => {
         return "Tạm dừng kênh";
       case "CHANNEL_RESUMED":
         return "Tiếp tục kênh";
-      case "TAKEOVER_STARTED":
-        return "Tiếp quản thủ công";
-      case "TAKEOVER_RELEASED":
-        return "Chuyển lại cho AI";
       case "MANUAL_MESSAGE_SENT":
         return "Gửi tin thủ công";
-      case "INCIDENT_CREATED":
-        return "Phát sinh sự cố";
-      case "INCIDENT_RESOLVED":
-        return "Giải quyết sự cố";
-      case "ACTION_RECONCILED":
-        return "Xác nhận gửi tin";
-      case "AI_RUN":
-        return "AI xử lý";
-      case "INBOUND_MESSAGE":
-        return "Tin nhắn đến";
       default:
-        return type.replace(/_/g, " ").toLowerCase();
+        return eventLabel(type);
     }
   };
 

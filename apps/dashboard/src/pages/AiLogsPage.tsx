@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { AiRunItem } from "../types";
@@ -113,6 +113,24 @@ function getStatusIcon(status: string) {
   }
 }
 
+function getInitials(name: string): string {
+  const clean = name.trim();
+  if (!clean) return "KH";
+  const parts = clean.split(/\s+/);
+  if (parts.length === 1) return Array.from(parts[0])[0]?.toUpperCase() || "KH";
+  const first = Array.from(parts[parts.length - 2])[0] || "";
+  const second = Array.from(parts[parts.length - 1])[0] || "";
+  return (first + second).toUpperCase();
+}
+
+interface ConversationGroup {
+  conversationId: string;
+  customerName: string;
+  customerAvatarUrl?: string | null;
+  runs: AiRunItem[];
+  latestRun: AiRunItem;
+}
+
 export const AiLogsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
   const initialConvId = searchParams.get("conversationId") || "";
@@ -122,6 +140,8 @@ export const AiLogsPage: React.FC = () => {
   const [selectedRun, setSelectedRun] = useState<AiRunItem | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("ALL");
   const [convFilter, setConvFilter] = useState<string>(initialConvId);
+  const [selectedConvId, setSelectedConvId] = useState<string>(initialConvId || "ALL");
+  const [convSearch, setConvSearch] = useState("");
 
   // Live test runner state
   const [showTester, setShowTester] = useState(false);
@@ -144,18 +164,56 @@ export const AiLogsPage: React.FC = () => {
 
       const res = await apiFetch<{ items: AiRunItem[] }>(`/api/ai-runs?${params.toString()}`);
       setRuns(res.items || []);
-      if (res.items && res.items.length > 0 && !selectedRun) {
-        setSelectedRun(res.items[0]);
-      } else if (res.items && selectedRun) {
-        const matched = res.items.find((r) => r.id === selectedRun.id);
-        if (matched) setSelectedRun(matched);
-      }
     } catch {
       // Handled
     } finally {
       setLoading(false);
     }
   };
+
+  const conversationGroups = useMemo(() => {
+    const map = new Map<string, ConversationGroup>();
+    for (const run of runs) {
+      const cid = run.conversationId || "unknown";
+      if (!map.has(cid)) {
+        const name = run.customerName || run.conversationTitle || `Hội thoại #${cid.slice(0, 8)}`;
+        map.set(cid, {
+          conversationId: cid,
+          customerName: name,
+          customerAvatarUrl: run.customerAvatarUrl,
+          runs: [],
+          latestRun: run,
+        });
+      }
+      map.get(cid)!.runs.push(run);
+    }
+    return Array.from(map.values());
+  }, [runs]);
+
+  const filteredConversationGroups = useMemo(() => {
+    if (!convSearch.trim()) return conversationGroups;
+    const q = convSearch.trim().toLowerCase();
+    return conversationGroups.filter(
+      (g) =>
+        g.customerName.toLowerCase().includes(q) ||
+        g.conversationId.toLowerCase().includes(q)
+    );
+  }, [conversationGroups, convSearch]);
+
+  const activeRuns = useMemo(() => {
+    if (selectedConvId === "ALL") return runs;
+    return runs.filter((r) => r.conversationId === selectedConvId);
+  }, [runs, selectedConvId]);
+
+  useEffect(() => {
+    if (activeRuns.length > 0) {
+      if (!selectedRun || !activeRuns.some((r) => r.id === selectedRun.id)) {
+        setSelectedRun(activeRuns[0]);
+      }
+    } else {
+      setSelectedRun(null);
+    }
+  }, [activeRuns, selectedRun]);
 
   useEffect(() => {
     loadRuns(convFilter, statusFilter);
@@ -819,50 +877,206 @@ export const AiLogsPage: React.FC = () => {
         </div>
       )}
 
-      {/* Two Column Layout: Run List (Left) & Inspector (Right) */}
-      <div style={{ display: "grid", gridTemplateColumns: "360px 1fr", gap: "16px", alignItems: "flex-start" }}>
-        {/* Left: Runs List */}
+      {/* 3-Panel Layout: Conversation Groups (Left) & Runs List (Center) & Inspector (Right) */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "250px 290px minmax(0, 1fr)",
+          gap: "14px",
+          alignItems: "flex-start",
+        }}
+      >
+        {/* Panel 1: Conversation Groups */}
         <div
           style={{
             backgroundColor: "#ffffff",
             borderRadius: "8px",
             boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
             overflow: "hidden",
-            maxHeight: "calc(100vh - 240px)",
+            maxHeight: "calc(100vh - 220px)",
             display: "flex",
             flexDirection: "column",
           }}
         >
           <div
             style={{
-              padding: "12px 16px",
+              padding: "10px 14px",
               borderBottom: "1px solid #e2e8f0",
               fontWeight: "bold",
-              fontSize: "0.9rem",
+              fontSize: "0.85rem",
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
               backgroundColor: "#f8fafc",
             }}
           >
-            <span>Danh sách lượt xử lý ({runs.length})</span>
-            {loading && <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Đang tải...</span>}
+            <span>Nhóm hội thoại ({filteredConversationGroups.length})</span>
+            {loading && <span style={{ fontSize: "0.72rem", color: "#64748b" }}>Đang tải...</span>}
+          </div>
+
+          <div style={{ padding: "8px 10px", borderBottom: "1px solid #f1f5f9" }}>
+            <input
+              type="text"
+              placeholder="Tìm khách hàng..."
+              value={convSearch}
+              onChange={(e) => setConvSearch(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "6px 10px",
+                borderRadius: "6px",
+                border: "1px solid #cbd5e1",
+                fontSize: "0.8rem",
+                boxSizing: "border-box",
+                outline: "none",
+              }}
+            />
           </div>
 
           <div style={{ overflowY: "auto", flex: 1 }}>
-            {runs.length === 0 ? (
-              <div style={{ padding: "32px 16px", textAlign: "center", color: "#94a3b8", fontSize: "0.85rem" }}>
-                Không tìm thấy lượt xử lý AI nào phù hợp bộ lọc.
+            {/* All conversations option */}
+            <div
+              onClick={() => setSelectedConvId("ALL")}
+              style={{
+                padding: "10px 14px",
+                borderBottom: "1px solid #f1f5f9",
+                cursor: "pointer",
+                backgroundColor: selectedConvId === "ALL" ? "#eff6ff" : "#ffffff",
+                borderLeft: selectedConvId === "ALL" ? "4px solid #2563eb" : "4px solid transparent",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{
+                    width: "28px",
+                    height: "28px",
+                    borderRadius: "8px",
+                    backgroundColor: "#e0e7ff",
+                    color: "#4338ca",
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: "0.75rem",
+                    fontWeight: "bold",
+                  }}
+                >
+                  ALL
+                </div>
+                <div>
+                  <div style={{ fontSize: "0.82rem", fontWeight: "600", color: "#1e293b" }}>Tất cả hội thoại</div>
+                  <div style={{ fontSize: "0.72rem", color: "#64748b" }}>{runs.length} lượt xử lý</div>
+                </div>
+              </div>
+            </div>
+
+            {filteredConversationGroups.map((group) => {
+              const isGroupSelected = selectedConvId === group.conversationId;
+              return (
+                <div
+                  key={group.conversationId}
+                  onClick={() => setSelectedConvId(group.conversationId)}
+                  style={{
+                    padding: "10px 14px",
+                    borderBottom: "1px solid #f1f5f9",
+                    cursor: "pointer",
+                    backgroundColor: isGroupSelected ? "#eff6ff" : "#ffffff",
+                    borderLeft: isGroupSelected ? "4px solid #2563eb" : "4px solid transparent",
+                    transition: "background 0.15s",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div
+                      style={{
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "8px",
+                        backgroundColor: "#f1f5f9",
+                        color: "#475569",
+                        display: "grid",
+                        placeItems: "center",
+                        fontSize: "0.72rem",
+                        fontWeight: "700",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {getInitials(group.customerName)}
+                    </div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div
+                        style={{
+                          fontSize: "0.82rem",
+                          fontWeight: "600",
+                          color: "#1e293b",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {group.customerName}
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          fontSize: "0.7rem",
+                          color: "#64748b",
+                          marginTop: "2px",
+                        }}
+                      >
+                        <span>{group.runs.length} lượt</span>
+                        <span>{formatTime(group.latestRun.createdAt)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Panel 2: Runs List */}
+        <div
+          style={{
+            backgroundColor: "#ffffff",
+            borderRadius: "8px",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+            overflow: "hidden",
+            maxHeight: "calc(100vh - 220px)",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              padding: "10px 14px",
+              borderBottom: "1px solid #e2e8f0",
+              fontWeight: "bold",
+              fontSize: "0.85rem",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              backgroundColor: "#f8fafc",
+            }}
+          >
+            <span>Lượt chạy ({activeRuns.length})</span>
+          </div>
+
+          <div style={{ overflowY: "auto", flex: 1 }}>
+            {activeRuns.length === 0 ? (
+              <div style={{ padding: "32px 16px", textAlign: "center", color: "#94a3b8", fontSize: "0.82rem" }}>
+                Không tìm thấy lượt xử lý nào.
               </div>
             ) : (
-              runs.map((run) => {
+              activeRuns.map((run) => {
                 const isSelected = selectedRun?.id === run.id;
                 return (
                   <div
                     key={run.id}
                     onClick={() => setSelectedRun(run)}
                     style={{
-                      padding: "12px 16px",
+                      padding: "10px 14px",
                       borderBottom: "1px solid #f1f5f9",
                       cursor: "pointer",
                       backgroundColor: isSelected ? "#eff6ff" : "#ffffff",
@@ -870,28 +1084,28 @@ export const AiLogsPage: React.FC = () => {
                       transition: "background 0.15s",
                     }}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
                       {getStatusBadge(run.status)}
-                      <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
+                      <span style={{ fontSize: "0.72rem", color: "#64748b" }}>
                         {formatTime(run.createdAt, null, { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                       </span>
                     </div>
 
-                    <div style={{ fontSize: "0.82rem", fontWeight: "600", color: "#1e293b", marginBottom: "4px" }}>
+                    <div style={{ fontSize: "0.8rem", fontWeight: "600", color: "#1e293b", marginBottom: "3px" }}>
                       Mô hình: {run.model}
                     </div>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", color: "#64748b", marginBottom: "4px" }}>
-                      <span>Thời gian: {formatDurationVi(run.latencyMs)}</span>
-                      <span>Dung lượng: {formatUsageVi(run.totalTokens)}</span>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.72rem", color: "#64748b" }}>
+                      <span>{formatDurationVi(run.latencyMs)}</span>
+                      <span>{formatUsageVi(run.totalTokens)}</span>
                     </div>
 
                     {run.errorMessage && (
                       <div
                         style={{
-                          fontSize: "0.75rem",
+                          fontSize: "0.72rem",
                           color: "#dc2626",
-                          marginTop: "4px",
+                          marginTop: "3px",
                           overflow: "hidden",
                           textOverflow: "ellipsis",
                           whiteSpace: "nowrap",

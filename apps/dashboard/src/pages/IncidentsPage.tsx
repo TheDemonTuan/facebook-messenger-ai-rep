@@ -11,6 +11,7 @@ import {
 import { shouldRefetchIncidents } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import { formatDateTime } from "../helpers/date-helpers";
+import { eventLabel } from "../helpers/event-helpers";
 import {
   AlertTriangle,
   CheckCircle,
@@ -153,7 +154,7 @@ export const IncidentsPage: React.FC = () => {
       case "INBOX_UNAVAILABLE":
         return "Không thấy hộp thư Messenger";
       default:
-        return type.replace(/_/g, " ").toLowerCase();
+        return eventLabel(type);
     }
   };
 

@@ -45,6 +45,7 @@ export interface WorkflowViewData {
   name: string;
   messages: MessageItem[];
   inbound: MessageItem[];
+  manualOutbound: MessageItem[];
   runs: AiRunItem[];
   run: AiRunItem | null;
   actions: OutboundActionItem[];
@@ -77,35 +78,8 @@ export const stateLabels: Record<StageState, string> = {
   cancelled: "Đã dừng",
 };
 
-export const eventLabels: Record<string, string> = {
-  INBOUND_RECEIVED: "Đã nhận tin nhắn của khách",
-  DEBOUNCE_STARTED: "Bắt đầu chờ khách nhắn thêm",
-  DEBOUNCE_RESET: "Có tin mới, cập nhật lượt trả lời",
-  CONVERSATION_QUEUED: "Đã xếp lượt hỗ trợ",
-  CONVERSATION_CLAIMED: "Bắt đầu xử lý hội thoại",
-  AI_STARTED: "Bắt đầu chuẩn bị câu trả lời",
-  AI_COMPLETED: "AI đã tạo câu trả lời",
-  AI_CANCELLED_STALE: "Dừng lượt cũ để xử lý thông tin mới",
-  DRAFT_CREATED: "Câu trả lời đã sẵn sàng",
-  TYPING_STARTED: "Bắt đầu soạn tin trên Messenger",
-  TYPING_ABORTED: "Đã dừng soạn tin",
-  SEND_STARTED: "Bắt đầu gửi tin",
-  SEND_INTENT: "Đã bắt đầu thao tác gửi",
-  SEND_CONFIRMED: "Đã xác nhận tin xuất hiện trên Messenger",
-  SEND_UNCERTAIN: "Chưa xác định được kết quả gửi",
-  SEND_UNCONFIRMED: "Chưa xác định được kết quả gửi",
-  CONVERSATION_RELEASED: "Đã kết thúc lượt xử lý",
-  ERROR: "Có lỗi cần kiểm tra",
-  SESSION_SUSPENDED: "Kênh đã tạm dừng để kiểm tra",
-  SESSION_RESUMED: "Kênh được cho phép hoạt động trở lại",
-  MANUAL_TAKEOVER: "Nhân viên bắt đầu hỗ trợ",
-  MANUAL_RELEASED: "Nhân viên chuyển lại cho trợ lý",
-  SETTING_CHANGED: "Đã cập nhật cài đặt",
-};
-
-export function eventLabel(type: string): string {
-  return eventLabels[type] || "Cập nhật hệ thống";
-}
+import { eventLabels, eventLabel } from "../../helpers/event-helpers";
+export { eventLabels, eventLabel };
 
 export function timestamp(value: unknown): number | null {
   if (typeof value !== "string" && !(value instanceof Date)) return null;
@@ -223,6 +197,9 @@ export function buildWorkflowView(
 
   const run = runs[0] || null;
   const inbound = messages.filter((m) => m.direction === "INBOUND");
+  const manualOutbound = messages.filter(
+    (m) => m.direction === "OUTBOUND" && m.actor === "MANUAL_OWNER"
+  );
   const has = (type: string) => events.some((e) => e.type === type);
   const workerStarted = events.some(
     (e) => e.type === "AI_STARTED" && e.actor === "AI_WORKER"
@@ -452,6 +429,7 @@ export function buildWorkflowView(
     name: data.customer?.name || conv.title || "Khách hàng Messenger",
     messages,
     inbound,
+    manualOutbound,
     runs,
     run,
     actions,

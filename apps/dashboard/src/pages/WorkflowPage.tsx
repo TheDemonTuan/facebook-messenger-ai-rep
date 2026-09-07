@@ -86,6 +86,7 @@ export const WorkflowPage: React.FC = () => {
     refresh,
     notice,
     setNotice,
+    settings,
   } = useWorkflowData();
 
   const [copied, setCopied] = useState(false);
@@ -150,6 +151,24 @@ export const WorkflowPage: React.FC = () => {
           </p>
         </div>
         <div className="wf-toolbar">
+          {settings?.settings && (
+            <span
+              className={`wf-mode-pill ${
+                settings.settings.replyMode === "ONLY_SELECTED"
+                  ? "only-selected"
+                  : "everyone-except"
+              }`}
+              title={
+                settings.settings.replyMode === "ONLY_SELECTED"
+                  ? "Hệ thống chỉ trả lời những người nằm trong danh sách được chỉ định"
+                  : "Hệ thống trả lời tất cả mọi người trừ những người bị loại trừ"
+              }
+            >
+              {settings.settings.replyMode === "ONLY_SELECTED"
+                ? "Chế độ: Chỉ người được chọn"
+                : "Chế độ: Tất cả trừ loại trừ"}
+            </span>
+          )}
           <button
             className="wf-button"
             onClick={refresh}
@@ -294,8 +313,21 @@ export const WorkflowPage: React.FC = () => {
                       <span className="wf-avatar">{getInitials(name)}</span>
                       <div style={{ minWidth: 0, flex: 1 }}>
                         <div className="wf-person-name">{name}</div>
-                        <div className="wf-person-sub">
-                          {shortStatus(item.conversation.status, item.conversation.manualMode)}
+                        <div className="wf-person-sub" style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap", marginTop: 2 }}>
+                          <span>{shortStatus(item.conversation.status, item.conversation.manualMode)}</span>
+                          {item.conversation.manualMode ? (
+                            <span className="wf-policy-badge manual">Nhân viên</span>
+                          ) : item.conversation.isBlocked ? (
+                            <span className="wf-policy-badge blocked">Bị chặn</span>
+                          ) : item.latestInboundMessage?.skipReason ? (
+                            item.latestInboundMessage.skipReason.eligible ? (
+                              <span className="wf-policy-badge eligible">Bot trả lời</span>
+                            ) : item.latestInboundMessage.skipReason.reasonCode === "PERSON_EXCLUDED" ? (
+                              <span className="wf-policy-badge excluded">Loại trừ</span>
+                            ) : item.latestInboundMessage.skipReason.reasonCode === "PERSON_NOT_SELECTED" ? (
+                              <span className="wf-policy-badge not-selected">Ngoài DS</span>
+                            ) : null
+                          ) : null}
                         </div>
                       </div>
                       <span
@@ -365,9 +397,33 @@ export const WorkflowPage: React.FC = () => {
                   </div>
                 </div>
 
-                <span className={`wf-chip ${viewData.tone}`}>
-                  {stateLabels[viewData.tone]}
-                </span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "6px 0" }}>
+                  <span className={`wf-chip ${viewData.tone}`}>
+                    {stateLabels[viewData.tone]}
+                  </span>
+                  {viewData.policy && (
+                    <span
+                      className={`wf-policy-badge ${
+                        viewData.policy.eligible
+                          ? "eligible"
+                          : viewData.policy.reasonCode === "PERSON_EXCLUDED"
+                          ? "excluded"
+                          : viewData.policy.reasonCode === "PERSON_NOT_SELECTED"
+                          ? "not-selected"
+                          : "blocked"
+                      }`}
+                      title={viewData.policy.reason}
+                    >
+                      {viewData.policy.eligible
+                        ? "✓ Đủ điều kiện bot trả lời"
+                        : viewData.policy.reasonCode === "PERSON_EXCLUDED"
+                        ? "⚠️ Bị loại trừ khỏi bot"
+                        : viewData.policy.reasonCode === "PERSON_NOT_SELECTED"
+                        ? "⚠️ Ngoài danh sách bot trả lời"
+                        : viewData.policy.humanReadableReason}
+                    </span>
+                  )}
+                </div>
 
                 <h2 className="wf-current-title">{viewData.title}</h2>
 
@@ -464,10 +520,10 @@ export const WorkflowPage: React.FC = () => {
                   </ol>
                 ) : (
                   <div className="wf-messages">
-                    {viewData.messages.length === 0 ? (
-                      <div className="wf-empty">Chưa có tin nhắn nào trong lượt này.</div>
+                    {viewData.inbound.length === 0 ? (
+                      <div className="wf-empty">Chưa có tin nhắn nào từ khách trong lượt này.</div>
                     ) : (
-                      viewData.messages.map((m) => (
+                      viewData.inbound.map((m) => (
                         <article key={m.id} className="wf-message">
                           <div className="wf-message-meta">
                             <span>{viewData.name}</span>
@@ -492,13 +548,13 @@ export const WorkflowPage: React.FC = () => {
                           : isUncertain
                           ? "Chưa rõ kết quả gửi"
                           : a.status === "TYPING"
-                          ? "Đang soạn tin"
-                          : "Chưa gửi";
+                          ? "Đang soạn tin trên Messenger"
+                          : "Chờ soạn tin";
 
                         return (
                           <article key={a.id || a.actionId} className="wf-message outbound">
                             <div className="wf-message-meta">
-                              <span>Trợ lý · Tin {idx + 1}</span>
+                              <span>Trợ lý AI · Tin {idx + 1}</span>
                               <span
                                 style={{
                                   color: isSent ? "#267656" : isUncertain ? "#9b6112" : "inherit",
@@ -512,6 +568,18 @@ export const WorkflowPage: React.FC = () => {
                           </article>
                         );
                       })
+                    ) : viewData.manualOutbound.length > 0 ? (
+                      viewData.manualOutbound.map((m) => (
+                        <article key={m.id} className="wf-message outbound">
+                          <div className="wf-message-meta">
+                            <span>Nhân viên hỗ trợ</span>
+                            <time>{formatTime(m.timestamp)}</time>
+                          </div>
+                          <div className="wf-bubble" style={{ backgroundColor: "#e2e8f0", color: "#1e293b" }}>
+                            {m.text}
+                          </div>
+                        </article>
+                      ))
                     ) : (
                       <div className="wf-empty">
                         {viewData.tone === "active"

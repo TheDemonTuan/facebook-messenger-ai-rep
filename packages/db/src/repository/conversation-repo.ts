@@ -488,6 +488,22 @@ export class ConversationRepository {
         tx,
       });
 
+      // If in ONLY_SELECTED mode and person is not selected, do not persist unnecessary message records to keep DB light
+      if (evalResult.result.reasonCode === "PERSON_NOT_SELECTED") {
+        await tx.delete(messages).where(eq(messages.id, newMsg.id));
+        if (existingConv.length > 0 && existingConv[0]) {
+          await tx
+            .update(conversations)
+            .set({ unreadCount: sql`GREATEST(0, ${conversations.unreadCount} - 1)` })
+            .where(eq(conversations.id, conversationId));
+        } else {
+          await tx
+            .update(conversations)
+            .set({ unreadCount: 0 })
+            .where(eq(conversations.id, conversationId));
+        }
+      }
+
       const isBlocked = Boolean(existingConv[0]?.isBlocked);
       const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked;
 
