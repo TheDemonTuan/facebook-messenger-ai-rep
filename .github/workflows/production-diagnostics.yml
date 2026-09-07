@@ -44,8 +44,10 @@ jobs:
           fi
           ./deploy.sh --status || true
           echo '=== HTTP health ==='
-          curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz || true
-          curl -sS -i --max-time 10 http://127.0.0.1:3000/readyz || true
+          curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz
+          curl -sS -i --max-time 10 http://127.0.0.1:3000/readyz
+          echo '=== Previously failing workflow route ==='
+          curl -sS -i --max-time 10 http://127.0.0.1:3000/api/workflow/live
           echo '=== Core recent logs ==='
           docker logs --tail 250 messenger-core 2>&1 || true
           echo '=== Browser agent recent logs ==='
