@@ -187,7 +187,7 @@ export class AiReplyGenerator {
       const firstValidation = validateAiOutput(rawResponse, {
         maxResponseCount: context.settings.aiMaxResponseCount,
         totalMaxChars: context.settings.aiTotalMaxChars,
-        allowPlainTextFallback: true,
+        allowPlainTextFallback: false,
       });
 
       if (firstValidation.valid && firstValidation.data) {

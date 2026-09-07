@@ -327,12 +327,19 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
         stickyMaxTurns: 50, // above max 10
         typingTargetWpmMin: 5, // below min 20
         typingTargetWpmMax: 500, // above max 300
+        aiMaxResponseCount: 5, // above server max 3
       });
 
       expect(sanitized.debounceMs).toBe(500);
       expect(sanitized.stickyMaxTurns).toBe(10);
       expect(sanitized.typingTargetWpmMin).toBe(20);
       expect(sanitized.typingTargetWpmMax).toBe(300);
+      expect(sanitized.aiMaxResponseCount).toBe(3);
+
+      const sanitizedLower = sanitizeSettingsForSave({
+        aiMaxResponseCount: 0, // below min 1
+      });
+      expect(sanitizedLower.aiMaxResponseCount).toBe(1);
     });
   });
 

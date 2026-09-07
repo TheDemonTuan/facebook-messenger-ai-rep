@@ -285,6 +285,11 @@ export interface SettingItem {
   policyMembers?: PolicyMemberItem[];
 }
 
+export interface SettingsUpdateResult {
+  settings: NonSecretSettings & Record<string, unknown>;
+  revision: number;
+}
+
 export interface PaginatedInboxResponse {
   conversations: ConversationItem[];
   total: number;

@@ -29,15 +29,35 @@ export function isHtmlPayload(text: string): boolean {
   );
 }
 
+export function isJsonEnvelope(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return true;
+  }
+  return (
+    /(?:^|[\s,{])"?messages"?\s*:/i.test(trimmed) ||
+    /(?:^|[\s,{])"?needsClarification"?\s*:/i.test(trimmed)
+  );
+}
+
 export function extractJsonFromRaw(raw: string): string {
   let cleaned = raw.trim();
 
-  // 1. Strip reasoning / thinking tags (e.g. <think>...</think>, <reasoning>...</reasoning>)
+  // 1. Strip reasoning / thinking tags (e.g. <think>...</think>, <reasoning>...</reasoning>, <thought>...</thought>)
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, "");
   cleaned = cleaned.replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "");
+  cleaned = cleaned.replace(/<thought>[\s\S]*?<\/thought>/gi, "");
   const lastThinkEnd = cleaned.lastIndexOf("</think>");
   if (lastThinkEnd !== -1) {
     cleaned = cleaned.substring(lastThinkEnd + "</think>".length).trim();
+  }
+  const lastReasoningEnd = cleaned.lastIndexOf("</reasoning>");
+  if (lastReasoningEnd !== -1) {
+    cleaned = cleaned.substring(lastReasoningEnd + "</reasoning>".length).trim();
+  }
+  const lastThoughtEnd = cleaned.lastIndexOf("</thought>");
+  if (lastThoughtEnd !== -1) {
+    cleaned = cleaned.substring(lastThoughtEnd + "</thought>".length).trim();
   }
   cleaned = cleaned.trim();
 
@@ -158,9 +178,20 @@ export function validateAiOutput(
       const plainText = rawText
         .replace(/<think>[\s\S]*?<\/think>/gi, "")
         .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, "")
+        .replace(/<thought>[\s\S]*?<\/thought>/gi, "")
         .replace(/^.*<\/think>/is, "")
+        .replace(/^.*<\/reasoning>/is, "")
+        .replace(/^.*<\/thought>/is, "")
         .replace(/```[a-z]*\s*|\s*```/gi, "")
         .trim();
+
+      const extracted = extractJsonFromRaw(rawText);
+      if (isJsonEnvelope(plainText) || isJsonEnvelope(extracted) || isJsonEnvelope(rawText)) {
+        return {
+          valid: false,
+          error: `Failed to parse AI response as JSON: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
 
       if (
         plainText.length >= 2 &&
@@ -176,13 +207,13 @@ export function validateAiOutput(
       } else {
         return {
           valid: false,
-          error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
+          error: `Failed to parse AI response as JSON: ${err instanceof Error ? err.message : String(err)}`,
         };
       }
     } else {
       return {
         valid: false,
-        error: `Failed to parse AI response as JSON: ${(err as Error).message}`,
+        error: `Failed to parse AI response as JSON: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
   }
@@ -260,6 +291,12 @@ export function validateAiOutput(
       return {
         valid: false,
         error: "Message contains empty or whitespace-only text",
+      };
+    }
+    if (isJsonEnvelope(trimmed)) {
+      return {
+        valid: false,
+        error: "Message contains a serialized JSON envelope",
       };
     }
     totalChars += trimmed.length;

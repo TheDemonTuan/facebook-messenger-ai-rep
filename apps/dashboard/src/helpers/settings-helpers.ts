@@ -28,7 +28,7 @@ export function sanitizeSettingsForSave(
     sanitized.aiTimeoutMs = Math.max(3000, Math.min(60000, input.aiTimeoutMs));
   }
   if (typeof input.aiMaxResponseCount === "number" && !isNaN(input.aiMaxResponseCount)) {
-    sanitized.aiMaxResponseCount = Math.max(1, Math.min(5, input.aiMaxResponseCount));
+    sanitized.aiMaxResponseCount = Math.max(1, Math.min(3, input.aiMaxResponseCount));
   }
   if (typeof input.aiTotalMaxChars === "number" && !isNaN(input.aiTotalMaxChars)) {
     sanitized.aiTotalMaxChars = Math.max(100, Math.min(2000, input.aiTotalMaxChars));

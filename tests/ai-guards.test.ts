@@ -232,4 +232,47 @@ Bạn đang tìm món gì nè?`,
     );
     expect(res.data?.messages[1]).toBe("Bạn đang tìm món gì nè?");
   });
+
+  it("rejects malformed JSON-shaped reply (e.g. trailing comma) even when allowPlainTextFallback is true", () => {
+    const malformed = '{"messages":["Dạ phần thanh toán mình không có thông tin chính xác trong hệ thống nè 😅 Bạn có thể nhắn Zalo shop *0764 333 508* để hỏi thanh toán trực tiếp hoặc qua chuyển khoản nhé!"],"needsClarification":false,}';
+    const res = validateAiOutput(malformed, { allowPlainTextFallback: true });
+    expect(res.valid).toBe(false);
+    expect(res.error).toContain("Failed to parse AI response as JSON");
+  });
+
+  it("rejects valid outer JSON whose sole message is a stringified structured JSON envelope", () => {
+    const doubleSerialized = JSON.stringify({
+      messages: [
+        '{"messages":["Dạ em chào anh!"],"needsClarification":false}',
+      ],
+      needsClarification: false,
+    });
+    const res = validateAiOutput(doubleSerialized);
+    expect(res.valid).toBe(false);
+    expect(res.error).toContain("Message contains a serialized JSON envelope");
+  });
+
+  it("removes <thought> tags containing braces before extracting real JSON", () => {
+    const rawWithThoughtBraces = `<thought>
+I should return a JSON response with { "messages": ["..."] } format.
+</thought>
+{
+  "messages": ["Dạ shop hỗ trợ thanh toán khi nhận hàng (COD) và chuyển khoản ngân hàng ạ."],
+  "needsClarification": false
+}`;
+    const res = validateAiOutput(rawWithThoughtBraces);
+    expect(res.valid).toBe(true);
+    expect(res.data?.messages[0]).toBe("Dạ shop hỗ trợ thanh toán khi nhận hàng (COD) và chuyển khoản ngân hàng ạ.");
+  });
+
+  it("accepts short Vietnamese prose only when fallback is explicitly enabled", () => {
+    const shortProse = "Dạ có ạ!";
+    const rejected = validateAiOutput(shortProse, { allowPlainTextFallback: false });
+    expect(rejected.valid).toBe(false);
+    expect(rejected.error).toContain("Failed to parse AI response as JSON");
+
+    const accepted = validateAiOutput(shortProse, { allowPlainTextFallback: true });
+    expect(accepted.valid).toBe(true);
+    expect(accepted.data?.messages[0]).toBe("Dạ có ạ!");
+  });
 });

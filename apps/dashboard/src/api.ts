@@ -23,16 +23,15 @@ export function setStoredDevEmail(email: string): void {
 }
 
 export async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...((options.headers as Record<string, string>) || {}),
-  };
+  const headers = new Headers(options.headers);
+  if (options.body !== undefined && options.body !== null && !headers.has("content-type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const devEmail = getStoredDevEmail();
   if (devEmail) {
-    headers["x-dev-user-email"] = devEmail;
+    headers.set("x-dev-user-email", devEmail);
   }
-
   const res = await fetch(endpoint, {
     ...options,
     headers,

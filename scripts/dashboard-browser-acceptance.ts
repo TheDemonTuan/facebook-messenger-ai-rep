@@ -12,6 +12,30 @@ function assert(condition: unknown, message: string): asserts condition {
 
 async function mockApi(page: Page): Promise<void> {
   let manualMode = false;
+  let currentProvider = {
+    apiFormat: "OPENAI_COMPATIBLE",
+    baseUrl: "https://gateway.example/v1",
+    model: "auto/best-chat",
+    apiKeyConfigured: true,
+  };
+  let currentSettings = {
+    debounceMs: 3000,
+    stickyWindowMs: 45000,
+    stickyMaxTurns: 3,
+    stickyMaxDurationMs: 120000,
+    aiModel: "auto/best-chat",
+    aiTimeoutMs: 20000,
+    aiMaxResponseCount: 3,
+    aiTotalMaxChars: 480,
+    aiSystemPersona: "Nhân viên chăm sóc khách hàng",
+    businessProfile: "Shop trực tuyến",
+    typingTargetWpmMin: 55,
+    typingTargetWpmMax: 65,
+    busyMode: false,
+    autoReplyEnabled: true,
+    pauseIntakeProcessing: false,
+  };
+  let revision = 2;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -79,45 +103,40 @@ async function mockApi(page: Page): Promise<void> {
     if (path === "/api/ai-runs/test") return json({ success: true, response: "ok" });
     if (path === "/api/settings/test-ai") return json({ healthy: true, status: "healthy", model: "auto/best-chat", latencyMs: 120 });
     if (path === "/api/settings/ai-provider") {
-      return json({
-        aiProvider: {
-          apiFormat: "ANTHROPIC_COMPATIBLE",
-          baseUrl: "https://api.anthropic.example/v1",
-          model: "claude-sonnet-test",
+      if (request.method() === "PUT") {
+        const body = (request.postDataJSON() || {}) as { apiFormat?: string; baseUrl?: string; model?: string };
+        currentProvider = {
+          ...currentProvider,
+          ...body,
           apiKeyConfigured: true,
-        },
-      });
+        };
+      }
+      return json({ aiProvider: currentProvider });
     }
     if (path === "/api/settings") {
+      if (request.method() === "POST") {
+        const body = (request.postDataJSON() || {}) as Record<string, unknown>;
+        revision += 1;
+        currentSettings = { ...currentSettings, ...body };
+        return json({
+          settings: currentSettings,
+          revision,
+        });
+      }
       return json({
-        settings: {
-          debounceMs: 3000,
-          stickyWindowMs: 45000,
-          stickyMaxTurns: 3,
-          stickyMaxDurationMs: 120000,
-          aiModel: "auto/best-chat",
-          aiTimeoutMs: 20000,
-          aiMaxResponseCount: 3,
-          aiTotalMaxChars: 480,
-          aiSystemPersona: "Nhân viên chăm sóc khách hàng",
-          businessProfile: "Shop trực tuyến",
-          typingTargetWpmMin: 55,
-          typingTargetWpmMax: 65,
-          busyMode: false,
-          autoReplyEnabled: true,
-          pauseIntakeProcessing: false,
-        },
-        aiProvider: {
-          apiFormat: "OPENAI_COMPATIBLE",
-          baseUrl: "https://gateway.example/v1",
-          model: "auto/best-chat",
-          apiKeyConfigured: true,
-        },
-        revision: 2,
+        settings: currentSettings,
+        aiProvider: currentProvider,
+        revision,
       });
     }
     if (path === "/api/audit") return json({ items: [], hasMore: false, nextCursor: null });
-    if (path === "/api/channel/pause" || path === "/api/channel/resume") return json({ success: true });
+    if (path === "/api/channel/pause" || path === "/api/channel/resume") {
+      const headers = request.headers();
+      if (headers["content-type"] && headers["content-type"].includes("application/json")) {
+        return json({ error: "FST_ERR_CTP_EMPTY_JSON_BODY: Body cannot be empty when content-type is set to 'application/json'" }, 400);
+      }
+      return json({ success: true });
+    }
     return json({});
   });
 }
@@ -164,6 +183,7 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   const page = await context.newPage();
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
+  page.on("dialog", (dialog) => dialog.accept());
   await mockApi(page);
 
   for (const route of ["overview", "inbox", "queue", "incidents", "ai-logs", "settings", "audit"]) {
@@ -181,6 +201,10 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   assert(overviewText.includes("Tổng quan hệ thống"), `${name}: missing overview title`);
   assert(overviewText.includes("Hội thoại hôm nay"), `${name}: missing friendly conversation metric`);
 
+  const pauseResponsePromise = page.waitForResponse((res) => res.url().includes("/api/channel/pause"));
+  await page.getByRole("button", { name: "Tạm dừng" }).click();
+  const pauseResponse = await pauseResponsePromise;
+  assert(pauseResponse.status() === 200, `${name}: pause action returned ${pauseResponse.status()} instead of 200`);
   await page.goto(`${baseURL}/settings`);
   await waitForRoute(page, "settings");
   const settingsText = await page.locator("main").innerText();
@@ -198,7 +222,9 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.getByText("Sẵn sàng (Healthy)").waitFor();
   await page.getByRole("button", { name: "Lưu cấu hình" }).click();
   await page.getByText(/Đã lưu cấu hình mới thành công/).waitFor();
-
+  assert(await page.getByText("Loại dịch vụ AI").isVisible(), `${name}: provider controls not visible after save`);
+  assert(await page.locator('input[type="url"]').isVisible(), `${name}: provider baseUrl not visible after save`);
+  assert(errors.length === 0, `${name}: errors after saving settings: ${errors.join("; ")}`);
   await page.goto(`${baseURL}/incidents`);
   await waitForRoute(page, "incidents");
   const incidentsText = await page.locator("main").innerText();

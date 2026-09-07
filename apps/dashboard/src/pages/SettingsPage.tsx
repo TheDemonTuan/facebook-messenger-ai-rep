@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { apiFetch } from "../api";
-import type { AiProviderSettings, SettingItem, NonSecretSettings, SafePersonItem, PolicyMemberItem } from "../types";
+import type { AiProviderSettings, SettingItem, SettingsUpdateResult, NonSecretSettings, SafePersonItem, PolicyMemberItem } from "../types";
 import { sanitizeSettingsForSave } from "../helpers/settings-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import { useBusinessTimeZone } from "../context/TimezoneContext";
@@ -240,7 +240,7 @@ export const SettingsPage: React.FC = () => {
     const sanitized = sanitizeSettingsForSave(formData);
 
     try {
-      await apiFetch<{ aiProvider: AiProviderSettings }>("/api/settings/ai-provider", {
+      const providerRes = await apiFetch<{ aiProvider: AiProviderSettings }>("/api/settings/ai-provider", {
         method: "PUT",
         body: JSON.stringify({
           apiFormat: aiProvider.apiFormat,
@@ -250,7 +250,7 @@ export const SettingsPage: React.FC = () => {
         }),
       });
 
-      const updated = await apiFetch<SettingItem>("/api/settings", {
+      const updated = await apiFetch<SettingsUpdateResult>("/api/settings", {
         method: "POST",
         body: JSON.stringify({
           ...sanitized,
@@ -260,25 +260,32 @@ export const SettingsPage: React.FC = () => {
         }),
       });
 
-      setData(updated);
-      setAiProvider(updated.aiProvider);
-      setPolicyMembers(updated.policyMembers || []);
+      const nextItem: SettingItem = {
+        settings: updated.settings,
+        revision: updated.revision,
+        aiProvider: providerRes.aiProvider,
+        policyMembers: data?.policyMembers || policyMembers || [],
+      };
+
+      setData(nextItem);
+      setAiProvider(nextItem.aiProvider);
+      setPolicyMembers(nextItem.policyMembers || []);
       setAiApiKey("");
-      setFormData(sanitizeSettingsForSave(updated.settings));
-      if (typeof updated.settings?.businessTimeZone === "string") {
-        setTimeZone(updated.settings.businessTimeZone);
+      setFormData(sanitizeSettingsForSave(nextItem.settings));
+      if (typeof nextItem.settings?.businessTimeZone === "string") {
+        setTimeZone(nextItem.settings.businessTimeZone);
       }
       setSaveSuccess("Đã lưu cấu hình mới thành công!");
       setReason("");
       setTimeout(() => setSaveSuccess(null), 4000);
     } catch (err: unknown) {
-      const msg = (err as Error).message || "Không thể lưu cấu hình";
+      const msg = err instanceof Error ? err.message : "Không thể lưu cấu hình";
       if (msg.includes("409") || msg.includes("xung đột") || msg.includes("Conflict") || msg.includes("revision")) {
         setError("Xung đột phiên bản cấu hình: Có người khác vừa cập nhật. Vui lòng tải lại trang và thử lại.");
-        await loadSettings();
       } else {
         setError(msg);
       }
+      await loadSettings();
     } finally {
       setSaving(false);
     }

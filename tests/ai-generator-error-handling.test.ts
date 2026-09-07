@@ -167,7 +167,7 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
     expect(result.responseHash).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("accepts plain text customer response starting with 'D' on first attempt without triggering retry", async () => {
+  it("enters single repair retry when first attempt is plain prose, and accepts plain text retry", async () => {
     const plainTextResponse = "Dạ shop em chào anh ạ! Áo này bên em vẫn còn size M nha anh.";
 
     const mockCreate = vi.fn(async () => {
@@ -215,8 +215,116 @@ describe("AI Generator & Proxy Error Handling & Logs", () => {
 
     expect(result.success).toBe(true);
     expect(result.data?.messages[0]).toBe(plainTextResponse);
-    // Verified that only 1 call was made (no retry needed!)
-    expect(mockCreate).toHaveBeenCalledTimes(1);
+    // Verified that 2 calls were made (first attempt retried, second accepted via fallback)
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs malformed JSON on retry when second completion is valid structured JSON", async () => {
+    const malformedFirstAttempt = '{"messages":["Dạ phần thanh toán mình không có thông tin chính xác trong hệ thống nè 😅 Bạn có thể nhắn Zalo shop *0764 333 508* để hỏi thanh toán trực tiếp hoặc qua chuyển khoản nhé!"],"needsClarification":false,}';
+    const validNaturalSentence = "Dạ phần thanh toán mình không có thông tin chính xác trong hệ thống nè 😅 Bạn có thể nhắn Zalo shop *0764 333 508* để hỏi thanh toán trực tiếp hoặc qua chuyển khoản nhé!";
+    const validSecondAttempt = JSON.stringify({
+      messages: [validNaturalSentence],
+      needsClarification: false,
+    });
+
+    let callCount = 0;
+    const mockCreate = vi.fn(async () => {
+      callCount++;
+      return {
+        choices: [
+          {
+            message: {
+              content: callCount === 1 ? malformedFirstAttempt : validSecondAttempt,
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 40,
+          total_tokens: 140,
+        },
+      } as unknown as OpenAI.Chat.Completions.ChatCompletion;
+    });
+
+    const mockOpenAiClient = {
+      chat: {
+        completions: {
+          create: mockCreate,
+        },
+      },
+    };
+
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        throw new Error("AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
+
+    const generator = new AiReplyGenerator();
+    const result = await generator.generateReply(dummyContext);
+
+    expect(result.success).toBe(true);
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(result.data?.messages).toEqual([validNaturalSentence]);
+  });
+
+  it("fails generation when retry completion is also malformed JSON-shaped content", async () => {
+    const malformedResponse = '{"messages":["Dạ phần thanh toán lỗi"],"needsClarification":false,}';
+
+    const mockCreate = vi.fn(async () => {
+      return {
+        choices: [
+          {
+            message: {
+              content: malformedResponse,
+            },
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 40,
+          total_tokens: 140,
+        },
+      } as unknown as OpenAI.Chat.Completions.ChatCompletion;
+    });
+
+    const mockOpenAiClient = {
+      chat: {
+        completions: {
+          create: mockCreate,
+        },
+      },
+    };
+
+    vi.spyOn(clientModule, "createAiCompletion").mockImplementation(async (_config, messages) => {
+      const completion = await mockOpenAiClient.chat.completions.create({ messages });
+      const choice = completion.choices?.[0];
+      if (!choice?.message?.content) {
+        throw new Error("AI Proxy returned unexpected format");
+      }
+      return {
+        content: choice.message.content,
+        promptTokens: completion.usage?.prompt_tokens || 0,
+        completionTokens: completion.usage?.completion_tokens || 0,
+        totalTokens: completion.usage?.total_tokens || 0,
+      };
+    });
+
+    const generator = new AiReplyGenerator();
+    const result = await generator.generateReply(dummyContext);
+
+    expect(result.success).toBe(false);
+    expect(result.usedResult).toBeNull();
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(result.errorMessage).toContain("Failed to parse AI response as JSON");
   });
 
   it("admin routes provide GET /api/ai-runs to retrieve runs list", async () => {
