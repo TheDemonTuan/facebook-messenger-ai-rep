@@ -1262,7 +1262,7 @@ const QUOTE_CONTAINER_REGEX =
   /<(div|span|blockquote|section)\b(?=[^>]*\b(?:data-testid=["'](?:quoted_message|reply_to_message|message_quote|reply_preview)["']|class=["'][^"']*\b(?:quoted_message|reply_preview|message_quote)\b[^"']*))/gi;
 
 const ACTION_RECEIPT_CONTAINER_REGEX =
-  /<(div|span|ul|ol|li|section)\b(?=[^>]*\b(?:role=["']toolbar["']|data-testid=["'](?:reaction_picker|message_actions|action_button|delivery_status|seen_receipt|seen_heads|quick_replies)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|receipt|delivery-status)\b[^"']*))/gi;
+  /<(div|span|ul|ol|li|section)\b(?=[^>]*\b(?:role=["']toolbar["']|data-testid=["'](?:reaction_picker|message_actions|action_button|delivery_status|seen_receipt|seen_heads|quick_replies)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|receipt|delivery-status)\b[^"']*|aria-label=["'][^"']*(?:seen by|đã xem|delivered|đã chuyển|message sent|đã gửi)[^"']*["']))/gi;
 
 const SHARE_CONTAINER_REGEX =
   /<(div|span|section|a)\b(?=[^>]*\b(?:data-testid=["'](?:share_card|shared_post|link_preview|group_share)["']|class=["'][^"']*\b(?:shared_card|share_card|group_share)\b[^"']*|aria-label=["'][^"']*(?:thông tin nhóm|chia sẻ liên kết|shared link|shared post)[^"']*))/gi;
@@ -1512,10 +1512,26 @@ export function extractRowMediaParts(
     const altMatch = fullImgTag.match(/\balt=["']([^"']+)["']/i);
     const altText = altMatch ? altMatch[1] : undefined;
 
-    const widthMatch = fullImgTag.match(/\bwidth=["']?(\d+)["']?/i);
-    const heightMatch = fullImgTag.match(/\bheight=["']?(\d+)["']?/i);
+    const widthMatch = fullImgTag.match(/\b(?:data-render-width|width)=["']?(\d+)["']?/i);
+    const heightMatch = fullImgTag.match(/\b(?:data-render-height|height)=["']?(\d+)["']?/i);
     const width = widthMatch ? parseInt(widthMatch[1]!, 10) : undefined;
     const height = heightMatch ? parseInt(heightMatch[1]!, 10) : undefined;
+    const nearbyContext = contentBody.slice(
+      Math.max(0, imgMatch.index - 500),
+      imgMatch.index + fullImgTag.length + 200
+    );
+    const imageLabel = `${altText || ""} ${fullImgTag}`;
+    const isConfirmedAttachment = /data-message-attachment-image=["']true["']/i.test(fullImgTag);
+    const isReceiptOrAvatar =
+      /data-message-status-image=["']true["']/i.test(fullImgTag) ||
+      /\b(?:seen by|đã xem|delivered|đã chuyển|message sent|đã gửi)\b/i.test(imageLabel) ||
+      /data-testid=["'](?:seen_receipt|seen_heads|delivery_status|delivery_receipt|message_receipt|message_sender_avatar|avatar|author_link)["']/i.test(nearbyContext) ||
+      /aria-label=["'][^"']*(?:seen by|đã xem|delivered|đã chuyển|message sent|đã gửi|profile picture|ảnh đại diện)[^"']*["']/i.test(nearbyContext) ||
+      /class=["'][^"']*\b(?:avatar|seen-head|receipt)\b[^"']*["']/i.test(nearbyContext) ||
+      (!isConfirmedAttachment && (width !== undefined || height !== undefined) && Math.max(width || 0, height || 0) <= 40 && Boolean(altText));
+    if (isReceiptOrAvatar) {
+      continue;
+    }
 
     const imagePart: MessagePart = {
       type: "IMAGE",

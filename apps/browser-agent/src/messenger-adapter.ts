@@ -1078,10 +1078,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       const seenActiveOccurrences = useActiveSequenceFallback
         ? (this.lastSeenActiveSignatures.get(activeSequenceKey) ?? 0)
         : 0;
-      const hasNewActiveOccurrence = useActiveSequenceFallback && activeOccurrence > seenActiveOccurrences;
+      const hasCurrentIdCollision =
+        bubbleResult.bubbles.filter((candidate) => candidate.id === bubble.id).length > 1;
+      const hasNewActiveOccurrence =
+        useActiveSequenceFallback &&
+        (!this.lastSeenMessageIds.has(bubble.id) || hasCurrentIdCollision) &&
+        activeOccurrence > seenActiveOccurrences;
 
       if (this.lastSeenMessageIds.has(bubble.id) && !hasNewActiveOccurrence) {
-        continue; // Dedupe
+        continue; // A stable ID seen in an earlier poll is the same message, not a new occurrence.
       }
       const externalMessageId = hasNewActiveOccurrence
         ? `active.$${threadInfo.threadId}.${createHash("sha256")
@@ -1170,7 +1175,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private rememberActiveBubbleSequence(threadId: string, bubbleResult: BubbleParseResult): void {
     const occurrences = new Map<string, number>();
     for (const bubble of bubbleResult.bubbles) {
-      const signature = `${bubble.isOutgoing ? "out" : "in"}:${bubble.text.trim()}`;
+      const mediaSignature = Array.isArray(bubble.parts) && bubble.parts.length > 0
+        ? bubble.parts
+            .filter((part) => part.type !== "TEXT")
+            .map((part) => ("media" in part && part.media ? `${part.type}:${part.media.mediaId}` : part.type))
+            .join(",")
+        : "";
+      const baseSignature = `${bubble.isOutgoing ? "out" : "in"}:${bubble.text.trim()}`;
+      const signature = mediaSignature ? `${baseSignature}|${mediaSignature}` : baseSignature;
       occurrences.set(signature, (occurrences.get(signature) ?? 0) + 1);
     }
     for (const [signature, count] of occurrences) {
@@ -1213,6 +1225,19 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               source.getAttribute("data-testid") === "mw_message_row" ||
               source.getAttribute("data-testid") === "message_row" ||
               source.getAttribute("role") === "row";
+            if (source.tagName === "IMG") {
+              const rect = source.getBoundingClientRect();
+              target.setAttribute("data-render-width", String(Math.round(rect.width)));
+              target.setAttribute("data-render-height", String(Math.round(rect.height)));
+              const statusOwner = source.closest(
+                '[data-testid="seen_receipt"], [data-testid="seen_heads"], [data-testid="delivery_status"], [aria-label*="Seen by"], [aria-label*="seen by"], [aria-label*="Đã xem"], [aria-label*="đã xem"]'
+              );
+              if (statusOwner) target.setAttribute("data-message-status-image", "true");
+              if (rect.width >= 80 && rect.height >= 60 && !statusOwner) {
+                target.setAttribute("data-message-attachment-image", "true");
+              }
+            }
+
             if (isMessageRow) {
               const textElements = Array.from(source.querySelectorAll('[dir="auto"], [role="none"], div')) as HTMLElement[];
               const textElement = textElements

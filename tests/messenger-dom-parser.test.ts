@@ -46,6 +46,42 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
     timeZone: "Asia/Ho_Chi_Minh",
   };
 
+  describe("production receipt/avatar regressions", () => {
+    it("keeps a text-only message text and excludes sender/seen-head avatars", () => {
+      const html = `
+        <main data-testid="direct_thread_header">
+          <div role="row" aria-roledescription="message" id="mid.$huii" aria-label="Sin Sin: huii">
+            <a href="/100010082286691"><img src="https://scontent.example/avatar.jpg" alt="Sin Sin" data-render-width="40" data-render-height="40"></a>
+            <div dir="auto">huii</div>
+            <div aria-label="Seen by Sin Sin at Monday 10:24pm">
+              <img src="https://scontent.example/avatar.jpg" alt="Seen by Sin Sin at Monday 10:24pm" data-render-width="14" data-render-height="14" data-message-status-image="true">
+            </div>
+          </div>
+        </main>`;
+
+      const result = parseMessengerBubblesFromHtml(html, mockBotOptions);
+
+      expect(result.bubbles).toHaveLength(1);
+      expect(result.bubbles[0]!.id).toBe("mid.$huii");
+      expect(result.bubbles[0]!.text).toBe("huii");
+      expect(result.bubbles[0]!.parts).toEqual([{ type: "TEXT", text: "huii" }]);
+    });
+
+    it("still accepts a large image explicitly marked by the live DOM collector", () => {
+      const html = `
+        <main data-testid="direct_thread_header">
+          <div role="row" aria-roledescription="message" id="mid.$photo" aria-label="Sin Sin sent a photo">
+            <img src="https://scontent.example/photo.jpg" alt="Photo" data-render-width="640" data-render-height="480" data-message-attachment-image="true">
+          </div>
+        </main>`;
+
+      const result = parseMessengerBubblesFromHtml(html, mockBotOptions);
+
+      expect(result.bubbles).toHaveLength(1);
+      expect(result.bubbles[0]!.parts?.map((part) => part.type)).toEqual(["IMAGE"]);
+    });
+  });
+
   describe("1. Thread Classification", () => {
     it("classifies group thread with verified evidence from member count and group header", () => {
       const result = parseThreadClassification(groupMentionHtml);
