@@ -1,0 +1,45 @@
+name: Production Diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          printf 'Host vps\n  HostName %s\n  User %s\n  Port %s\n  IdentityFile ~/.ssh/id_ed25519\n  BatchMode yes\n' "$VPS_HOST" "$VPS_USER" "$VPS_PORT" > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+      - name: Capture service status, health, API responses, and recent errors
+        run: |
+          set -euo pipefail
+          ssh vps 'bash -s' <<'REMOTE'
+          set -uo pipefail
+          cd /opt/facebook-messenger-ai-rep
+          ./deploy.sh --status || true
+          echo '=== HTTP health ==='
+          curl -sS -i --max-time 10 http://127.0.0.1:3000/healthz || true
+          curl -sS -i --max-time 10 http://127.0.0.1:3000/readyz || true
+          echo '=== Core recent logs ==='
+          docker logs --tail 250 messenger-core 2>&1 || true
+          echo '=== Browser agent recent logs ==='
+          docker logs --tail 100 messenger-browser-agent 2>&1 || true
+          echo '=== Database migrations ==='
+          docker exec messenger-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select id, created_at from __drizzle_migrations order by created_at desc limit 10;"' 2>&1 || true
+          REMOTE
