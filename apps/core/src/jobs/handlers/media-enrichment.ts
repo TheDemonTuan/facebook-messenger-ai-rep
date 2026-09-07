@@ -51,7 +51,7 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
 
   return async function handleMediaEnrichment(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as MediaEnrichmentJobPayload;
-    const { channelAccountId, conversationId, messageId, inboundVersion, controlEpoch } = payload;
+    const { channelAccountId, conversationId, messageId, inboundVersion } = payload;
 
     if (!channelAccountId || !conversationId || !messageId) {
       console.warn("[MediaEnrichmentHandler] Missing required job payload", payload);

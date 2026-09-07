@@ -19,7 +19,7 @@ import {
   ParseQualitySchema,
   ReplyAvailabilitySchema,
 } from "./enums.js";
-import { DerivedTranscriptSchema, type DerivedTranscript } from "./ai.js";
+import { DerivedTranscriptSchema } from "./ai.js";
 
 export const MessageDirectionSchema = z.enum(["INBOUND", "OUTBOUND"]);
 export type MessageDirection = z.infer<typeof MessageDirectionSchema>;

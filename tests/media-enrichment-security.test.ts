@@ -4,7 +4,6 @@ import {
   validateMediaUrl,
   sniffMimeType,
   isAllowedPartMimeType,
-  fetchMediaSecurely,
   MediaCache,
 } from "../packages/ai/src/index.js";
 
