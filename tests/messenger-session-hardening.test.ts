@@ -524,7 +524,7 @@ describe("Messenger session hardening", () => {
       channelAccountId: "account-1",
     });
 
-    let currentUrl = "https://www.facebook.com/messages/t/thread-retry";
+    const currentUrl = "https://www.facebook.com/messages/t/thread-retry";
     const page = {
       url: () => currentUrl,
       waitForLoadState: vi.fn().mockResolvedValue(undefined),

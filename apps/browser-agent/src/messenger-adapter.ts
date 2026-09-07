@@ -5,7 +5,6 @@ import {
   parseMessengerBubblesFromHtml,
   parseSidebarThreadsFromHtml,
   isSnippetOutgoing,
-  extractCleanSnippetText,
 } from "@messenger/channel";
 import type {
   InboundMessagePayload,

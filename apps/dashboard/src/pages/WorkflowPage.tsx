@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { WorkflowLiveData, WorkflowNode } from "../types";
 import { useSseWakeup } from "../context/SseContext";
+import { useAuth } from "../context/AuthContext";
 import {
   Workflow,
   Radio,
@@ -32,6 +33,8 @@ export const WorkflowPage: React.FC = () => {
   const [selectedNode, setSelectedNode] = useState<WorkflowNode | null>(null);
   const [viewMode, setViewMode] = useState<"graph" | "trace">("graph");
   const [resolvingAll, setResolvingAll] = useState(false);
+  const { user } = useAuth();
+  const canResolveIncidents = user?.role === "OWNER" || user?.role === "OPERATOR";
 
   const loadWorkflow = useCallback(async () => {
     try {
@@ -57,7 +60,7 @@ export const WorkflowPage: React.FC = () => {
   useSseWakeup(() => true, loadWorkflow);
 
   const handleResolveAllIncidents = async () => {
-    if (!data?.openIncidents?.length) return;
+    if (!canResolveIncidents || !data?.openIncidents?.length) return;
     if (!confirm(`Bạn có chắc muốn đóng và giải quyết TOÀN BỘ ${data.openIncidents.length} sự cố đang mở?`)) {
       return;
     }
@@ -298,22 +301,31 @@ export const WorkflowPage: React.FC = () => {
                   <div style={{ fontSize: "0.75rem", fontWeight: 700, textTransform: "uppercase", color: "#b91c1c", letterSpacing: "0.05em" }}>
                     Cảnh báo sự cố ({data.openIncidents.length})
                   </div>
-                  <button
-                    onClick={handleResolveAllIncidents}
-                    disabled={resolvingAll}
-                    style={{
-                      padding: "3px 8px",
-                      fontSize: "0.75rem",
-                      fontWeight: 600,
-                      backgroundColor: "#fee2e2",
-                      color: "#991b1b",
-                      border: "1px solid #f87171",
-                      borderRadius: "6px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {resolvingAll ? "Đang đóng..." : "Đóng tất cả"}
-                  </button>
+                  {canResolveIncidents ? (
+                    <button
+                      onClick={handleResolveAllIncidents}
+                      disabled={resolvingAll}
+                      style={{
+                        padding: "3px 8px",
+                        fontSize: "0.75rem",
+                        fontWeight: 600,
+                        backgroundColor: "#fee2e2",
+                        color: "#991b1b",
+                        border: "1px solid #f87171",
+                        borderRadius: "6px",
+                        cursor: resolvingAll ? "wait" : "pointer",
+                      }}
+                    >
+                      {resolvingAll ? "Đang đóng..." : "Đóng tất cả"}
+                    </button>
+                  ) : (
+                    <span
+                      title="Chỉ Quản trị viên hoặc Chủ sở hữu mới có thể đóng sự cố"
+                      style={{ fontSize: "0.75rem", color: "#991b1b", fontWeight: 600 }}
+                    >
+                      Chỉ xem
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontSize: "0.85rem", fontWeight: 600, color: "#7f1d1d", marginTop: "2px", wordBreak: "break-word" }}>
                   {data.openIncidents[0]!.title}
