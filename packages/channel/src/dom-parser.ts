@@ -61,6 +61,7 @@ export interface ParsedSidebarThread {
   threadRef: string;
   customerName: string;
   avatarUrl?: string | null;
+  participantId?: string | null;
   snippet: string;
   isUnread: boolean;
   isOutgoing: boolean;
@@ -1092,63 +1093,154 @@ export function parseMessengerBubblesFromHtml(
   };
 }
 
+export function isSnippetOutgoing(snippet: string): boolean {
+  return (
+    /\b(?:bạn|you)\s*:/i.test(snippet) ||
+    /\b(?:bạn đã gửi|you sent)\b/i.test(snippet)
+  );
+}
+
+export function extractCleanSnippetText(rawSnippet: string, customerName?: string | null): string {
+  if (!rawSnippet) return "";
+  let text = rawSnippet.replace(/\s+/g, " ").trim();
+
+  // Strip customer name prefix if present
+  if (customerName && customerName.trim()) {
+    const name = customerName.trim();
+    while (text.toLowerCase().startsWith(name.toLowerCase())) {
+      text = text.slice(name.length).trim();
+      text = text.replace(/^[:\-\s]+/, "").trim();
+    }
+  }
+
+  // Remove middle dot / bullet separator and anything following it (always timestamp in Messenger sidebar)
+  text = text.replace(/\s*[·•].*$/, "").trim();
+
+  // Remove standalone timestamp suffixes at the end of line
+  text = text.replace(/\s+\d+\s*(?:phút|giờ|ngày|tuần|tháng|giây|năm|m|h|d|w|s)\s*$/iu, "").trim();
+
+  // Remove action labels
+  text = text.replace(/\b(?:đánh dấu là chưa đọc|đánh dấu là đã đọc|mark as unread|mark as read)\b/giu, "").trim();
+
+  // Clean any leftover trailing punctuation from separators
+  text = text.replace(/[\s:·•-]+$/, "").trim();
+
+  return text;
+}
+
 /**
  * Parses Messenger sidebar thread items from HTML.
  * Sidebar is only a trigger - extracts threadRef, threadId, and unread indicator.
  */
 export function parseSidebarThreadsFromHtml(html: string): ParsedSidebarThread[] {
   const threads: ParsedSidebarThread[] = [];
-  const linkRegex = /<a\b[^>]*\bhref=["']([^"']*\/messages\/(?:e2ee\/)?t\/([^"'/]+)\/?)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  const seenThreadIds = new Set<string>();
+  const linkRegex = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = linkRegex.exec(html)) !== null) {
-    const threadRef = match[1]!;
-    const threadId = match[2]!;
-    const inner = match[3] || "";
+    const attrs = match[1] || "";
+    const inner = match[2] || "";
+
+    const hrefMatch = /href=["']([^"']+)["']/i.exec(attrs);
+    if (!hrefMatch) continue;
+    const threadRef = hrefMatch[1]!;
+
+    const idMatch = /\/messages\/(?:e2ee\/)?t\/([^/?#"'\s]+)/i.exec(threadRef);
+    if (!idMatch) continue;
+    const threadId = idMatch[1]!;
+    if (!threadId || seenThreadIds.has(threadId)) continue;
+
+    // Check data annotations first
+    const attrCustomerName = /data-messenger-customer-name=["']([^"']*)["']/i.exec(attrs)?.[1];
+    const attrSnippet = /data-messenger-snippet=["']([^"']*)["']/i.exec(attrs)?.[1];
+    const attrUnread = /data-messenger-unread=["']([^"']*)["']/i.exec(attrs)?.[1];
+    const attrParticipantId = /data-messenger-participant-id=["']([^"']*)["']/i.exec(attrs)?.[1];
+    const attrAvatarUrl = /data-messenger-avatar-url=["']([^"']*)["']/i.exec(attrs)?.[1];
+
+    let customerName = attrCustomerName;
+    if (!customerName) {
+      const nameMatch =
+        /<span\b[^>]*\bdir=["']auto["'][^>]*>([\s\S]*?)<\/span>/i.exec(inner) ||
+        /<strong\b[^>]*>([\s\S]*?)<\/strong>/i.exec(inner);
+      customerName = nameMatch ? nameMatch[1]!.replace(/<[^>]+>/g, "").trim() : threadId;
+    }
+
+    let avatarUrl = attrAvatarUrl !== undefined ? (attrAvatarUrl || null) : null;
+    if (!avatarUrl) {
+      const avatarMatch =
+        /<img\b[^>]*\bsrc=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
+        /<image\b[^>]*\b(?:xlink:href|href)=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
+        /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(inner);
+      avatarUrl = avatarMatch ? avatarMatch[1]! : null;
+    }
+
+    let participantId: string | null = attrParticipantId !== undefined ? (attrParticipantId || null) : null;
+    if (!participantId) {
+      const pidFromHref = threadRef.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1];
+      const pidFromImg = inner.match(/<img\b[^>]*src=["'][^"']*[?&]fbid=([0-9]+)[^"']*["']/i)?.[1];
+      const textWithoutTags = inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      const isGroupText = /\b(?:\d+\s*(?:members|thành viên)|chat members|group options)\b/i.test(textWithoutTags);
+      participantId = pidFromHref || pidFromImg || (/^[0-9]+$/.test(threadId) && !isGroupText ? threadId : null);
+    }
+
+    let rawSnippet = attrSnippet;
+    if (rawSnippet === undefined) {
+      const autoSpans = inner.match(/<span\b[^>]*\bdir=["']auto["'][^>]*>[\s\S]*?<\/span>/gi);
+      if (autoSpans && autoSpans.length >= 2) {
+        rawSnippet = autoSpans.slice(1).map((s) => s.replace(/<[^>]+>/g, "").trim()).filter(Boolean).join(" ");
+      }
+      if (!rawSnippet) {
+        const textWithoutTags = inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        rawSnippet = textWithoutTags;
+      }
+    }
+
+    const snippet = extractCleanSnippetText(rawSnippet || "", customerName);
+    const isOutgoing = isSnippetOutgoing(snippet);
+
+    let isUnread = false;
+    if (attrUnread !== undefined) {
+      isUnread = attrUnread === "true";
+    } else {
+      const fullContent = `${attrs} ${inner}`;
+      const sanitized = fullContent
+        .replace(/đánh dấu là chưa đọc/giu, "")
+        .replace(/mark as unread/giu, "");
+
+      const hasMarkAsReadAction =
+        /đánh dấu là đã đọc/iu.test(fullContent) ||
+        /mark as read/iu.test(fullContent);
+
+      const hasUnreadMention =
+        /chưa đọc/iu.test(sanitized) ||
+        /unread/iu.test(sanitized);
+
+      const hasUnreadClass =
+        /class=["'][^"']*\bunread\b[^"']*["']/i.test(sanitized);
+
+      const hasBoldFont =
+        /style=["'][^"']*(?:font-weight:\s*(?:bold|[6-9]00))[^"']*["']/i.test(sanitized) ||
+        /<strong\b/i.test(inner);
+
+      isUnread = hasMarkAsReadAction || hasUnreadMention || hasUnreadClass || hasBoldFont;
+    }
 
     const textWithoutTags = inner.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-
-    // Check unread indicator (bold, aria-label with unread, badge)
-    const isUnread =
-      inner.includes("chưa đọc") ||
-      inner.includes("unread") ||
-      /class=["'][^"']*\bunread\b/i.test(inner) ||
-      /aria-label=["'][^"']*(?:chưa đọc|unread)[^"']*["']/i.test(inner);
-
-    // Check outgoing snippet
-    const isOutgoing =
-      textWithoutTags.includes("Bạn:") ||
-      textWithoutTags.includes("You:") ||
-      textWithoutTags.includes("Bạn đã gửi") ||
-      textWithoutTags.includes("You sent");
-
-    // Extract customer display name
-    const nameMatch =
-      /<span\b[^>]*\bdir=["']auto["'][^>]*>([\s\S]*?)<\/span>/i.exec(inner) ||
-      /<strong\b[^>]*>([\s\S]*?)<\/strong>/i.exec(inner);
-
-    const customerName = nameMatch
-      ? nameMatch[1]!.replace(/<[^>]+>/g, "").trim()
-      : threadId;
-
-    const avatarMatch =
-      /<img\b[^>]*\bsrc=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
-      /<image\b[^>]*\b(?:xlink:href|href)=["']([^"']*(?:scontent|fbcdn)[^"']*)["']/i.exec(inner) ||
-      /<img\b[^>]*\bsrc=["']([^"']+)["']/i.exec(inner);
-    const avatarUrl = avatarMatch ? avatarMatch[1] : null;
-
     const threadKind: ThreadKind =
       textWithoutTags.includes("thành viên") || textWithoutTags.includes("members")
         ? "GROUP"
         : "DIRECT";
     const threadReliability: ClassificationReliability = "UNVERIFIED";
 
+    seenThreadIds.add(threadId);
     threads.push({
       threadId,
       threadRef,
       customerName,
       avatarUrl,
-      snippet: textWithoutTags,
+      participantId,
+      snippet,
       isUnread,
       isOutgoing,
       threadKind,

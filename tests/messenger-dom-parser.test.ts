@@ -98,6 +98,58 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(threads[1]!.threadId).toBe("67890");
       expect(threads[1]!.threadKind).toBe("DIRECT");
     });
+    it("extracts multiple sidebar threads with cleaned snippet, name, avatar, participant ID, annotations, unread polarity, and dedupes same threadId", () => {
+      const html = `
+        <a href="https://www.facebook.com/messages/t/111"
+           data-messenger-customer-name="Annotated Customer"
+           data-messenger-snippet="Annotated snippet text"
+           data-messenger-unread="true"
+           data-messenger-participant-id="part-111"
+           data-messenger-avatar-url="https://scontent.xx/avatar1.jpg">
+          <span>Fallback Customer</span>
+          <div>Fallback snippet</div>
+        </a>
+        <a href="https://www.facebook.com/messages/e2ee/t/222" aria-label="Đoạn chat với Khách E2EE, chưa đọc">
+          <span dir="auto">Khách E2EE</span>
+          <img src="https://fbcdn.net/avatar2.jpg" />
+          <div class="unread"></div>
+          <div>Khách E2EE: Alo shop ơi · 5 phút</div>
+        </a>
+        <a href="https://www.facebook.com/messages/t/333" aria-label="Đoạn chat với Đã Đọc">
+          <span dir="auto">Đã Đọc</span>
+          <div aria-label="Đánh dấu là chưa đọc"></div>
+          <div>Cảm ơn shop nhiều</div>
+        </a>
+        <a href="https://www.facebook.com/messages/t/111">
+          <span>Duplicate Link</span>
+        </a>
+      `;
+
+      const threads = parseSidebarThreadsFromHtml(html);
+      expect(threads).toHaveLength(3);
+
+      // Thread 1: Annotated values prioritized
+      expect(threads[0]?.threadId).toBe("111");
+      expect(threads[0]?.customerName).toBe("Annotated Customer");
+      expect(threads[0]?.snippet).toBe("Annotated snippet text");
+      expect(threads[0]?.isUnread).toBe(true);
+      expect(threads[0]?.participantId).toBe("part-111");
+      expect(threads[0]?.avatarUrl).toBe("https://scontent.xx/avatar1.jpg");
+
+      // Thread 2: E2EE route preserved, clean snippet, avatar, unread
+      expect(threads[1]?.threadId).toBe("222");
+      expect(threads[1]?.threadRef).toBe("https://www.facebook.com/messages/e2ee/t/222");
+      expect(threads[1]?.customerName).toBe("Khách E2EE");
+      expect(threads[1]?.avatarUrl).toBe("https://fbcdn.net/avatar2.jpg");
+      expect(threads[1]?.snippet).toBe("Alo shop ơi");
+      expect(threads[1]?.isUnread).toBe(true);
+      expect(threads[1]?.participantId).toBe("222");
+
+      // Thread 3: "Mark as unread" action must NOT be treated as unread
+      expect(threads[2]?.threadId).toBe("333");
+      expect(threads[2]?.customerName).toBe("Đã Đọc");
+      expect(threads[2]?.isUnread).toBe(false);
+    });
   });
 
   describe("2. Sender Identity & Sender Kind Parsing", () => {

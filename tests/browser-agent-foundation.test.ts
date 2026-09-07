@@ -49,11 +49,13 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
 
       // Check sidebar trigger parsing
       const sidebarThreads = parseSidebarThreadsFromHtml(viHtml);
-      expect(sidebarThreads.length).toBe(2);
+      expect(sidebarThreads.length).toBe(3);
       expect(sidebarThreads[0]?.threadId).toBe("1000888999");
       expect(sidebarThreads[0]?.customerName).toBe("Trần Thị Mai");
       expect(sidebarThreads[0]?.isUnread).toBe(true);
       expect(sidebarThreads[1]?.isOutgoing).toBe(true);
+      expect(sidebarThreads[2]?.threadId).toBe("1000666555");
+      expect(sidebarThreads[2]?.isUnread).toBe(false);
     });
 
     it("correctly parses English Messenger DOM fixture with stable IDs and directions", () => {
@@ -82,11 +84,13 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
 
       // Check sidebar trigger parsing
       const sidebarThreads = parseSidebarThreadsFromHtml(enHtml);
-      expect(sidebarThreads.length).toBe(2);
+      expect(sidebarThreads.length).toBe(3);
       expect(sidebarThreads[0]?.threadId).toBe("2000111222");
       expect(sidebarThreads[0]?.customerName).toBe("John Doe");
       expect(sidebarThreads[0]?.isUnread).toBe(true);
       expect(sidebarThreads[1]?.isOutgoing).toBe(true);
+      expect(sidebarThreads[2]?.threadId).toBe("2000555666");
+      expect(sidebarThreads[2]?.isUnread).toBe(false);
     });
   });
 

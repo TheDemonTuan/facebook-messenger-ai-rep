@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractMessengerThreadId,
   shouldInspectMessengerThread,
-  isSnippetOutgoing,
-  extractCleanSnippetText,
   getObserverPollDelay,
   PlaywrightMessengerAdapter,
 } from "../apps/browser-agent/src/messenger-adapter.js";
-import { parseMessengerBubblesFromHtml } from "../packages/channel/src/dom-parser.js";
+import {
+  parseMessengerBubblesFromHtml,
+  isSnippetOutgoing,
+  extractCleanSnippetText,
+} from "../packages/channel/src/index.js";
 import { TurnRepository } from "../packages/db/src/repository/turn-repo.js";
 import { getIncidentSafetyPolicy, isCheckpoint } from "../apps/dashboard/src/helpers/incident-helpers.js";
 import type { IncidentItem } from "../apps/dashboard/src/types.js";
@@ -16,8 +18,9 @@ type AdapterInternals = {
   observerPage?: unknown;
   page?: unknown;
   isInitializedBaseline?: boolean;
-  lastSeenSnippets: Map<string, string>;
-  initializedThreadIds: Set<string>;
+  lastSeenSidebarThreads: Map<string, { snippet: string; isUnread: boolean }>;
+  observerBusy?: boolean;
+  sendLock?: boolean;
   ensureObserverPage?: unknown;
   inspectSessionState?: unknown;
   clearSessionIssue?: unknown;
@@ -99,19 +102,85 @@ describe("Messenger session hardening", () => {
     }
   });
 
-  it("inspects unread, changed, and currently open conversations without replaying unknown history", () => {
-    expect(shouldInspectMessengerThread(null, "new-thread", false, undefined, "new message")).toBe(false);
-    expect(shouldInspectMessengerThread(null, "thread-1", true, "same", "same")).toBe(true);
-    expect(shouldInspectMessengerThread(null, "thread-1", false, "old", "new")).toBe(true);
-    expect(shouldInspectMessengerThread("thread-1", "thread-1", false, "same", "same")).toBe(true);
-    expect(shouldInspectMessengerThread("thread-2", "thread-1", false, "same", "same")).toBe(false);
-    // Anti-hopping: if viewing thread-2, an unread thread-1 with unchanged snippet must not switch
-    expect(shouldInspectMessengerThread("thread-2", "thread-1", true, "same", "same")).toBe(false);
-    // Anti-hopping: outgoing snippets sent by us must NEVER trigger switching
-    expect(shouldInspectMessengerThread("thread-2", "thread-1", true, "old", "Bạn: Chào bạn")).toBe(false);
-    expect(shouldInspectMessengerThread(null, "thread-1", true, undefined, "Bạn: Chào bạn")).toBe(false);
-    // If thread-1 snippet changes to a genuine incoming message, it must switch
-    expect(shouldInspectMessengerThread("thread-2", "thread-1", true, "old", "Shop ơi")).toBe(true);
+  it("evaluates sidebar thread inspection triggers via transition matrix", () => {
+    // 1. active conversation is polled separately via open chat DOM -> false
+    expect(
+      shouldInspectMessengerThread(
+        "thread-1",
+        { threadId: "thread-1", snippet: "tin mới", isUnread: true, isOutgoing: false },
+        { snippet: "tin cũ", isUnread: false }
+      )
+    ).toBe(false);
+
+    // 2. outgoing snippets sent by viewer/bot never trigger -> false
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Bạn: Chào bạn", isUnread: true, isOutgoing: true },
+        undefined
+      )
+    ).toBe(false);
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Bạn đã gửi một ảnh", isUnread: true, isOutgoing: false },
+        { snippet: "cũ", isUnread: false }
+      )
+    ).toBe(false);
+
+    // 3. unchanged read thread does not trigger -> false
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Chào shop", isUnread: false, isOutgoing: false },
+        { snippet: "Chào shop", isUnread: false }
+      )
+    ).toBe(false);
+
+    // 4. new thread appearing after baseline triggers once -> true
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "new-thread", snippet: "Khách mới hỏi", isUnread: false, isOutgoing: false },
+        undefined
+      )
+    ).toBe(true);
+
+    // 5. snippet changed triggers inspection -> true
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Shop còn size M không?", isUnread: false, isOutgoing: false },
+        { snippet: "Shop ơi", isUnread: false }
+      )
+    ).toBe(true);
+
+    // 6. unread transitioned false -> true triggers -> true
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Chào shop", isUnread: true, isOutgoing: false },
+        { snippet: "Chào shop", isUnread: false }
+      )
+    ).toBe(true);
+
+    // 7. repeated same text after read triggers because isUnread transitioned false -> true -> true
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Alo", isUnread: true, isOutgoing: false },
+        { snippet: "Alo", isUnread: false }
+      )
+    ).toBe(true);
+
+    // 8. unchanged unread thread does not loop -> false
+    expect(
+      shouldInspectMessengerThread(
+        "other",
+        { threadId: "thread-1", snippet: "Alo", isUnread: true, isOutgoing: false },
+        { snippet: "Alo", isUnread: true }
+      )
+    ).toBe(false);
   });
 
   it("polls the active conversation even when its sidebar row is read and unchanged", async () => {
@@ -166,16 +235,16 @@ describe("Messenger session hardening", () => {
       observerPage: page,
       page,
       isInitializedBaseline: true,
-      lastSeenSnippets: new Map([["thread-1", "tin cũ"]]),
-      initializedThreadIds: new Set(["thread-1"]),
+      lastSeenSidebarThreads: new Map([["thread-1", { snippet: "tin cũ", isUnread: false }]]),
       ensureObserverPage: vi.fn().mockResolvedValue(page),
       inspectSessionState: vi.fn().mockResolvedValue(null),
       clearSessionIssue: vi.fn().mockResolvedValue(undefined),
       readBubblesFromPage: readBubbles,
+      dismissOverlays: vi.fn().mockResolvedValue(undefined),
     });
 
     await adapter.observeInbound(callback);
-    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(2000);
     await adapter.stopObserving();
     vi.useRealTimers();
 
@@ -187,6 +256,400 @@ describe("Messenger session hardening", () => {
         text: "Tin mới trong chat đang mở",
       })
     );
+  });
+  it("navigates to an incoming thread from the sidebar when active conversation is Sin Sin and emits verified inbound", async () => {
+    vi.useFakeTimers();
+
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+
+    let currentUrl = "https://www.facebook.com/messages/t/sin-sin";
+    const page = {
+      url: () => currentUrl,
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      waitForURL: vi.fn().mockImplementation((predicate: (u: URL) => boolean) => {
+        if (predicate(new URL(currentUrl))) return Promise.resolve();
+        return Promise.resolve();
+      }),
+      locator: vi.fn().mockReturnValue({
+        first: vi.fn().mockReturnValue({
+          isVisible: vi.fn().mockResolvedValue(true),
+          click: vi.fn().mockImplementation(() => {
+            currentUrl = "https://www.facebook.com/messages/t/thread-2";
+            return Promise.resolve();
+          }),
+        }),
+      }),
+      goto: vi.fn().mockImplementation((url: string) => {
+        currentUrl = url;
+        return Promise.resolve();
+      }),
+      evaluate: vi.fn().mockImplementation(() => {
+        return Promise.resolve([
+          {
+            threadId: "sin-sin",
+            href: "/messages/t/sin-sin",
+            customerName: "Sin Sin",
+            avatarUrl: null,
+            participantId: "customer-sin-sin",
+            snippet: "cũ",
+            isUnread: false,
+          },
+          {
+            threadId: "thread-2",
+            href: "/messages/t/thread-2",
+            customerName: "Khách Hai",
+            avatarUrl: null,
+            participantId: "customer-2",
+            snippet: "Shop ơi",
+            isUnread: true,
+          },
+        ]);
+      }),
+    };
+
+    const callback = vi.fn().mockResolvedValue(undefined);
+    const readBubbles = vi.fn().mockImplementation((_page: unknown, opts: { threadId?: string }) => {
+      if (opts?.threadId === "thread-2") {
+        return Promise.resolve({
+          ok: true,
+          bubbles: [
+            {
+              id: "mid.thread-2.new",
+              text: "Shop ơi",
+              isOutgoing: false,
+              senderId: "customer-2",
+              senderKind: "PERSON" as const,
+              senderReliability: "VERIFIED" as const,
+              threadKind: "DIRECT" as const,
+              threadReliability: "VERIFIED" as const,
+              threadEvidence: [],
+              senderEvidence: [],
+              mentions: [],
+              observedTimestamp: new Date("2026-09-06T12:00:00.000Z"),
+            },
+          ],
+          isDegraded: false,
+          threadClassification: {
+            kind: "DIRECT",
+            reliability: "VERIFIED",
+            evidence: [],
+          },
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        bubbles: [],
+        isDegraded: false,
+        threadClassification: {
+          kind: "DIRECT",
+          reliability: "VERIFIED",
+          evidence: [],
+        },
+      });
+    });
+
+    Object.assign(internals(adapter), {
+      observerPage: page,
+      page,
+      lastSeenSidebarThreads: new Map([
+        ["sin-sin", { snippet: "cũ", isUnread: false }],
+        ["thread-2", { snippet: "cũ", isUnread: false }],
+      ]),
+      ensureObserverPage: vi.fn().mockResolvedValue(page),
+      ensureSenderPage: vi.fn().mockResolvedValue(page),
+      inspectSessionState: vi.fn().mockResolvedValue(null),
+      clearSessionIssue: vi.fn().mockResolvedValue(undefined),
+      readBubblesFromPage: readBubbles,
+      dismissOverlays: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await adapter.observeInbound(callback);
+    await vi.advanceTimersByTimeAsync(1000);
+    await adapter.stopObserving();
+    vi.useRealTimers();
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalThreadId: "thread-2",
+        externalMessageId: "mid.thread-2.new",
+        threadReliability: "VERIFIED",
+        senderReliability: "VERIFIED",
+      })
+    );
+    for (const call of callback.mock.calls) {
+      expect(call[0].externalMessageId).not.toMatch(/^snip\.\$/);
+    }
+  });
+  it("handles baseline: does not emit read historical rows, but opens and emits incoming unread rows", async () => {
+    vi.useFakeTimers();
+
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+
+    let currentUrl = "https://www.facebook.com/messages/t/active-read";
+    const page = {
+      url: () => currentUrl,
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      waitForURL: vi.fn().mockImplementation((predicate: (u: URL) => boolean) => {
+        if (predicate(new URL(currentUrl))) return Promise.resolve();
+        return Promise.resolve();
+      }),
+      locator: vi.fn().mockReturnValue({
+        first: vi.fn().mockReturnValue({
+          isVisible: vi.fn().mockResolvedValue(true),
+          click: vi.fn().mockImplementation(() => {
+            currentUrl = "https://www.facebook.com/messages/t/unread-pending";
+            return Promise.resolve();
+          }),
+        }),
+      }),
+      goto: vi.fn().mockImplementation((url: string) => {
+        currentUrl = url;
+        return Promise.resolve();
+      }),
+      evaluate: vi.fn().mockImplementation(() => {
+        return Promise.resolve([
+          {
+            threadId: "active-read",
+            href: "/messages/t/active-read",
+            customerName: "Khách Đã Đọc",
+            avatarUrl: null,
+            participantId: "cust-read",
+            snippet: "Lịch sử cũ",
+            isUnread: false,
+          },
+          {
+            threadId: "unread-pending",
+            href: "/messages/t/unread-pending",
+            customerName: "Khách Đang Chờ",
+            avatarUrl: null,
+            participantId: "cust-unread",
+            snippet: "Cần tư vấn",
+            isUnread: true,
+          },
+        ]);
+      }),
+    };
+
+    const callback = vi.fn().mockResolvedValue(undefined);
+    const readBubbles = vi.fn().mockImplementation((_page: unknown, opts: { threadId?: string }) => {
+      if (opts?.threadId === "active-read") {
+        return Promise.resolve({
+          ok: true,
+          bubbles: [
+            {
+              id: "mid.hist-1",
+              text: "Lịch sử cũ",
+              isOutgoing: false,
+              senderId: "cust-read",
+              senderKind: "PERSON" as const,
+              senderReliability: "VERIFIED" as const,
+              threadKind: "DIRECT" as const,
+              threadReliability: "VERIFIED" as const,
+              threadEvidence: [],
+              senderEvidence: [],
+              mentions: [],
+              observedTimestamp: new Date(),
+            },
+          ],
+          isDegraded: false,
+        });
+      }
+      if (opts?.threadId === "unread-pending") {
+        return Promise.resolve({
+          ok: true,
+          bubbles: [
+            {
+              id: "mid.pending-1",
+              text: "Cần tư vấn",
+              isOutgoing: false,
+              senderId: "cust-unread",
+              senderKind: "PERSON" as const,
+              senderReliability: "VERIFIED" as const,
+              threadKind: "DIRECT" as const,
+              threadReliability: "VERIFIED" as const,
+              threadEvidence: [],
+              senderEvidence: [],
+              mentions: [],
+              observedTimestamp: new Date(),
+            },
+          ],
+          isDegraded: false,
+        });
+      }
+      return Promise.resolve({ ok: true, bubbles: [], isDegraded: false });
+    });
+
+    Object.assign(internals(adapter), {
+      observerPage: page,
+      page,
+      isInitializedBaseline: false,
+      ensureObserverPage: vi.fn().mockResolvedValue(page),
+      ensureSenderPage: vi.fn().mockResolvedValue(page),
+      inspectSessionState: vi.fn().mockResolvedValue(null),
+      clearSessionIssue: vi.fn().mockResolvedValue(undefined),
+      readBubblesFromPage: readBubbles,
+      dismissOverlays: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await adapter.observeInbound(callback);
+    await vi.advanceTimersByTimeAsync(1000);
+    await adapter.stopObserving();
+    vi.useRealTimers();
+
+    // Active read historical row was NOT emitted
+    for (const call of callback.mock.calls) {
+      expect(call[0].externalMessageId).not.toBe("mid.hist-1");
+    }
+    // Incoming unread pending row was emitted
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        externalThreadId: "unread-pending",
+        externalMessageId: "mid.pending-1",
+        text: "Cần tư vấn",
+      })
+    );
+  });
+
+  it("retries inbound bubble processing if downstream callback rejects and commits state only on resolve", async () => {
+    vi.useFakeTimers();
+
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+
+    let currentUrl = "https://www.facebook.com/messages/t/thread-retry";
+    const page = {
+      url: () => currentUrl,
+      waitForLoadState: vi.fn().mockResolvedValue(undefined),
+      evaluate: vi.fn().mockResolvedValue([
+        {
+          threadId: "thread-retry",
+          href: "/messages/t/thread-retry",
+          customerName: "Khách Retry",
+          avatarUrl: null,
+          participantId: "cust-retry",
+          snippet: "Tin cần gửi lại",
+          isUnread: true,
+        },
+      ]),
+    };
+
+    let callCount = 0;
+    const callback = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error("Downstream network failure"));
+      }
+      return Promise.resolve();
+    });
+
+    const readBubbles = vi.fn().mockResolvedValue({
+      ok: true,
+      bubbles: [
+        {
+          id: "mid.retry-msg-1",
+          text: "Tin cần gửi lại",
+          isOutgoing: false,
+          senderId: "cust-retry",
+          senderKind: "PERSON" as const,
+          senderReliability: "VERIFIED" as const,
+          threadKind: "DIRECT" as const,
+          threadReliability: "VERIFIED" as const,
+          threadEvidence: [],
+          senderEvidence: [],
+          mentions: [],
+          observedTimestamp: new Date(),
+        },
+      ],
+      isDegraded: false,
+    });
+
+    Object.assign(internals(adapter), {
+      observerPage: page,
+      page,
+      isInitializedBaseline: true,
+      lastSeenSidebarThreads: new Map([["thread-retry", { snippet: "cũ", isUnread: false }]]),
+      ensureObserverPage: vi.fn().mockResolvedValue(page),
+      ensureSenderPage: vi.fn().mockResolvedValue(page),
+      inspectSessionState: vi.fn().mockResolvedValue(null),
+      clearSessionIssue: vi.fn().mockResolvedValue(undefined),
+      readBubblesFromPage: readBubbles,
+      dismissOverlays: vi.fn().mockResolvedValue(undefined),
+    });
+
+    await adapter.observeInbound(callback);
+    // First poll: callback rejects
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(callCount).toBe(1);
+    // Message id must NOT be acknowledged/seen
+    expect(internals(adapter).lastSeenMessageIds.has("mid.retry-msg-1")).toBe(false);
+
+    // Second poll: retry occurs and succeeds
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(callCount).toBe(2);
+    // Now committed
+    expect(internals(adapter).lastSeenMessageIds.has("mid.retry-msg-1")).toBe(true);
+
+    await adapter.stopObserving();
+    vi.useRealTimers();
+  });
+
+  it("prevents concurrency: sender waits for observer idle before navigating, and observer pauses when sender is locked", async () => {
+    vi.useFakeTimers();
+
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+
+    let currentUrl = "https://www.facebook.com/messages/t/thread-sender";
+    const senderPage = {
+      url: () => currentUrl,
+      waitForURL: vi.fn().mockResolvedValue(undefined),
+      locator: vi.fn().mockReturnValue({
+        first: vi.fn().mockReturnValue({
+          isVisible: vi.fn().mockResolvedValue(true),
+          click: vi.fn().mockImplementation(() => {
+            currentUrl = "https://www.facebook.com/messages/t/thread-target";
+            return Promise.resolve();
+          }),
+        }),
+      }),
+      goto: vi.fn().mockImplementation((url: string) => {
+        currentUrl = url;
+        return Promise.resolve();
+      }),
+      evaluate: vi.fn().mockResolvedValue(true),
+    };
+
+    Object.assign(internals(adapter), {
+      senderPage,
+      ensureSenderPage: vi.fn().mockResolvedValue(senderPage),
+      dismissOverlays: vi.fn().mockResolvedValue(undefined),
+      observerBusy: true,
+    });
+
+    // openConversation waits for observer to become idle
+    const openPromise = adapter.openConversation("thread-target");
+    expect(internals(adapter).sendLock).toBe(true);
+
+    // Observer finishes after 100ms
+    setTimeout(() => {
+      internals(adapter).observerBusy = false;
+    }, 100);
+
+    await vi.advanceTimersByTimeAsync(150);
+    const opened = await openPromise;
+    expect(opened).toBe(true);
+
+    vi.useRealTimers();
   });
 
   it("classifies message direction from row evidence rather than message text", () => {

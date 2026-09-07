@@ -1,6 +1,12 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
-import type { ChannelAdapter, PreSendMarker, BubbleParseResult } from "@messenger/channel";
-import { TypingEngine, parseMessengerBubblesFromHtml } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker, BubbleParseResult, ParsedSidebarThread } from "@messenger/channel";
+import {
+  TypingEngine,
+  parseMessengerBubblesFromHtml,
+  parseSidebarThreadsFromHtml,
+  isSnippetOutgoing,
+  extractCleanSnippetText,
+} from "@messenger/channel";
 import type {
   InboundMessagePayload,
   ChannelHealthReport,
@@ -43,69 +49,43 @@ export function extractMessengerThreadId(value: string): string | null {
   return value.match(MESSENGER_THREAD_PATH)?.[1] ?? null;
 }
 
-export function isSnippetOutgoing(snippet: string): boolean {
-  return (
-    /\b(?:bạn|you)\s*:/i.test(snippet) ||
-    /\b(?:bạn đã gửi|you sent)\b/i.test(snippet)
-  );
-}
-
-export function extractCleanSnippetText(rawSnippet: string, customerName?: string | null): string {
-  if (!rawSnippet) return "";
-  let text = rawSnippet.replace(/\s+/g, " ").trim();
-
-  // Strip customer name prefix if present
-  if (customerName && customerName.trim()) {
-    const name = customerName.trim();
-    if (text.toLowerCase().startsWith(name.toLowerCase())) {
-      text = text.slice(name.length).trim();
-      text = text.replace(/^[:\-\s]+/, "").trim();
-    }
-  }
-
-  // Remove middle dot / bullet separator and anything following it (always timestamp in Messenger sidebar)
-  text = text.replace(/\s*[·•].*$/, "").trim();
-
-  // Remove standalone timestamp suffixes at the end of line
-  text = text.replace(/\s+\d+\s*(?:phút|giờ|ngày|tuần|tháng|giây|năm|m|h|d|w|s)\s*$/iu, "").trim();
-
-  // Remove action labels
-  text = text.replace(/\b(?:đánh dấu là chưa đọc|đánh dấu là đã đọc|mark as unread|mark as read)\b/giu, "").trim();
-
-  // Clean any leftover trailing punctuation from separators
-  text = text.replace(/[\s:·•-]+$/, "").trim();
-
-  return text;
+export interface SidebarThreadSnapshot {
+  snippet: string;
+  isUnread: boolean;
 }
 
 export function shouldInspectMessengerThread(
   currentThreadId: string | null,
-  threadId: string,
-  isUnread: boolean,
-  previousSnippet: string | undefined,
-  snippet: string
+  thread: Pick<ParsedSidebarThread, "threadId" | "snippet" | "isUnread" | "isOutgoing">,
+  previous: SidebarThreadSnapshot | undefined
 ): boolean {
-  // If already on this thread, always inspect its DOM directly (zero navigation cost)
-  if (currentThreadId === threadId) {
+  // 1. Active thread is always polled separately via its open chat DOM
+  if (currentThreadId && thread.threadId === currentThreadId) {
+    return false;
+  }
+
+  // 2. Outgoing snippet never triggers thread inspection
+  if (thread.isOutgoing || isSnippetOutgoing(thread.snippet)) {
+    return false;
+  }
+
+  // 3. Thread appearing after baseline triggers once
+  if (previous === undefined) {
     return true;
   }
-  // If latest message was sent by us/bot, never switch to this thread!
-  if (isSnippetOutgoing(snippet)) {
-    return false;
+
+  // 4. Snippet change triggers inspection
+  if (thread.snippet !== previous.snippet) {
+    return true;
   }
-  // If actively viewing a thread, do not switch away to another thread if its snippet is unchanged!
-  // Hopping away on unchanged unread snippets causes infinite switching loops.
-  if (currentThreadId !== null && previousSnippet !== undefined && previousSnippet === snippet) {
-    return false;
+
+  // 5. Unread transition false -> true triggers even if snippet text is identical
+  if (!previous.isUnread && thread.isUnread) {
+    return true;
   }
-  // If newly discovered thread in sidebar: only inspect if genuinely unread
-  if (previousSnippet === undefined) {
-    return isUnread;
-  }
-  return (
-    isUnread ||
-    previousSnippet !== snippet
-  );
+
+  // 6. Otherwise unchanged state does not trigger
+  return false;
 }
 
 export class PlaywrightMessengerAdapter implements ChannelAdapter {
@@ -123,13 +103,13 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private observerPage: Page | null = null;
   private senderPage: Page | null = null;
   private sendLock = false;
+  private observerBusy = false;
   private isObserving = false;
   private observeTimer: NodeJS.Timeout | null = null;
   private lastSeenMessageIds = new Set<string>();
   private confirmedOutboundMessageIds = new Set<string>();
   private lastSeenActiveSignatures = new Map<string, number>();
-  private lastSeenSnippets = new Map<string, string>();
-  private initializedThreadIds = new Set<string>();
+  private lastSeenSidebarThreads = new Map<string, SidebarThreadSnapshot>();
   private isInitializedBaseline = false;
   private typingEngine = new TypingEngine();
   private inboundCallback: ((inbound: InboundMessagePayload) => Promise<void>) | null = null;
@@ -213,8 +193,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     const savedCallback = this.inboundCallback;
     this.isInitializedBaseline = false;
     this.lastSeenMessageIds.clear();
-    this.lastSeenSnippets.clear();
-    this.initializedThreadIds.clear();
+    this.lastSeenSidebarThreads.clear();
     this.consecutiveEmptyInboxPolls = 0;
     this.lastSuccessfulPollAt = null;
     this.hasReportedHealthySession = false;
@@ -527,6 +506,184 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     }
   }
 
+  private async waitForObserverIdle(timeoutMs = 45000): Promise<boolean> {
+    const startTime = Date.now();
+    while (this.observerBusy) {
+      if (Date.now() - startTime > timeoutMs) {
+        return false;
+      }
+      const { promise, resolve } = Promise.withResolvers<void>();
+      setTimeout(resolve, 50);
+      await promise;
+    }
+    return true;
+  }
+
+  private async readSidebarThreadsFromPage(page: Page): Promise<ParsedSidebarThread[]> {
+    const evaluated = await page.evaluate(() => {
+      const allLinks = Array.from(
+        document.querySelectorAll('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]')
+      );
+      const sidebarLinks = allLinks.filter((a) => {
+        if (a.closest('div[role="main"]')) return false;
+        const rect = (a as HTMLElement).getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+
+      const container = document.createElement("div");
+      for (const a of sidebarLinks) {
+        const clone = a.cloneNode(true) as HTMLElement;
+        const href = a.getAttribute("href") || "";
+        const match = href.match(/\/messages\/(?:e2ee\/)?t\/([^/?#]+)/i);
+        const threadId = match?.[1] || "";
+        const rawText = (a as HTMLElement).innerText || "";
+        const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
+        const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
+
+        const avatarImg = (a as HTMLElement).querySelector('img[src*="scontent"], img[src*="fbcdn"], img');
+        const avatarUrl =
+          avatarImg?.getAttribute("src") ||
+          (a as HTMLElement).querySelector("image")?.getAttribute("xlink:href") ||
+          (a as HTMLElement).querySelector("image")?.getAttribute("href") ||
+          null;
+
+        const participantId =
+          href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
+          a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
+          (/^[0-9]+$/.test(threadId) && !/\b(?:\d+\s*(?:members|thành viên)|chat members|group options)\b/i.test(rawText)
+            ? threadId
+            : null);
+
+        let snippet = "";
+        const autoSpans = Array.from((a as HTMLElement).querySelectorAll('span[dir="auto"]'));
+        if (autoSpans.length >= 2) {
+          snippet = autoSpans.slice(1).map((s) => s.textContent?.trim()).filter(Boolean).join(" ");
+        }
+        if (!snippet) {
+          const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
+          const nonNameLines = lines.filter((l) => l !== customerName && !l.includes("chưa đọc") && !l.includes("unread"));
+          snippet = nonNameLines.join(" ");
+        }
+        if (!snippet) {
+          snippet = rawText;
+        }
+
+        const fullAria = [
+          a.getAttribute("aria-label") || "",
+          ...Array.from(a.querySelectorAll("[aria-label]")).map((el) => el.getAttribute("aria-label") || ""),
+          rawText,
+        ].join(" ");
+
+        const markAsReadAction =
+          /đánh dấu là đã đọc/iu.test(fullAria) ||
+          /mark as read/iu.test(fullAria);
+
+        const sanitizedAria = fullAria
+          .replace(/đánh dấu là chưa đọc/giu, "")
+          .replace(/mark as unread/giu, "");
+
+        const unreadMention =
+          /chưa đọc/iu.test(sanitizedAria) ||
+          /unread/iu.test(sanitizedAria);
+
+        let hasBoldStyle = false;
+        try {
+          const elementsToCheck = [nameMatch, ...autoSpans].filter(Boolean) as HTMLElement[];
+          for (const el of elementsToCheck) {
+            const fw = window.getComputedStyle(el).fontWeight;
+            const numFw = parseInt(fw, 10);
+            if (fw === "bold" || (!isNaN(numFw) && numFw >= 600)) {
+              hasBoldStyle = true;
+              break;
+            }
+          }
+        } catch {
+          // Ignore style computation errors
+        }
+
+        const isUnread = markAsReadAction || unreadMention || hasBoldStyle;
+
+        clone.setAttribute("data-messenger-customer-name", customerName);
+        clone.setAttribute("data-messenger-snippet", snippet);
+        clone.setAttribute("data-messenger-unread", isUnread ? "true" : "false");
+        if (participantId) {
+          clone.setAttribute("data-messenger-participant-id", participantId);
+        }
+        if (avatarUrl) {
+          clone.setAttribute("data-messenger-avatar-url", avatarUrl);
+        }
+
+        container.appendChild(clone);
+      }
+      return container.innerHTML;
+    });
+
+    if (typeof evaluated === "string") {
+      return parseSidebarThreadsFromHtml(evaluated);
+    }
+    if (Array.isArray(evaluated)) {
+      return evaluated as ParsedSidebarThread[];
+    }
+    return [];
+  }
+
+  private async inspectTriggeredThreads(
+    page: Page,
+    candidates: Array<{
+      thread: ParsedSidebarThread;
+      reason: "BASELINE_UNREAD" | "NEW_THREAD" | "SNIPPET_CHANGED" | "BECAME_UNREAD";
+    }>
+  ): Promise<void> {
+    for (const candidate of candidates) {
+      const { thread: t, reason } = candidate;
+
+      if (this.sendLock) {
+        console.log(
+          `[BrowserAdapter] Send lock acquired by sender; pausing inspection queue at thread ${t.threadId}`
+        );
+        break;
+      }
+
+      const threadRef = t.threadRef || `https://www.facebook.com/messages/t/${t.threadId}`;
+      const navigated = await this.navigateToMessengerThread(page, threadRef, false);
+      if (!navigated) {
+        console.warn(
+          `[BrowserAdapter] Failed to navigate to triggered thread ${t.threadId}, retaining previous state for next poll retry`
+        );
+        continue;
+      }
+
+      const bubbleResult = await this.readBubblesFromPage(page, {
+        threadTitle: t.customerName,
+        participantId: t.participantId,
+        threadId: t.threadId,
+      });
+
+      if (bubbleResult.isDegraded) {
+        await this.triggerDegradedDom(
+          bubbleResult.degradedReason || "DOM bubble missing stable message id - suspending channel"
+        );
+        return;
+      }
+
+      const emittedCount = await this.processInboundBubbles(
+        bubbleResult,
+        t,
+        false
+      );
+      this.rememberActiveBubbleSequence(t.threadId, bubbleResult);
+
+      this.lastSeenSidebarThreads.set(t.threadId, {
+        snippet: t.snippet,
+        isUnread: t.isUnread,
+      });
+
+      console.log(
+        `[BrowserAdapter] Thread ${t.threadId} inspected (reason=${reason}, emitted=${emittedCount} inbounds).`
+      );
+    }
+  }
+
   async observeInbound(callback: (inbound: InboundMessagePayload) => Promise<void>): Promise<void> {
     this.inboundCallback = callback;
     if (!this.observerPage) await this.init();
@@ -539,12 +696,19 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (!this.isObserving) return;
       if (this.isDomDegraded) return;
 
-      // Single tab coordination: pause observer while sender is typing or sending
       if (this.sendLock) {
         this.observeTimer = setTimeout(poll, getObserverPollDelay());
         return;
       }
 
+      this.observerBusy = true;
+      if (this.sendLock) {
+        this.observerBusy = false;
+        this.observeTimer = setTimeout(poll, getObserverPollDelay());
+        return;
+      }
+
+      let nextDelayMs = getObserverPollDelay();
       try {
         const observerPage = await this.ensureObserverPage();
 
@@ -552,71 +716,13 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         if (sessionIssue) {
           await this.dismissOverlays(observerPage);
           await this.setSessionIssue(sessionIssue);
-          const backoffDelay = sessionIssue.kind === "RATE_LIMITED" ? 15 * 60 * 1000 : getObserverPollDelay();
-          this.observeTimer = setTimeout(poll, backoffDelay);
+          nextDelayMs = sessionIssue.kind === "RATE_LIMITED" ? 15 * 60 * 1000 : getObserverPollDelay();
           return;
         }
 
         await observerPage.waitForLoadState("domcontentloaded", { timeout: 10000 }).catch(() => undefined);
 
-        // 1. Sidebar is ONLY a trigger: query sidebar thread rows
-        const threadElements = await observerPage.evaluate(() => {
-          const links = Array.from(
-            document.querySelectorAll('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]')
-          );
-          return links.map((a) => {
-            const href = a.getAttribute("href") || "";
-            const match = href.match(/\/messages\/(?:e2ee\/)?t\/([^/?#]+)/i);
-            const threadId = match?.[1] || "";
-            const rawText = (a as HTMLElement).innerText || "";
-            const nameMatch = (a as HTMLElement).querySelector('span[dir="auto"]');
-            const customerName = nameMatch?.textContent?.trim() || threadId || "Customer";
-            const avatarImg = (a as HTMLElement).querySelector('img[src*="scontent"], img[src*="fbcdn"], img');
-            const avatarUrl =
-              avatarImg?.getAttribute("src") ||
-              (a as HTMLElement).querySelector("image")?.getAttribute("xlink:href") ||
-              (a as HTMLElement).querySelector("image")?.getAttribute("href") ||
-              null;
-            const participantId =
-              href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
-              a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
-              (/^[0-9]+$/.test(threadId) && !/\b(?:\d+\s*(?:members|thành viên)|chat members|group options)\b/i.test(rawText)
-                ? threadId
-                : null);
-
-            // Extract dedicated snippet text from inner spans or lines
-            let snippet = "";
-            const autoSpans = Array.from((a as HTMLElement).querySelectorAll('span[dir="auto"]'));
-            if (autoSpans.length >= 2) {
-              snippet = autoSpans.slice(1).map((s) => s.textContent?.trim()).filter(Boolean).join(" ");
-            }
-            if (!snippet) {
-              const lines = rawText.split("\n").map((l) => l.trim()).filter(Boolean);
-              const nonNameLines = lines.filter((l) => l !== customerName && !l.includes("chưa đọc") && !l.includes("unread"));
-              snippet = nonNameLines.join(" ");
-            }
-            if (!snippet) {
-              snippet = rawText;
-            }
-
-            // Check if thread has unread indicator
-            const isUnread =
-              rawText.includes("chưa đọc") ||
-              rawText.includes("unread") ||
-              a.querySelector('div[aria-label*="chưa đọc"], div[aria-label*="unread"]') !== null ||
-              a.querySelector('span[class*="x1lliihq"][style*="font-weight: bold"], span[style*="font-weight: bold"], span[style*="font-weight: 700"]') !== null;
-
-            return {
-              href,
-              threadId,
-              customerName,
-              avatarUrl,
-              participantId,
-              snippet: snippet.replace(/\s+/g, " ").trim(),
-              isUnread,
-            };
-          });
-        });
+        const threadElements = await this.readSidebarThreadsFromPage(observerPage);
 
         if (threadElements.length === 0) {
           this.consecutiveEmptyInboxPolls += 1;
@@ -632,17 +738,21 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         this.consecutiveEmptyInboxPolls = 0;
         this.lastSuccessfulPollAt = new Date();
         await this.clearSessionIssue();
-
-        // First valid poll captures baseline in single tab without navigating to historical threads
         if (!this.isInitializedBaseline) {
           await this.dismissOverlays(observerPage);
+          const baselineCandidates: Array<{
+            thread: ParsedSidebarThread;
+            reason: "BASELINE_UNREAD";
+          }> = [];
+
           for (const t of threadElements) {
-            if (t.threadId && t.snippet) {
-              const cleanSnippet = extractCleanSnippetText(t.snippet, t.customerName);
-              if (cleanSnippet) {
-                this.lastSeenSnippets.set(t.threadId, cleanSnippet);
-              }
-              this.initializedThreadIds.add(t.threadId);
+            if (!t.threadId) continue;
+            this.lastSeenSidebarThreads.set(t.threadId, {
+              snippet: t.snippet,
+              isUnread: t.isUnread,
+            });
+            if (t.isUnread && !t.isOutgoing && !isSnippetOutgoing(t.snippet)) {
+              baselineCandidates.push({ thread: t, reason: "BASELINE_UNREAD" });
             }
           }
 
@@ -656,27 +766,29 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           }
 
           this.isInitializedBaseline = true;
-          console.log(`[BrowserAdapter] Baseline snapshot captured for ${threadElements.length} threads in 1 tab without navigating.`);
-          this.observeTimer = setTimeout(poll, getObserverPollDelay());
+          console.log(
+            `[BrowserAdapter] Baseline snapshot captured for ${threadElements.length} threads in 1 tab (${baselineCandidates.length} unread pending).`
+          );
+
+          if (baselineCandidates.length > 0) {
+            await this.inspectTriggeredThreads(observerPage, baselineCandidates);
+          }
+
           return;
         }
 
-        // 2. Check active thread first: read DOM in-place if viewing it
         const currentThreadId = extractMessengerThreadId(observerPage.url());
 
         if (currentThreadId) {
           const currentElem = threadElements.find((t) => t.threadId === currentThreadId);
 
           if (currentElem) {
-            const cleanSnippet = extractCleanSnippetText(currentElem.snippet, currentElem.customerName);
-            if (cleanSnippet) {
-              this.lastSeenSnippets.set(currentThreadId, cleanSnippet);
-            }
+            this.lastSeenSidebarThreads.set(currentThreadId, {
+              snippet: currentElem.snippet,
+              isUnread: currentElem.isUnread,
+            });
           }
-          this.initializedThreadIds.add(currentThreadId);
 
-          // Messenger marks an open conversation as read immediately and may update its
-          // sidebar snippet late, so the active DOM must be checked on every poll.
           const bubbleResult = await this.readBubblesFromPage(observerPage, {
             threadTitle: currentElem?.customerName,
             participantId: currentElem?.participantId,
@@ -702,74 +814,37 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           );
         }
 
-        // 3. Zero chat loading for sidebar: extract new incoming messages directly without navigating/opening chat!
+        const candidates: Array<{
+          thread: ParsedSidebarThread;
+          reason: "NEW_THREAD" | "SNIPPET_CHANGED" | "BECAME_UNREAD";
+        }> = [];
+
         for (const t of threadElements) {
-          if (!t.threadId || !t.snippet) continue;
-          if (t.threadId === currentThreadId) continue;
+          if (!t.threadId) continue;
+          const previous = this.lastSeenSidebarThreads.get(t.threadId);
 
-          const cleanText = extractCleanSnippetText(t.snippet, t.customerName);
-          if (!cleanText) continue;
-
-          const prevSnippet = this.lastSeenSnippets.get(t.threadId);
-          // Compare canonical message text because Messenger's timestamp label changes
-          // while the underlying sidebar message remains the same.
-          if (prevSnippet !== undefined && prevSnippet === cleanText) {
-            continue;
-          }
-
-          const hasTrigger = shouldInspectMessengerThread(
-            currentThreadId,
-            t.threadId,
-            t.isUnread,
-            prevSnippet,
-            cleanText
-          );
-
-          if (!hasTrigger) continue;
-
-          // Record before callback so the same message cannot be replayed on callback failure.
-          this.lastSeenSnippets.set(t.threadId, cleanText);
-          this.initializedThreadIds.add(t.threadId);
-
-          if (isSnippetOutgoing(cleanText)) {
-            continue;
-          }
-
-          const snippetHash = createHash("sha256")
-            .update(`${t.threadId}:${cleanText}`)
-            .digest("hex")
-            .slice(0, 16);
-          const externalMessageId = `snip.$${t.threadId}.${Date.now()}.${snippetHash}`;
-
-          if (this.lastSeenMessageIds.has(externalMessageId)) {
-            continue;
-          }
-          this.lastSeenMessageIds.add(externalMessageId);
-
-          if (this.inboundCallback) {
-            const href = t.href || "";
-            const routePrefix = href.includes("/messages/e2ee/t/")
-              ? "/messages/e2ee/t/"
-              : "/messages/t/";
-            const fullThreadRef = `https://www.facebook.com${routePrefix}${encodeURIComponent(t.threadId)}`;
-
-            await this.inboundCallback({
-              channelAccountId: this.channelAccountId,
-              externalThreadId: t.threadId,
-              externalThreadRef: fullThreadRef,
-              externalCustomerId: t.participantId ?? null,
-              customerName: t.customerName || null,
-              avatarUrl: t.avatarUrl || null,
-              externalMessageId,
-              text: cleanText,
-              timestamp: new Date(),
-              threadKind: "DIRECT",
-              threadReliability: "UNVERIFIED",
-              senderReliability: "UNVERIFIED",
-              observedTimestamp: new Date(),
-              timestampProvenance: "OBSERVED",
+          const hasTrigger = shouldInspectMessengerThread(currentThreadId, t, previous);
+          if (!hasTrigger) {
+            this.lastSeenSidebarThreads.set(t.threadId, {
+              snippet: t.snippet,
+              isUnread: t.isUnread,
             });
+            continue;
           }
+          let reason: "NEW_THREAD" | "SNIPPET_CHANGED" | "BECAME_UNREAD" = "SNIPPET_CHANGED";
+          if (previous === undefined) {
+            reason = "NEW_THREAD";
+          } else if (t.snippet !== previous.snippet) {
+            reason = "SNIPPET_CHANGED";
+          } else if (!previous.isUnread && t.isUnread) {
+            reason = "BECAME_UNREAD";
+          }
+
+          candidates.push({ thread: t, reason });
+        }
+
+        if (candidates.length > 0) {
+          await this.inspectTriggeredThreads(observerPage, candidates);
         }
       } catch (err) {
         console.warn("[BrowserAdapter] Error during observer poll:", err);
@@ -780,8 +855,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           console.error("[BrowserAdapter] Failed to report observer failure:", callbackError);
         });
       } finally {
+        this.observerBusy = false;
         if (this.isObserving && !this.isDomDegraded) {
-          this.observeTimer = setTimeout(poll, getObserverPollDelay());
+          this.observeTimer = setTimeout(poll, nextDelayMs);
         }
       }
     };
@@ -794,7 +870,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     threadInfo: {
       threadId: string;
       customerName: string;
-      avatarUrl: string | null;
+      avatarUrl?: string | null;
       href?: string;
     },
     useActiveSequenceFallback = false
@@ -850,7 +926,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (this.lastSeenMessageIds.has(bubble.id) && !hasNewActiveOccurrence) {
         continue; // Dedupe
       }
-
       const externalMessageId = hasNewActiveOccurrence
         ? `active.$${threadInfo.threadId}.${createHash("sha256")
             .update(`${activeSignature}:${activeOccurrence}`)
@@ -858,18 +933,11 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             .slice(0, 24)}`
         : bubble.id;
 
-      this.lastSeenMessageIds.add(bubble.id);
-      if (useActiveSequenceFallback) {
-        this.lastSeenActiveSignatures.set(activeSequenceKey, activeOccurrence);
-      }
-
       // An outgoing bubble can be briefly misclassified by Facebook's virtualized DOM.
       // Never emit a message id already confirmed by verifySent as customer inbound.
       if (useActiveSequenceFallback && !bubble.isOutgoing && this.confirmedOutboundMessageIds.has(bubble.id)) {
         continue;
       }
-
-      processedCount++;
 
       if (this.inboundCallback) {
         const href = threadInfo.href || "";
@@ -924,6 +992,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           timestampPrecision: bubble.timestampPrecision,
         });
       }
+
+      this.lastSeenMessageIds.add(bubble.id);
+      if (useActiveSequenceFallback) {
+        this.lastSeenActiveSignatures.set(activeSequenceKey, activeOccurrence);
+      }
+      processedCount++;
     }
     if (useActiveSequenceFallback) {
       this.rememberActiveBubbleSequence(threadInfo.threadId, bubbleResult);
@@ -1176,17 +1250,18 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       clearTimeout(this.observeTimer);
       this.observeTimer = null;
     }
-    this.inboundCallback = null;
+    this.observerBusy = false;
   }
 
   // --- Sender Page Operations ---
 
-  async openConversation(threadRef: string): Promise<boolean> {
-    this.sendLock = true;
-    const senderPage = await this.ensureSenderPage();
+  private async navigateToMessengerThread(
+    page: Page,
+    threadRef: string,
+    requireComposer: boolean
+  ): Promise<boolean> {
     const threadId = extractMessengerThreadId(threadRef) || threadRef;
-
-    const currentUrl = senderPage.url();
+    const currentUrl = page.url();
     const currentThreadId = extractMessengerThreadId(currentUrl);
 
     // 1. If already viewing this conversation and composer is visible, avoid navigating
@@ -1195,11 +1270,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       currentUrl.includes(`/messages/t/${threadId}`) ||
       currentUrl.includes(`/messages/e2ee/t/${threadId}`)
     ) {
-      const composer = senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
+      if (!requireComposer) {
+        return true;
+      }
+      const composer = page.locator('div[role="textbox"][contenteditable="true"]').first();
       if (await composer.isVisible().catch(() => false)) {
         return true;
       }
-      await this.dismissOverlays(senderPage);
+      await this.dismissOverlays(page);
       if (await composer.isVisible().catch(() => false)) {
         return true;
       }
@@ -1208,14 +1286,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     // 2. Client-side DOM switch: click sidebar link in DOM to avoid full page reload
     let switchedViaDom = false;
     try {
-      const linkLocator = senderPage
+      const linkLocator = page
         .locator(`a[href*="/messages/t/${threadId}"], a[href*="/messages/e2ee/t/${threadId}"]`)
         .first();
       if (await linkLocator.isVisible().catch(() => false)) {
         await linkLocator.click({ timeout: 3000 }).catch(() => undefined);
         switchedViaDom = true;
       } else {
-        switchedViaDom = await senderPage.evaluate((targetId) => {
+        switchedViaDom = await page.evaluate((targetId) => {
           const links = Array.from(
             document.querySelectorAll('a[href*="/messages/t/"], a[href*="/messages/e2ee/t/"]')
           );
@@ -1236,48 +1314,82 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     }
 
     if (switchedViaDom) {
-      await senderPage
+      await page
         .waitForURL(
           (url) => {
             const u = url.toString();
             return u.includes(`/messages/t/${threadId}`) || u.includes(`/messages/e2ee/t/${threadId}`);
           },
-          { timeout: 4000 }
+          { timeout: 5000 }
         )
         .catch(() => undefined);
     }
 
     // 3. Fallback to goto only if URL does not include threadId
-    const afterDomUrl = senderPage.url();
+    const afterDomUrl = page.url();
     if (!afterDomUrl.includes(threadId)) {
       const targetUrl = threadRef.startsWith("http")
         ? new URL(threadRef, "https://www.facebook.com").toString()
         : `https://www.facebook.com/messages/t/${threadId}`;
 
-      console.log(`[BrowserAdapter] Sender opening conversation via URL: ${targetUrl}`);
+      console.log(`[BrowserAdapter] Opening conversation via URL: ${targetUrl}`);
       try {
-        await senderPage.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
       } catch (err) {
-        console.warn(`[BrowserAdapter] Sender navigation failed for ${targetUrl}:`, err);
-        this.sendLock = false;
+        console.warn(`[BrowserAdapter] Navigation failed for ${targetUrl}:`, err);
         return false;
       }
     }
 
+    await this.dismissOverlays(page);
+
+    const finalThreadId = extractMessengerThreadId(page.url());
+    if (finalThreadId !== threadId && !page.url().includes(threadId)) {
+      console.warn(`[BrowserAdapter] Thread navigation URL mismatch: expected ${threadId}, got ${page.url()}`);
+      return false;
+    }
+
+    if (!requireComposer) {
+      return true;
+    }
+
     // Wait for composer textbox to be visible
     try {
-      const composerLocator = senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
+      const composerLocator = page.locator('div[role="textbox"][contenteditable="true"]').first();
       if (await composerLocator.isVisible().catch(() => false)) {
         return true;
       }
-      await this.dismissOverlays(senderPage);
-      await senderPage.waitForSelector('div[role="textbox"][contenteditable="true"]', {
+      await this.dismissOverlays(page);
+      await page.waitForSelector('div[role="textbox"][contenteditable="true"]', {
         state: "visible",
         timeout: 10000,
       });
       return true;
     } catch {
       console.warn("[BrowserAdapter] Composer textbox not found in opened thread");
+      return false;
+    }
+  }
+
+  async openConversation(threadRef: string): Promise<boolean> {
+    this.sendLock = true;
+    const isIdle = await this.waitForObserverIdle(45000);
+    if (!isIdle) {
+      console.warn("[BrowserAdapter] Timed out waiting for observer to become idle before sender navigation");
+      this.sendLock = false;
+      return false;
+    }
+
+    try {
+      const senderPage = await this.ensureSenderPage();
+      const success = await this.navigateToMessengerThread(senderPage, threadRef, true);
+      if (!success) {
+        this.sendLock = false;
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn(`[BrowserAdapter] Error in openConversation for ${threadRef}:`, err);
       this.sendLock = false;
       return false;
     }
