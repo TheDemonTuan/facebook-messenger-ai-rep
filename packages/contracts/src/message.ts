@@ -352,7 +352,7 @@ export const FilePartSchema = z.object({
   media: MediaRefSchema,
   fileName: z.string().max(256).optional(),
   byteSize: z.number().int().nonnegative().optional(),
-  extractedText: z.string().max(50000).optional(),
+  extractedText: z.string().max(100000).optional(),
   extractedChars: z.number().int().nonnegative().optional(),
 });
 export type FilePart = z.infer<typeof FilePartSchema>;

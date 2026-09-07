@@ -948,7 +948,13 @@ export class ConversationRepository {
 
       // 7b. Enqueue media enrichment job if incoming message has media parts
       const hasMediaToEnrich = Array.isArray(incomingParts) && incomingParts.some((part) => {
-        if (part.type !== "IMAGE" && part.type !== "VOICE" && part.type !== "AUDIO") return false;
+        if (
+          part.type !== "IMAGE" &&
+          part.type !== "VOICE" &&
+          part.type !== "AUDIO" &&
+          part.type !== "VIDEO" &&
+          part.type !== "FILE"
+        ) return false;
         return part.media.status === "PENDING" || Boolean(part.media.sourceUrl);
       });
 

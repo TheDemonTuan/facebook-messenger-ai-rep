@@ -64,6 +64,7 @@ function parseMp4Metadata(buffer: Buffer): {
   while (offset + 8 <= len) {
     const size = buffer.readUInt32BE(offset);
     const type = buffer.toString("latin1", offset + 4, offset + 8);
+    if (size === 1 && offset + 16 > len) break;
     const boxSize = size === 1 ? Number(buffer.readBigUInt64BE(offset + 8)) : size === 0 ? len - offset : size;
 
     if (boxSize < 8 || offset + boxSize > len) {
@@ -82,13 +83,13 @@ function parseMp4Metadata(buffer: Buffer): {
 
         if (subType === "mvhd") {
           const version = buffer.readUInt8(subOffset + 8);
-          if (version === 0 && subOffset + 24 <= subEnd) {
+          if (version === 0 && subOffset + 28 <= subEnd) {
             timescale = buffer.readUInt32BE(subOffset + 20);
             const durationUnits = buffer.readUInt32BE(subOffset + 24);
             if (timescale > 0) {
               durationMs = Math.round((durationUnits / timescale) * 1000);
             }
-          } else if (version === 1 && subOffset + 36 <= subEnd) {
+          } else if (version === 1 && subOffset + 40 <= subEnd) {
             timescale = buffer.readUInt32BE(subOffset + 28);
             const durationUnits = Number(buffer.readBigUInt64BE(subOffset + 32));
             if (timescale > 0) {
@@ -221,11 +222,29 @@ export async function extractVideoMetadataAndFrames(
   let hasAudioTrack = false;
 
   if (cleanMime === "video/mp4") {
-    const meta = parseMp4Metadata(buf);
-    durationMs = meta.durationMs;
-    codecs = meta.codecs;
-    hasVideoTrack = meta.hasVideoTrack || true;
-    hasAudioTrack = meta.hasAudioTrack;
+    try {
+      const meta = parseMp4Metadata(buf);
+      durationMs = meta.durationMs;
+      codecs = meta.codecs;
+      hasVideoTrack = meta.hasVideoTrack || true;
+      hasAudioTrack = meta.hasAudioTrack;
+    } catch {
+      return {
+        success: false,
+        status: "UNSUPPORTED",
+        coverage: {
+          container: cleanMime,
+          codecs: [],
+          hasVideoTrack: false,
+          hasAudioTrack: false,
+          framesExtracted: 0,
+          audioExtracted: false,
+          coverageStatus: "UNSUPPORTED",
+          limitationReason: "MALFORMED_VIDEO_CONTAINER",
+        },
+        error: "Malformed video container",
+      };
+    }
   } else if (cleanMime === "video/webm") {
     const meta = parseWebmMetadata(buf);
     durationMs = meta.durationMs;

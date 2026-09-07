@@ -14,6 +14,7 @@ import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 import {
   fetchMediaSecurely,
   transcribeAudio,
+  generateInternalMediaRef,
   globalMediaCache,
   extractVideoMetadataAndFrames,
   extractFileTextSafely,
@@ -297,16 +298,28 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
         if (!sourceUrl) {
           if (posterBuffer) {
             hasAnyChanges = true;
-            const extractionRes = await extractVideoMetadataAndFrames(posterBuffer, "video/mp4", {
-              maxBytes: maxVideoBytes,
-              maxDurationSec: maxVideoDurationSec,
-              posterBuffer,
-              posterUrl,
+            const posterMediaRefId = generateInternalMediaRef(posterBuffer, "image/jpeg");
+            globalMediaCache.set({
+              mediaRefId: posterMediaRefId,
+              mimeType: "image/jpeg",
+              byteSize: posterBuffer.length,
+              buffer: posterBuffer,
+              base64: posterBuffer.toString("base64"),
+              sourceUrl: posterUrl,
             });
             updatedParts.push({
               ...part,
-              posterRef: extractionRes.posterMediaRefId || part.posterRef,
-              coverage: extractionRes.coverage,
+              posterRef: posterMediaRefId,
+              coverage: {
+                container: media.mimeType || "video/unknown",
+                codecs: [],
+                hasVideoTrack: true,
+                hasAudioTrack: false,
+                framesExtracted: 1,
+                audioExtracted: false,
+                coverageStatus: "POSTER_ONLY",
+                limitationReason: "VIDEO_SOURCE_UNAVAILABLE",
+              },
               media: {
                 ...media,
                 status: "READY",

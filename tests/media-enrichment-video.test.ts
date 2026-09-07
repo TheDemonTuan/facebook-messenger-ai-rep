@@ -7,6 +7,16 @@ import {
 import { SystemSettingsDefaults, type MessagePart } from "../packages/contracts/src/index.js";
 
 describe("PR-07 Media Enrichment: Video Frames, Codecs, and Coverage", () => {
+  it("rejects truncated 64-bit MP4 boxes without throwing", async () => {
+    const truncated = Buffer.alloc(12);
+    truncated.writeUInt32BE(1, 0);
+    truncated.write("moov", 4, "latin1");
+
+    await expect(
+      extractVideoMetadataAndFrames(truncated, "video/mp4")
+    ).resolves.toMatchObject({ success: false, status: "UNSUPPORTED" });
+  });
+
   // Helper to create a minimal MP4 buffer with ftyp and moov boxes
   function createMockMp4Buffer(options: {
     durationMs?: number;

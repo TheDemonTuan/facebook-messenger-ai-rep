@@ -112,6 +112,7 @@ export async function runBackfill(
   let skippedCleanCount = 0;
 
   const auditEntries: BackfillSummary["auditEntries"] = [];
+  const maxAuditEntries = verboseAudit ? 50 : 1_000;
 
   while (true) {
     // 1. Fetch next batch ordered by id asc using cursor
@@ -196,14 +197,16 @@ export async function runBackfill(
         },
       };
 
-      auditEntries.push({
-        messageId: msg.id,
-        externalMessageId: msg.externalMessageId,
-        action,
-        oldText: msg.text,
-        newText: effectiveText,
-        reasons: cleanResult.reasons,
-      });
+      if (auditEntries.length < maxAuditEntries) {
+        auditEntries.push({
+          messageId: msg.id,
+          externalMessageId: msg.externalMessageId,
+          action,
+          oldText: msg.text,
+          newText: effectiveText,
+          reasons: cleanResult.reasons,
+        });
+      }
 
       if (!dryRun) {
         // Execute update to messages row WITHOUT bumping inboundVersion and WITHOUT creating jobs

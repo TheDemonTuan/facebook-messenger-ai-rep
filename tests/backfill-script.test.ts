@@ -3,6 +3,38 @@ import { cleanContaminatedText, runBackfill } from "../scripts/backfill-normaliz
 import type { Database } from "../packages/db/src/index.js";
 
 describe("PR-07 Message Normalization Backfill Script", () => {
+  it("bounds in-memory audit details for large backfills", async () => {
+    const rows = Array.from({ length: 1_100 }, (_, index) => ({
+      id: `msg-${String(index).padStart(4, "0")}`,
+      channelAccountId: "account-1",
+      conversationId: "conversation-1",
+      externalMessageId: `external-${index}`,
+      text: "Active now Profile Mute Search",
+      content: null,
+      contentSchemaVersion: 1,
+      contentStatus: "READY",
+      contentRevision: 1,
+      inboundVersion: 1,
+    }));
+    let served = false;
+    const chain = {
+      from: () => chain,
+      where: () => chain,
+      orderBy: () => chain,
+      limit: async () => {
+        if (served) return [];
+        served = true;
+        return rows;
+      },
+    };
+    const db = { select: () => chain } as unknown as Database;
+
+    const summary = await runBackfill({ dryRun: true, batchSize: 2_000 }, db);
+
+    expect(summary.totalScanned).toBe(1_100);
+    expect(summary.auditEntries).toHaveLength(1_000);
+  });
+
   describe("cleanContaminatedText logic", () => {
     it("strips trailing UI navigation artifacts while preserving legitimate customer speech", () => {
       const contaminated =
