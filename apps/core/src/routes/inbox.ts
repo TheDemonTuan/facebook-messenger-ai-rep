@@ -319,6 +319,12 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             const contentRevision = msg.contentRevision ?? 1;
             const eventKind = msg.eventKind || "MESSAGE_CREATED";
 
+            const toIsoOrNull = (value: Date | string | null | undefined) => {
+              if (!value) return null;
+              const date = value instanceof Date ? value : new Date(value);
+              return Number.isNaN(date.getTime()) ? null : date.toISOString();
+            };
+
             return {
               ...msg,
               parts: resolvedParts,
@@ -332,9 +338,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
                 isVerified: part?.isVerified ?? false,
               },
               time: {
-                eventAt: msg.eventTimestamp ? new Date(msg.eventTimestamp).toISOString() : null,
-                observedAt: msg.observedTimestamp ? new Date(msg.observedTimestamp).toISOString() : (msg.timestamp ? new Date(msg.timestamp).toISOString() : null),
-                displayAt: msg.timestamp ? new Date(msg.timestamp).toISOString() : null,
+                eventAt: toIsoOrNull(msg.eventTimestamp),
+                observedAt: toIsoOrNull(msg.observedTimestamp) ?? toIsoOrNull(msg.timestamp),
+                displayAt: toIsoOrNull(msg.timestamp),
                 source: (msg.timestampProvenance as "FACEBOOK_EVENT" | "OBSERVED" | "SYSTEM" | "UNKNOWN") || "OBSERVED",
                 precision: msg.timestampPrecision || "UNKNOWN",
               },
@@ -347,9 +353,13 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           });
 
         const oldestMessage = convMessages[convMessages.length - 1];
+        const oldestTimestamp = oldestMessage ? new Date(oldestMessage.timestamp) : null;
         const nextMessageCursor =
-          convMessages.length >= messageLimit && oldestMessage
-            ? `${new Date(oldestMessage.timestamp).toISOString()}__${oldestMessage.id}`
+          convMessages.length >= messageLimit &&
+          oldestMessage &&
+          oldestTimestamp &&
+          !Number.isNaN(oldestTimestamp.getTime())
+            ? `${oldestTimestamp.toISOString()}__${oldestMessage.id}`
             : null;
 
         return reply.send(

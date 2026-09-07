@@ -286,6 +286,7 @@ describe("PR-01: API Date Sanitizer & Wire Semantics", () => {
       latestInbounds?: unknown[];
       timelineConvData?: unknown;
       timelineMessages?: unknown[];
+      timelineMessageMedia?: unknown[];
       timelineAiRuns?: unknown[];
       timelineActions?: unknown[];
       timelineEvents?: unknown[];
@@ -299,6 +300,7 @@ describe("PR-01: API Date Sanitizer & Wire Semantics", () => {
         latestInbounds = [],
         timelineConvData = null,
         timelineMessages = [],
+        timelineMessageMedia = [],
         timelineAiRuns = [],
         timelineActions = [],
         timelineEvents = [],
@@ -320,6 +322,9 @@ describe("PR-01: API Date Sanitizer & Wire Semantics", () => {
               }
               if (name === "messages") {
                 return createChainFor(timelineMessages);
+              }
+              if (name === "message_media") {
+                return createChainFor(timelineMessageMedia);
               }
               if (name === "ai_runs") {
                 return createChainFor(timelineAiRuns);
