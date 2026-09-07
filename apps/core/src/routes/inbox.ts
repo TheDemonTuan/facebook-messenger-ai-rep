@@ -27,6 +27,8 @@ import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
 import { requireRole } from "../auth/roles.js";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface InboxRoutesOptions {
   db: Database;
   convRepo: ConversationRepository;
@@ -82,9 +84,10 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
 
         if (cursor) {
           const cursorDate = new Date(cursor);
-          if (!isNaN(cursorDate.getTime())) {
-            conditions.push(sql`${conversations.lastInboundAt} < ${cursorDate}`);
+          if (isNaN(cursorDate.getTime())) {
+            return reply.status(400).send({ error: "Invalid cursor format" });
           }
+          conditions.push(sql`${conversations.lastInboundAt} < ${cursorDate}`);
         }
 
         const [rows, totalRes] = await Promise.all([
@@ -214,19 +217,25 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           const trimmedCursor = messageCursor.trim();
           if (trimmedCursor.includes("__")) {
             const [timePart, idPart] = trimmedCursor.split("__");
-            if (timePart && idPart) {
-              const cursorDate = new Date(timePart);
-              if (!isNaN(cursorDate.getTime())) {
-                msgConditions.push(
-                  sql`(${messages.timestamp} < ${cursorDate} OR (${messages.timestamp} = ${cursorDate} AND ${messages.id} < ${idPart}::uuid))`
-                );
-              }
+            if (!timePart || !idPart) {
+              return reply.status(400).send({ error: "Invalid cursor: compound cursor format must be ISO_DATE__UUID" });
             }
+            const cursorDate = new Date(timePart);
+            if (isNaN(cursorDate.getTime())) {
+              return reply.status(400).send({ error: "Invalid cursor: timestamp is invalid" });
+            }
+            if (!UUID_REGEX.test(idPart)) {
+              return reply.status(400).send({ error: "Invalid cursor: ID part must be a valid UUID" });
+            }
+            msgConditions.push(
+              sql`(${messages.timestamp} < ${cursorDate} OR (${messages.timestamp} = ${cursorDate} AND ${messages.id} < ${idPart}::uuid))`
+            );
           } else {
             const cursorDate = new Date(trimmedCursor);
-            if (!isNaN(cursorDate.getTime())) {
-              msgConditions.push(sql`${messages.timestamp} < ${cursorDate}`);
+            if (isNaN(cursorDate.getTime())) {
+              return reply.status(400).send({ error: "Invalid cursor format" });
             }
+            msgConditions.push(sql`${messages.timestamp} < ${cursorDate}`);
           }
         }
 

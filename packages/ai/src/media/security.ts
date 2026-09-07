@@ -1,3 +1,4 @@
+import dns from "node:dns/promises";
 import { isIP } from "node:net";
 
 export interface UrlValidationResult {
@@ -5,6 +6,17 @@ export interface UrlValidationResult {
   reason?: string;
   parsedUrl?: URL;
   isBlob?: boolean;
+}
+
+export interface DnsResolver {
+  resolve4(hostname: string): Promise<string[]>;
+  resolve6(hostname: string): Promise<string[]>;
+}
+
+export interface DnsValidationResult {
+  valid: boolean;
+  resolvedIps: string[];
+  reason?: string;
 }
 
 /**
@@ -36,6 +48,8 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
     if (b0 === 127) return true;
     // 169.254.0.0/16 (Link-local & AWS/GCP/Azure metadata 169.254.169.254)
     if (b0 === 169 && b1 === 254) return true;
+    // Alibaba Cloud metadata (100.100.100.200)
+    if (cleanIp === "100.100.100.200") return true;
     // 172.16.0.0/12 (Private: 172.16.0.0 - 172.31.255.255)
     if (b0 === 172 && b1 !== undefined && b1 >= 16 && b1 <= 31) return true;
     // 192.168.0.0/16 (Private)
@@ -64,7 +78,7 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
     if (cleanIp === "::1") return true;
     // :: (Unspecified)
     if (cleanIp === "::" || cleanIp === "0:0:0:0:0:0:0:0") return true;
-    // fc00::/7 (Unique Local Address)
+    // fc00::/7 (Unique Local Address) & AWS IPv6 metadata (fd00:ec2::254)
     if (cleanIp.startsWith("fc") || cleanIp.startsWith("fd")) return true;
     // fe80::/10 (Link-Local)
     if (
@@ -80,6 +94,74 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
   }
 
   return false;
+}
+
+/**
+ * Resolves DNS A (IPv4) and AAAA (IPv6) records for a hostname,
+ * and validates that NO resolved IP falls within private, loopback,
+ * link-local, cloud metadata, or reserved ranges.
+ *
+ * Mitigates DNS rebinding by performing verified lookups before every request and redirect.
+ */
+export async function resolveAndValidateDns(
+  hostname: string,
+  resolver?: DnsResolver
+): Promise<DnsValidationResult> {
+  const cleanHost = hostname.trim().toLowerCase();
+
+  // If already an IP literal
+  const ipVer = isIP(cleanHost);
+  if (ipVer > 0) {
+    if (isPrivateOrBlockedIp(cleanHost)) {
+      return {
+        valid: false,
+        resolvedIps: [cleanHost],
+        reason: `RESOLVED_BLOCKED_IP: Host ${cleanHost} is in blocked/private IP range`,
+      };
+    }
+    return { valid: true, resolvedIps: [cleanHost] };
+  }
+
+  const dnsResolver: DnsResolver = resolver ?? dns;
+  let ipv4List: string[] = [];
+  let ipv6List: string[] = [];
+  let aError: Error | null = null;
+  let aaaaError: Error | null = null;
+
+  try {
+    ipv4List = await dnsResolver.resolve4(cleanHost);
+  } catch (err) {
+    aError = err as Error;
+  }
+
+  try {
+    ipv6List = await dnsResolver.resolve6(cleanHost);
+  } catch (err) {
+    aaaaError = err as Error;
+  }
+
+  const allIps = [...ipv4List, ...ipv6List];
+
+  if (allIps.length === 0) {
+    return {
+      valid: false,
+      resolvedIps: [],
+      reason: `DNS_RESOLUTION_FAILED: Could not resolve A or AAAA records for ${cleanHost} (${aError?.message || "no A"} / ${aaaaError?.message || "no AAAA"})`,
+    };
+  }
+
+  // Reject immediately if ANY resolved IP address is private or blocked
+  for (const ip of allIps) {
+    if (isPrivateOrBlockedIp(ip)) {
+      return {
+        valid: false,
+        resolvedIps: allIps,
+        reason: `RESOLVED_BLOCKED_IP: Host ${cleanHost} resolved to blocked IP ${ip}`,
+      };
+    }
+  }
+
+  return { valid: true, resolvedIps: allIps };
 }
 
 const BLOCKED_HOSTNAMES = new Set([

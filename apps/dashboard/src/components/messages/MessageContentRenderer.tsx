@@ -1,6 +1,11 @@
 import React, { useState } from "react";
 import type { MessagePart, ContentStatus, MediaRef } from "../../types";
 import {
+  getSafeHref,
+  getSafeExternalHref,
+  getSafeMediaSrc,
+} from "../../helpers/url-helpers";
+import {
   Image as ImageIcon,
   Mic,
   Video as VideoIcon,
@@ -111,7 +116,9 @@ const ImageCard: React.FC<{
     );
   }
 
-  const imageUrl = media.sourceUrl || media.thumbnailRef;
+  const rawImageUrl = media.sourceUrl || media.thumbnailRef;
+  const imageUrl = getSafeMediaSrc(rawImageUrl);
+  const safeSourceUrl = getSafeExternalHref(media.sourceUrl);
 
   if (loadFailed || !imageUrl) {
     return (
@@ -152,9 +159,9 @@ const ImageCard: React.FC<{
           border: "1px solid rgba(0,0,0,0.1)",
         }}
       />
-      {media.sourceUrl && (
+      {safeSourceUrl && (
         <a
-          href={media.sourceUrl}
+          href={safeSourceUrl}
           target="_blank"
           rel="noopener noreferrer"
           title="Xem ảnh gốc"
@@ -248,6 +255,8 @@ const VoiceAudioCard: React.FC<{
     );
   }
 
+  const safeAudioSrc = getSafeMediaSrc(media.sourceUrl);
+
   return (
     <div
       style={{
@@ -270,12 +279,12 @@ const VoiceAudioCard: React.FC<{
         {durationText && <span>{durationText}</span>}
       </div>
 
-      {media.sourceUrl && !loadFailed ? (
+      {safeAudioSrc && !loadFailed ? (
         <audio
           controls
           preload="none"
           autoPlay={false}
-          src={media.sourceUrl}
+          src={safeAudioSrc}
           onError={() => setLoadFailed(true)}
           style={{ width: "100%", height: "36px" }}
         />
@@ -371,7 +380,10 @@ const VideoCard: React.FC<{
     );
   }
 
-  if (loadFailed || !media.sourceUrl) {
+  const safeVideoSrc = getSafeMediaSrc(media.sourceUrl);
+  const safePosterSrc = getSafeMediaSrc(posterRef);
+
+  if (loadFailed || !safeVideoSrc) {
     return (
       <div
         style={{
@@ -398,8 +410,8 @@ const VideoCard: React.FC<{
         controls
         preload="metadata"
         autoPlay={false}
-        poster={posterRef}
-        src={media.sourceUrl}
+        poster={safePosterSrc || undefined}
+        src={safeVideoSrc}
         onError={() => setLoadFailed(true)}
         style={{
           width: "100%",
@@ -435,6 +447,8 @@ const ShareCard: React.FC<{
   };
 
   const originText = originLabels[origin || "UNKNOWN"] || origin || "Chia sẻ";
+  const safePreviewImg = getSafeMediaSrc(previewMedia?.sourceUrl);
+  const safeShareUrl = getSafeExternalHref(url);
 
   return (
     <div
@@ -470,9 +484,9 @@ const ShareCard: React.FC<{
         )}
       </div>
 
-      {previewMedia?.sourceUrl && (
+      {safePreviewImg && (
         <img
-          src={previewMedia.sourceUrl}
+          src={safePreviewImg}
           alt=""
           loading="lazy"
           style={{ width: "100%", maxHeight: "140px", objectFit: "cover", borderRadius: "4px" }}
@@ -491,9 +505,9 @@ const ShareCard: React.FC<{
         </div>
       )}
 
-      {url && (
+      {safeShareUrl && (
         <a
-          href={url}
+          href={safeShareUrl}
           target="_blank"
           rel="noopener noreferrer"
           style={{
@@ -520,6 +534,7 @@ const FileCard: React.FC<{
 }> = ({ media, fileName, byteSize }) => {
   const name = fileName || media.fileName || "Tập tin đính kèm";
   const sizeText = formatByteSize(byteSize || media.byteSize);
+  const safeDownloadUrl = getSafeHref(media.sourceUrl, { allowBlob: false, allowInternalApi: true });
 
   return (
     <div
@@ -546,9 +561,9 @@ const FileCard: React.FC<{
         </div>
       </div>
 
-      {media.sourceUrl && (
+      {safeDownloadUrl && (
         <a
-          href={media.sourceUrl}
+          href={safeDownloadUrl}
           target="_blank"
           rel="noopener noreferrer"
           download={name}
@@ -578,10 +593,11 @@ const StickerCard: React.FC<{
   label?: string;
   media?: MediaRef;
 }> = ({ label, media }) => {
-  if (media?.sourceUrl) {
+  const safeStickerSrc = getSafeMediaSrc(media?.sourceUrl);
+  if (safeStickerSrc) {
     return (
       <img
-        src={media.sourceUrl}
+        src={safeStickerSrc}
         alt={label || "Nhãn dán"}
         loading="lazy"
         style={{ width: "96px", height: "96px", objectFit: "contain" }}
@@ -612,11 +628,12 @@ const StickerCard: React.FC<{
 const GifCard: React.FC<{
   media: MediaRef;
 }> = ({ media }) => {
-  if (media?.sourceUrl) {
+  const safeGifSrc = getSafeMediaSrc(media?.sourceUrl);
+  if (safeGifSrc) {
     return (
       <div style={{ position: "relative", display: "inline-block" }}>
         <img
-          src={media.sourceUrl}
+          src={safeGifSrc}
           alt="GIF"
           loading="lazy"
           style={{ maxWidth: "240px", maxHeight: "200px", borderRadius: "8px", display: "block" }}
@@ -664,7 +681,8 @@ const LocationCard: React.FC<{
   longitude?: number;
 }> = ({ label, latitude, longitude }) => {
   const hasCoords = typeof latitude === "number" && typeof longitude === "number";
-  const mapsUrl = hasCoords ? `https://www.google.com/maps?q=${latitude},${longitude}` : undefined;
+  const rawMapsUrl = hasCoords ? `https://www.google.com/maps?q=${latitude},${longitude}` : undefined;
+  const safeMapsUrl = getSafeExternalHref(rawMapsUrl);
 
   return (
     <div
@@ -688,9 +706,9 @@ const LocationCard: React.FC<{
           Tọa độ: {latitude?.toFixed(4)}, {longitude?.toFixed(4)}
         </div>
       )}
-      {mapsUrl && (
+      {safeMapsUrl && (
         <a
-          href={mapsUrl}
+          href={safeMapsUrl}
           target="_blank"
           rel="noopener noreferrer"
           style={{

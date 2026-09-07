@@ -2,6 +2,8 @@ import { sql, inArray } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { outboxEvents } from "../schema/index.js";
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface EnqueueOutboxOptions {
   channelAccountId: string;
   conversationId?: string;
@@ -149,10 +151,13 @@ export class OutboxRepository {
   ): Promise<Array<typeof outboxEvents.$inferSelect>> {
     const executor = tx || this.db;
     if (afterId) {
+      if (!UUID_REGEX.test(afterId)) {
+        return [];
+      }
       const result = await executor.execute<typeof outboxEvents.$inferSelect>(sql`
         SELECT * FROM ${outboxEvents}
         WHERE channel_account_id = ${channelAccountId}
-          AND created_at > COALESCE((SELECT created_at FROM ${outboxEvents} WHERE id = ${afterId}), '1970-01-01'::timestamptz)
+          AND created_at > COALESCE((SELECT created_at FROM ${outboxEvents} WHERE id = ${afterId}::uuid), '1970-01-01'::timestamptz)
         ORDER BY created_at ASC
         LIMIT ${limit};
       `);

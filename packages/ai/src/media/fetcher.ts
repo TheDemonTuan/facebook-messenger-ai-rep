@@ -1,4 +1,4 @@
-import { validateMediaUrl } from "./security.js";
+import { validateMediaUrl, resolveAndValidateDns, type DnsResolver } from "./security.js";
 import { sniffMimeType, isAllowedPartMimeType } from "./sniffer.js";
 import { generateInternalMediaRef, globalMediaCache } from "./cache.js";
 
@@ -8,6 +8,8 @@ export interface FetchMediaOptions {
   maxRedirects?: number;
   expectedCategory?: "IMAGE" | "VOICE" | "AUDIO" | "VIDEO";
   browserContextBridge?: (blobUrl: string) => Promise<Buffer | Uint8Array | null>;
+  dnsResolver?: DnsResolver;
+  fetchFn?: typeof fetch;
 }
 
 export interface FetchMediaResult {
@@ -98,6 +100,14 @@ export async function fetchMediaSecurely(
     return { success: false, status: "ERROR", error: initialCheck.reason || "UNSAFE_URL" };
   }
 
+  // SSRF DNS resolution of A and AAAA records prior to request
+  const initialDns = await resolveAndValidateDns(initialCheck.parsedUrl!.hostname, options.dnsResolver);
+  if (!initialDns.valid) {
+    return { success: false, status: "ERROR", error: initialDns.reason || "UNSAFE_DNS_RESOLUTION" };
+  }
+
+  const fetchImpl = options.fetchFn ?? fetch;
+
   // 3. Fetch with manual redirect validation
   let currentUrl = trimmedUrl;
   let redirectsCount = 0;
@@ -107,7 +117,7 @@ export async function fetchMediaSecurely(
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-      const response = await fetch(currentUrl, {
+      const response = await fetchImpl(currentUrl, {
         method: "GET",
         headers: {
           Accept: expectedCategory === "IMAGE" ? "image/*" : "audio/*,video/*",
@@ -138,6 +148,16 @@ export async function fetchMediaSecurely(
             success: false,
             status: "ERROR",
             error: `REDIRECT_TO_UNSAFE_HOST: ${redirectCheck.reason}`,
+          };
+        }
+
+        // Revalidate DNS A/AAAA resolution for redirect target!
+        const redirectDns = await resolveAndValidateDns(redirectCheck.parsedUrl!.hostname, options.dnsResolver);
+        if (!redirectDns.valid) {
+          return {
+            success: false,
+            status: "ERROR",
+            error: `REDIRECT_TO_UNSAFE_HOST: ${redirectDns.reason}`,
           };
         }
 

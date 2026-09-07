@@ -1057,11 +1057,20 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       const bubble = bubbleResult.bubbles[i];
       if (!bubble || bubble.isOutgoing) continue;
 
-      const activeSignature = `${bubble.isOutgoing ? "out" : "in"}:${bubble.text.trim()}`;
+      const mediaSignature = Array.isArray(bubble.parts) && bubble.parts.length > 0
+        ? bubble.parts.filter((p) => p.type !== "TEXT").map((p) => ("media" in p && p.media ? `${p.type}:${p.media.mediaId}` : p.type)).join(",")
+        : "";
+      const baseSignature = `${bubble.isOutgoing ? "out" : "in"}:${bubble.text.trim()}`;
+      const activeSignature = mediaSignature ? `${baseSignature}|${mediaSignature}` : baseSignature;
       const activeOccurrence = useActiveSequenceFallback
-        ? (bubbleResult.bubbles.slice(0, i + 1).filter((candidate) =>
-            `${candidate.isOutgoing ? "out" : "in"}:${candidate.text.trim()}` === activeSignature
-          ).length)
+        ? (bubbleResult.bubbles.slice(0, i + 1).filter((candidate) => {
+            const candMediaSig = Array.isArray(candidate.parts) && candidate.parts.length > 0
+              ? candidate.parts.filter((p) => p.type !== "TEXT").map((p) => ("media" in p && p.media ? `${p.type}:${p.media.mediaId}` : p.type)).join(",")
+              : "";
+            const candBaseSig = `${candidate.isOutgoing ? "out" : "in"}:${candidate.text.trim()}`;
+            const candSig = candMediaSig ? `${candBaseSig}|${candMediaSig}` : candBaseSig;
+            return candSig === activeSignature;
+          }).length)
         : 0;
       const activeSequenceKey = useActiveSequenceFallback
         ? `${threadInfo.threadId}:${activeSignature}`
@@ -1110,6 +1119,11 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           externalMessageId,
           text: bubble.text,
           timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
+          parts: bubble.parts,
+          contentStatus: bubble.contentStatus ?? "READY",
+          eventKind: bubble.eventKind ?? "MESSAGE_CREATED",
+          contentQuality: bubble.contentQuality ?? bubble.quality ?? "TRUSTED",
+          quality: bubble.quality ?? bubble.contentQuality ?? "TRUSTED",
           threadKind: bubble.threadKind ?? bubbleResult.threadClassification?.kind ?? "UNKNOWN",
           threadReliability: bubble.threadReliability ?? bubbleResult.threadClassification?.reliability ?? "UNVERIFIED",
           threadEvidence: bubble.threadEvidence ?? bubbleResult.threadClassification?.evidence ?? [],

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   ThreadKind,
   SenderKind,
@@ -7,6 +8,10 @@ import type {
   MentionEvidence,
   MessageTimestamps,
   ClassificationEvidence,
+  MessagePart,
+  ContentStatus,
+  MessageEventKind,
+  ContentQuality,
 } from "@messenger/contracts";
 import {
   createMessageTimestamps,
@@ -15,6 +20,7 @@ import {
   resolveBusinessTimeZone,
   getZonedDateParts,
   getUtcDateFromZonedParts,
+  MessagePartSchema,
 } from "@messenger/contracts";
 
 export { getUtcDateFromZonedParts, getZonedDateParts };
@@ -39,7 +45,11 @@ export interface ParsedBubble {
   threadEvidence?: ClassificationEvidence[];
   senderEvidence?: ClassificationEvidence[];
   hasMedia?: boolean;
-  parts?: unknown[];
+  parts?: MessagePart[];
+  contentStatus?: ContentStatus;
+  eventKind?: MessageEventKind;
+  quality?: ContentQuality;
+  contentQuality?: ContentQuality;
 }
 
 export interface ThreadClassificationResult {
@@ -1218,6 +1228,347 @@ function isActualMessageRow(openingTag: string, body: string, text: string): boo
   );
 }
 
+function stripContainers(html: string, containerRegex: RegExp): string {
+  let result = html;
+  let maxIterations = 30;
+  while (maxIterations > 0) {
+    maxIterations--;
+    containerRegex.lastIndex = 0;
+    const match = containerRegex.exec(result);
+    if (!match) break;
+
+    const startIdx = match.index;
+    const tagName = match[1]!.toLowerCase();
+    const tagEnd = findTagEnd(result, startIdx);
+    if (tagEnd === -1) {
+      result = result.slice(0, startIdx);
+      break;
+    }
+
+    const closing = findMatchingClosingTag(result, tagEnd + 1, tagName);
+    if (closing) {
+      result = result.slice(0, startIdx) + result.slice(closing.fullEndIdx);
+    } else {
+      result = result.slice(0, startIdx) + result.slice(tagEnd + 1);
+    }
+  }
+  return result;
+}
+
+const AVATAR_CONTAINER_REGEX =
+  /<(div|span|section|header|a)\b(?=[^>]*\b(?:data-testid=["'](?:message_sender_avatar|avatar|author_link)["']|class=["'][^"']*\bavatar\b[^"']*|aria-label=["'][^"']*(?:ảnh đại diện|avatar|profile picture)[^"']*))/gi;
+
+const QUOTE_CONTAINER_REGEX =
+  /<(div|span|blockquote|section)\b(?=[^>]*\b(?:data-testid=["'](?:quoted_message|reply_to_message|message_quote|reply_preview)["']|class=["'][^"']*\b(?:quoted_message|reply_preview|message_quote)\b[^"']*))/gi;
+
+const ACTION_RECEIPT_CONTAINER_REGEX =
+  /<(div|span|ul|ol|li|section)\b(?=[^>]*\b(?:role=["']toolbar["']|data-testid=["'](?:reaction_picker|message_actions|action_button|delivery_status|seen_receipt|seen_heads|quick_replies)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|receipt|delivery-status)\b[^"']*))/gi;
+
+const SHARE_CONTAINER_REGEX =
+  /<(div|span|section|a)\b(?=[^>]*\b(?:data-testid=["'](?:share_card|shared_post|link_preview|group_share)["']|class=["'][^"']*\b(?:shared_card|share_card|group_share)\b[^"']*|aria-label=["'][^"']*(?:thông tin nhóm|chia sẻ liên kết|shared link|shared post)[^"']*))/gi;
+
+/**
+ * Extracts rich media parts (image, voice, audio, video, share, file) from a message row chunk.
+ * Guarantees that:
+ * 1. Sender avatars are NEVER extracted as message attachments.
+ * 2. Share card preview images belong to the SHARE part's previewMedia, NOT independent attachments.
+ * 3. Media IDs are deterministic based on message ID, media type, and source ref.
+ * 4. All generated parts validate against MessagePartSchema.
+ */
+export function extractRowMediaParts(
+  messageId: string,
+  openingTag: string,
+  body: string,
+  cleanText?: string
+): { parts: MessagePart[]; hasMedia: boolean } {
+  const parts: MessagePart[] = [];
+
+  // Step 1: Strip avatars, quotes, and receipts so they don't pollute attachment extraction
+  let contentBody = stripContainers(body, AVATAR_CONTAINER_REGEX);
+  contentBody = stripContainers(contentBody, QUOTE_CONTAINER_REGEX);
+  contentBody = stripContainers(contentBody, ACTION_RECEIPT_CONTAINER_REGEX);
+
+  // Step 2: Extract SHARE cards / link previews
+  SHARE_CONTAINER_REGEX.lastIndex = 0;
+  const shareMatch = SHARE_CONTAINER_REGEX.exec(contentBody);
+  if (shareMatch) {
+    const startIdx = shareMatch.index;
+    const tagName = shareMatch[1]!.toLowerCase();
+    const tagEnd = findTagEnd(contentBody, startIdx);
+    if (tagEnd !== -1) {
+      const closing = findMatchingClosingTag(contentBody, tagEnd + 1, tagName);
+      const shareHtml = closing
+        ? contentBody.slice(startIdx, closing.fullEndIdx)
+        : contentBody.slice(startIdx, tagEnd + 1);
+
+      const urlMatch = shareHtml.match(/\bhref=["']([^"']+)["']/i);
+      const url = urlMatch ? urlMatch[1] : undefined;
+
+      const titleMatch =
+        shareHtml.match(/class=["'][^"']*\b(?:group_title|title|share_title)\b[^"']*["'][^>]*>([^<]+)<\//i) ||
+        shareHtml.match(/<h[2-5][^>]*>([^<]+)<\/h[2-5]>/i) ||
+        shareHtml.match(/aria-label=["']([^"']+)["']/i);
+      const title = titleMatch ? cleanHtmlText(titleMatch[1]!) : undefined;
+
+      const descMatch =
+        shareHtml.match(/class=["'][^"']*\b(?:group_member_count|preview|desc|snippet)\b[^"']*["'][^>]*>([^<]+)<\//i) ||
+        shareHtml.match(/<p[^>]*>([^<]+)<\/p>/i);
+      const previewText = descMatch ? cleanHtmlText(descMatch[1]!) : undefined;
+
+      const imgMatch = shareHtml.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+      const previewImgSrc = imgMatch ? imgMatch[1] : undefined;
+
+      const previewMedia = previewImgSrc
+        ? {
+            mediaId: `share_preview:${createHash("sha256").update(`${messageId}:${previewImgSrc}`).digest("hex").slice(0, 16)}`,
+            mediaRefId: `${messageId}:share_preview`,
+            role: "SHARE_PREVIEW" as const,
+            status: "READY" as const,
+            sourceUrl: previewImgSrc,
+          }
+        : undefined;
+
+      let origin: "FACEBOOK_GROUP" | "FACEBOOK_POST" | "REEL" | "EXTERNAL" | "UNKNOWN" = "UNKNOWN";
+      if (url) {
+        if (url.includes("/groups/")) {
+          origin = "FACEBOOK_GROUP";
+        } else if (url.includes("/posts/") || url.includes("/permalink/") || url.includes("/story.php")) {
+          origin = "FACEBOOK_POST";
+        } else if (url.includes("/reel/") || url.includes("/reels/")) {
+          origin = "REEL";
+        } else if (url.includes("facebook.com") || url.includes("fb.watch") || url.includes("fb.me")) {
+          origin = "FACEBOOK_POST";
+        } else {
+          origin = "EXTERNAL";
+        }
+      }
+
+      const sharePart: MessagePart = {
+        type: "SHARE",
+        origin,
+        url: url || undefined,
+        title: title || undefined,
+        previewText: previewText || undefined,
+        previewMedia,
+        access: "UNKNOWN",
+      };
+
+      if (MessagePartSchema.safeParse(sharePart).success) {
+        parts.push(sharePart);
+      }
+
+      // Remove the share card container so its preview img is not re-parsed as an attachment
+      if (closing) {
+        contentBody = contentBody.slice(0, startIdx) + contentBody.slice(closing.fullEndIdx);
+      } else {
+        contentBody = contentBody.slice(0, startIdx) + contentBody.slice(tagEnd + 1);
+      }
+    }
+  }
+
+  // Step 3: Extract VOICE & AUDIO
+  const audioRegex = /<audio\b[^>]*>[\s\S]*?<\/audio>|<audio\b[^>]*\/?>|data-testid=["'](?:audio_message|voice_message)["']|aria-label=["'][^"']*(?:voice|ghi âm|tin nhắn thoại|audio)[^"']*["']/gi;
+  let audioIdx = 0;
+  const audioMatches = contentBody.match(audioRegex) || [];
+  if (audioMatches.length > 0 || /aria-label=["'][^"']*(?:voice|ghi âm)[^"']*["']/i.test(openingTag)) {
+    const isVoice =
+      /voice|ghi âm|tin nhắn thoại/i.test(contentBody + openingTag) ||
+      /data-testid=["']voice_message["']/i.test(contentBody);
+
+    const srcMatch =
+      contentBody.match(/<audio\b[^>]*\bsrc=["']([^"']+)["']/i) ||
+      contentBody.match(/<source\b[^>]*\bsrc=["']([^"']+)["']/i) ||
+      contentBody.match(/data-audio-url=["']([^"']+)["']/i);
+    const audioSrc = srcMatch ? srcMatch[1] : undefined;
+
+    const durationMatch =
+      contentBody.match(/data-duration=["'](\d+)["']/i) ||
+      contentBody.match(/(\d{1,2}):(\d{2})/);
+    let durationMs: number | undefined;
+    if (durationMatch) {
+      if (durationMatch[2] !== undefined) {
+        durationMs = (parseInt(durationMatch[1]!, 10) * 60 + parseInt(durationMatch[2]!, 10)) * 1000;
+      } else {
+        durationMs = parseInt(durationMatch[1]!, 10);
+      }
+    }
+
+    const partType = isVoice ? ("VOICE" as const) : ("AUDIO" as const);
+    const audioPart: MessagePart = {
+      type: partType,
+      media: {
+        mediaId: `audio:${createHash("sha256").update(`${messageId}:${partType}:${audioIdx}:${audioSrc || "blob"}`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:${partType.toLowerCase()}:${audioIdx}`,
+        role: "ATTACHMENT",
+        status: "READY",
+        sourceUrl: audioSrc,
+        durationMs,
+      },
+      durationMs,
+    };
+    if (MessagePartSchema.safeParse(audioPart).success) {
+      parts.push(audioPart);
+      audioIdx++;
+    }
+    contentBody = contentBody.replace(/<audio\b[^>]*>[\s\S]*?<\/audio>|<audio\b[^>]*\/?>/gi, "");
+  }
+
+  // Step 4: Extract VIDEO
+  const videoRegex = /<video\b[^>]*>[\s\S]*?<\/video>|<video\b[^>]*\/?>|data-testid=["']video_message["']|aria-label=["'][^"']*(?:video|clip)[^"']*["']/gi;
+  let videoIdx = 0;
+  if (videoRegex.test(contentBody) || /aria-label=["'][^"']*(?:video)[^"']*["']/i.test(openingTag)) {
+    const srcMatch =
+      contentBody.match(/<video\b[^>]*\bsrc=["']([^"']+)["']/i) ||
+      contentBody.match(/<source\b[^>]*\bsrc=["']([^"']+)["']/i) ||
+      contentBody.match(/data-video-url=["']([^"']+)["']/i);
+    const videoSrc = srcMatch ? srcMatch[1] : undefined;
+
+    const posterMatch = contentBody.match(/\bposter=["']([^"']+)["']/i);
+    const posterSrc = posterMatch ? posterMatch[1] : undefined;
+
+    const videoPart: MessagePart = {
+      type: "VIDEO",
+      media: {
+        mediaId: `video:${createHash("sha256").update(`${messageId}:video:${videoIdx}:${videoSrc || "blob"}`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:video:${videoIdx}`,
+        role: "ATTACHMENT",
+        status: "READY",
+        sourceUrl: videoSrc,
+      },
+      posterRef: posterSrc,
+    };
+    if (MessagePartSchema.safeParse(videoPart).success) {
+      parts.push(videoPart);
+      videoIdx++;
+    }
+    contentBody = contentBody.replace(/<video\b[^>]*>[\s\S]*?<\/video>|<video\b[^>]*\/?>/gi, "");
+  }
+
+  // Step 5: Extract FILE
+  const fileRegex = /<a\b(?=[^>]*\b(?:download\b|data-testid=["'](?:file_attachment|attachment_file|file_message)["']|aria-label=["'][^"']*(?:đính kèm tệp|tệp đính kèm|file attachment)[^"']*))[^>]*>/gi;
+  let fileIdx = 0;
+  let fileMatch: RegExpExecArray | null = null;
+  while ((fileMatch = fileRegex.exec(contentBody)) !== null) {
+    const fileTag = fileMatch[0];
+    const hrefMatch = fileTag.match(/\bhref=["']([^"']+)["']/i);
+    const href = hrefMatch ? hrefMatch[1] : undefined;
+
+    const downloadMatch = fileTag.match(/\bdownload=["']([^"']+)["']/i);
+    const fileName = downloadMatch ? downloadMatch[1] : undefined;
+
+    const filePart: MessagePart = {
+      type: "FILE",
+      media: {
+        mediaId: `file:${createHash("sha256").update(`${messageId}:file:${fileIdx}:${href || ""}`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:file:${fileIdx}`,
+        role: "ATTACHMENT",
+        status: "READY",
+        sourceUrl: href,
+        fileName,
+      },
+      fileName,
+    };
+    if (MessagePartSchema.safeParse(filePart).success) {
+      parts.push(filePart);
+      fileIdx++;
+    }
+  }
+
+  // Step 6: Extract STICKER & GIF
+  let stickerIdx = 0;
+  if (/data-testid=["']sticker["']|aria-label=["'][^"']*(?:nhãn dán|sticker)[^"']*["']/i.test(contentBody + openingTag)) {
+    const imgMatch = contentBody.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i);
+    const src = imgMatch ? imgMatch[1] : undefined;
+    const stickerPart: MessagePart = {
+      type: "STICKER",
+      media: {
+        mediaId: `sticker:${createHash("sha256").update(`${messageId}:sticker:${stickerIdx}:${src || ""}`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:sticker:${stickerIdx}`,
+        role: "ATTACHMENT",
+        status: "READY",
+        sourceUrl: src,
+      },
+    };
+    if (MessagePartSchema.safeParse(stickerPart).success) {
+      parts.push(stickerPart);
+      stickerIdx++;
+    }
+    contentBody = contentBody.replace(/<img\b[^>]*>/i, "");
+  }
+
+  // Step 7: Extract IMAGES (only real image attachments, avatars and share thumbs were stripped above)
+  const imgRegex = /<img\b(?=[^>]*\bsrc=["']([^"']+)["'])[^>]*>/gi;
+  let imgIdx = 0;
+  let imgMatch: RegExpExecArray | null = null;
+  while ((imgMatch = imgRegex.exec(contentBody)) !== null) {
+    const fullImgTag = imgMatch[0];
+    const src = imgMatch[1]!;
+
+    // Ignore inline emojis
+    if (src.includes("/images/emoji.php") || /class=["'][^"']*\bemoticon\b[^"']*["']/i.test(fullImgTag)) {
+      continue;
+    }
+
+    const altMatch = fullImgTag.match(/\balt=["']([^"']+)["']/i);
+    const altText = altMatch ? altMatch[1] : undefined;
+
+    const widthMatch = fullImgTag.match(/\bwidth=["']?(\d+)["']?/i);
+    const heightMatch = fullImgTag.match(/\bheight=["']?(\d+)["']?/i);
+    const width = widthMatch ? parseInt(widthMatch[1]!, 10) : undefined;
+    const height = heightMatch ? parseInt(heightMatch[1]!, 10) : undefined;
+
+    const imagePart: MessagePart = {
+      type: "IMAGE",
+      media: {
+        mediaId: `img:${createHash("sha256").update(`${messageId}:image:${imgIdx}:${src}`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:image:${imgIdx}`,
+        role: "ATTACHMENT",
+        status: "READY",
+        sourceUrl: src,
+        width,
+        height,
+      },
+      altText,
+    };
+
+    if (MessagePartSchema.safeParse(imagePart).success) {
+      parts.push(imagePart);
+      imgIdx++;
+    }
+  }
+
+  // Fallback for image message container without standalone img tag yet
+  if (
+    parts.length === 0 &&
+    (/data-testid=["'](?:image_message|photo_message)["']/i.test(contentBody) ||
+      /aria-label=["'][^"']*(?:hình ảnh|ảnh|photo|image)[^"']*["']/i.test(openingTag + contentBody))
+  ) {
+    const placeholderPart: MessagePart = {
+      type: "IMAGE",
+      media: {
+        mediaId: `img:${createHash("sha256").update(`${messageId}:image:0:placeholder`).digest("hex").slice(0, 16)}`,
+        mediaRefId: `${messageId}:image:0`,
+        role: "ATTACHMENT",
+        status: "READY",
+      },
+    };
+    if (MessagePartSchema.safeParse(placeholderPart).success) {
+      parts.push(placeholderPart);
+    }
+  }
+
+  // Step 8: If non-empty cleanText is present, include TEXT part
+  if (cleanText && cleanText.trim().length > 0) {
+    parts.unshift({
+      type: "TEXT",
+      text: cleanText,
+    });
+  }
+
+  const hasMedia = parts.some((p) => p.type !== "TEXT");
+  return { parts, hasMedia };
+}
+
 /**
  * Parses Messenger message bubble rows from HTML string or DOM representation.
  * Preserves degraded-DOM safeguards: missing stable mid marks isDegraded = true
@@ -1250,36 +1601,16 @@ export function parseMessengerBubblesFromHtml(
     const bubbleText = extractNestedBubbleText(cleanBody);
     const cleanText = bubbleText || ariaMessageText || cleanHtmlText(cleanBody);
 
-    const hasMedia =
-      /<img\b[^>]*src=["'](?:blob:|https:\/\/[^"']*(?:cdninstagram|fbcdn|fna\.fbcdn))[^"']*["']/i.test(body) ||
-      /<audio\b/i.test(body) ||
-      /<video\b/i.test(body) ||
-      /data-testid=["'](?:image_message|video_message|audio_message|voice_message)["']/i.test(body) ||
-      /aria-label=["'][^"']*(?:hình ảnh|ảnh|image|photo|video|voice|ghi âm)[^"']*["']/i.test(openingTag + body);
+    // Look for stable message ID from trusted sources (P0: tighten native message ID)
+    const stableId = extractStableMessageId(openingTag, body);
+    const rowId = stableId || `row_${bubbles.length}`;
 
-    const mediaParts: Array<{ type: string }> = [];
-    if (
-      /<audio\b/i.test(body) ||
-      /data-testid=["'](?:audio_message|voice_message)["']/i.test(body) ||
-      /aria-label=["'][^"']*(?:voice|ghi âm)[^"']*["']/i.test(openingTag + body)
-    ) {
-      mediaParts.push({ type: "AUDIO" });
-    } else if (
-      /<video\b/i.test(body) ||
-      /data-testid=["']video_message["']/i.test(body) ||
-      /aria-label=["'][^"']*(?:video)[^"']*["']/i.test(openingTag + body)
-    ) {
-      mediaParts.push({ type: "VIDEO" });
-    } else if (hasMedia) {
-      mediaParts.push({ type: "IMAGE" });
-    }
+    // Extract rich media parts using ownership-aware parsing
+    const { parts: mediaParts, hasMedia } = extractRowMediaParts(rowId, openingTag, body, cleanText);
 
     if (!cleanText && !hasMedia) {
       continue;
     }
-
-    // Look for stable message ID from trusted sources (P0: tighten native message ID)
-    const stableId = extractStableMessageId(openingTag, body);
 
     if (!stableId) {
       // Degraded only for ACTUAL message rows (Finding 4)
@@ -1327,6 +1658,10 @@ export function parseMessengerBubblesFromHtml(
       isOutgoing,
       hasMedia: hasMedia || undefined,
       parts: mediaParts.length > 0 ? mediaParts : undefined,
+      contentStatus: "READY",
+      eventKind: "MESSAGE_CREATED",
+      quality: "TRUSTED",
+      contentQuality: "TRUSTED",
       senderName: isOutgoing ? undefined : senderResult.senderName,
       senderId: isOutgoing ? (options?.botParticipantId ?? options?.botChannelAccountId ?? null) : senderResult.senderId,
       senderProfileUrl: isOutgoing ? (options?.botProfileUrl ?? null) : senderResult.senderProfileUrl,

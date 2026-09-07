@@ -588,6 +588,7 @@ export const InboundMessagePayloadSchema = z.object({
   contentHash: z.string().max(64).optional(),
   parserVersion: z.string().max(32).optional(),
   contentQuality: ContentQualitySchema.default("TRUSTED").optional(),
+  quality: ContentQualitySchema.optional(),
   replyTo: ReplyContextSchema.optional(),
   normalization: NormalizationInfoSchema.optional(),
 }).extend(MessageClassificationFields).superRefine((data, ctx) => {
