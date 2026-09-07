@@ -94,6 +94,10 @@ export function sanitizeApiOutput<T>(input: T): T {
   if (input === null || input === undefined) return input;
   if (typeof input !== "object") return input;
 
+  if (input instanceof Date) {
+    return input;
+  }
+
   if (Array.isArray(input)) {
     return input.map((item) => sanitizeApiOutput(item)) as unknown as T;
   }
