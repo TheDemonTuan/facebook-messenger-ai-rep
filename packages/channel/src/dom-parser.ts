@@ -185,24 +185,117 @@ export function extractEntityIdFromCanonicalUrl(canonicalUrl: string): string | 
   return null;
 }
 
-function extractHeaderSection(html: string): string | null {
-  const headerMatch = html.match(/<header\b[^>]*>([\s\S]*?)<\/header>/i);
-  if (headerMatch) return headerMatch[0];
+export function findTagEnd(html: string, startIdx: number): number {
+  let inDouble = false;
+  let inSingle = false;
+  for (let i = startIdx; i < html.length; i++) {
+    const ch = html[i];
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble;
+    } else if (ch === "'" && !inDouble) {
+      inSingle = !inSingle;
+    } else if (ch === ">" && !inDouble && !inSingle) {
+      return i;
+    }
+  }
+  return -1;
+}
 
-  const bannerMatch = html.match(/<div\b(?=[^>]*\brole=["']banner["'])[^>]*>([\s\S]*?)<\/div>/i);
-  if (bannerMatch) return bannerMatch[0];
+export function findMatchingClosingTag(
+  html: string,
+  startContentIdx: number,
+  tagName: string
+): { contentEndIdx: number; fullEndIdx: number } | null {
+  const lowerTag = tagName.toLowerCase();
+  let depth = 1;
+  let i = startContentIdx;
+  const len = html.length;
+
+  while (i < len) {
+    const nextLt = html.indexOf("<", i);
+    if (nextLt === -1) break;
+
+    // Skip HTML comments <!-- ... -->
+    if (html.startsWith("<!--", nextLt)) {
+      const commentEnd = html.indexOf("-->", nextLt + 4);
+      i = commentEnd === -1 ? len : commentEnd + 3;
+      continue;
+    }
+
+    const tagEnd = findTagEnd(html, nextLt);
+    if (tagEnd === -1) {
+      i = nextLt + 1;
+      continue;
+    }
+
+    const tagContent = html.slice(nextLt + 1, tagEnd).trim();
+    if (tagContent.startsWith("/")) {
+      const closingName = tagContent.slice(1).trim().split(/\s+/)[0]?.toLowerCase();
+      if (closingName === lowerTag) {
+        depth--;
+        if (depth === 0) {
+          return {
+            contentEndIdx: nextLt,
+            fullEndIdx: tagEnd + 1,
+          };
+        }
+      }
+    } else {
+      const isSelfClosing = tagContent.endsWith("/");
+      const openName = tagContent.replace(/\/$/, "").trim().split(/\s+/)[0]?.toLowerCase();
+      if (openName === lowerTag && !isSelfClosing) {
+        depth++;
+      }
+    }
+
+    i = tagEnd + 1;
+  }
+
+  return null;
+}
+
+export function extractHeaderSection(html: string): string | null {
+  const headerMatch = html.match(/<header\b[^>]*>/i);
+  if (headerMatch && headerMatch.index !== undefined) {
+    const tagEnd = findTagEnd(html, headerMatch.index);
+    if (tagEnd !== -1) {
+      const closing = findMatchingClosingTag(html, tagEnd + 1, "header");
+      if (closing) {
+        return html.slice(headerMatch.index, closing.fullEndIdx);
+      }
+    }
+  }
+
+  const bannerMatch = html.match(/<div\b(?=[^>]*\brole=["']banner["'])[^>]*>/i);
+  if (bannerMatch && bannerMatch.index !== undefined) {
+    const tagEnd = findTagEnd(html, bannerMatch.index);
+    if (tagEnd !== -1) {
+      const closing = findMatchingClosingTag(html, tagEnd + 1, "div");
+      if (closing) {
+        return html.slice(bannerMatch.index, closing.fullEndIdx);
+      }
+    }
+  }
 
   const testIdMatch = html.match(
-    /<div\b(?=[^>]*\bdata-testid=["'](?:conversation_header|chat_header|message_header|mw_chat_header|group_chat_header|group_thread_header|mw_chat_header_group|direct_chat_header|mw_chat_header_direct)["'])[^>]*>([\s\S]*?)<\/div>/i
+    /<div\b(?=[^>]*\bdata-testid=["'](?:conversation_header|chat_header|message_header|mw_chat_header|group_chat_header|group_thread_header|mw_chat_header_group|direct_chat_header|mw_chat_header_direct)["'])[^>]*>/i
   );
-  if (testIdMatch) return testIdMatch[0];
+  if (testIdMatch && testIdMatch.index !== undefined) {
+    const tagEnd = findTagEnd(html, testIdMatch.index);
+    if (tagEnd !== -1) {
+      const closing = findMatchingClosingTag(html, tagEnd + 1, "div");
+      if (closing) {
+        return html.slice(testIdMatch.index, closing.fullEndIdx);
+      }
+    }
+  }
 
   return null;
 }
 
 /**
  * Classifies thread kind (DIRECT, GROUP, UNKNOWN) with reliability and evidence.
- * Group/Direct classification ONLY from header/banner structured cues (Finding 2).
+ * Group/Direct classification ONLY from header/banner structured cues (Finding 2, F08).
  * If absent or ambiguous, emits UNKNOWN / UNVERIFIED to fail closed downstream.
  */
 export function parseThreadClassification(
@@ -224,73 +317,115 @@ export function parseThreadClassification(
     };
   }
 
-  // 1. Group structured signals from header / banner ONLY
   const headerSection = extractHeaderSection(html);
-  const structuredText = cleanHtmlText(headerSection ?? html);
   const threadTitle = options?.threadTitleHint?.trim();
 
-  const hasGroupTestId =
-    /data-testid=["'](?:group_chat_header|group_thread_header|mw_chat_header_group)["']/i.test(html) ||
-    /data-thread-type=["']GROUP["']/i.test(html);
+  // 1. Group structured signals from header / banner ONLY (Finding 2, F08)
+  if (headerSection) {
+    const structuredHeaderText = cleanHtmlText(headerSection);
 
-  const hasGroupAria = headerSection
-    ? /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members|tùy chọn nhóm|group options)[^"']*["']/i.test(headerSection)
-    : /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members|tùy chọn nhóm|group options)[^"']*["']/i.test(html);
-  const memberCountMatch = headerSection
-    ? headerSection.match(/\b(\d+)\s*(?:thành viên|members)\b/i)
-    : null;
-  const hasChatMembers = /\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(structuredText);
+    const hasGroupTestId =
+      /data-testid=["'](?:group_chat_header|group_thread_header|mw_chat_header_group)["']/i.test(headerSection) ||
+      /data-thread-type=["']GROUP["']/i.test(headerSection);
 
-  if (hasGroupTestId || hasGroupAria || Boolean(memberCountMatch) || hasChatMembers) {
-    return {
-      kind: "GROUP",
-      reliability: "VERIFIED",
-      evidence: [
-        {
-          source: "DOM_SELECTOR",
-          signal: "group_header_indicator",
-          confidence: 1.0,
-          details: {
-            hasGroupTestId,
-            hasGroupAria,
-            hasChatMembers,
-            memberCount: memberCountMatch ? memberCountMatch[1] : null,
+    const hasGroupAria =
+      /aria-label=["'][^"']*(?:thông tin nhóm|group info|group details|chat members|tùy chọn nhóm|group options)[^"']*["']/i.test(headerSection);
+
+    const memberCountMatch = headerSection.match(/\b(\d+)\s*(?:thành viên|members)\b/i);
+    const hasChatMembers = /\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(structuredHeaderText);
+
+    if (hasGroupTestId || hasGroupAria || Boolean(memberCountMatch) || hasChatMembers) {
+      return {
+        kind: "GROUP",
+        reliability: "VERIFIED",
+        evidence: [
+          {
+            source: "DOM_SELECTOR",
+            signal: "group_header_indicator",
+            confidence: 1.0,
+            details: {
+              hasGroupTestId,
+              hasGroupAria,
+              hasChatMembers,
+              memberCount: memberCountMatch ? memberCountMatch[1] : null,
+            },
           },
-        },
-      ],
-    };
-  }
+        ],
+      };
+    }
 
-  // 2. Direct structured signals
-  const hasDirectTestId =
-    /data-testid=["'](?:direct_chat_header|mw_chat_header_direct)["']/i.test(html) ||
-    /data-thread-type=["']DIRECT["']/i.test(html);
-  const hasDirectAria = headerSection
-    ? /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(headerSection)
-    : /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(html);
+    // 2. Direct structured signals in header
+    const hasDirectTestId =
+      /data-testid=["'](?:direct_chat_header|mw_chat_header_direct|conversation_header|chat_header)["']/i.test(headerSection) ||
+      /data-thread-type=["']DIRECT["']/i.test(headerSection);
 
-  const hasDirectPresence = /\b(?:active now|đang hoạt động|active \d+[smhd]? ago|hoạt động \d+ phút trước)\b/i.test(html);
-  const hasDirectCalls = /\b(?:bắt đầu gọi thoại|bắt đầu gọi video|bắt đầu cuộc gọi|start a voice call|start a video call|start a call)\b/i.test(html);
-  const hasDirectControls =
-    (/\b(?:profile|trang cá nhân)\b/i.test(structuredText) ||
-      hasDirectCalls ||
-      hasDirectPresence) &&
-    !hasChatMembers;
-  const hasDirectParticipant = Boolean(threadTitle && structuredText.includes(threadTitle) && hasDirectControls);
+    const hasDirectAria =
+      /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(headerSection);
 
-  if (hasDirectTestId || hasDirectAria || hasDirectParticipant) {
-    return {
-      kind: "DIRECT",
-      reliability: "VERIFIED",
-      evidence: [
-        {
-          source: "DOM_SELECTOR",
-          signal: "direct_header_indicator",
-          confidence: 1.0,
-          details: { hasDirectTestId, hasDirectAria, hasDirectParticipant, hasDirectPresence, hasDirectCalls },
-        },
-      ],
-    };
+    const hasDirectPresence = /\b(?:active now|đang hoạt động|active \d+[smhd]? ago|hoạt động \d+ phút trước)\b/i.test(headerSection);
+    const hasDirectCalls = /\b(?:bắt đầu gọi thoại|bắt đầu gọi video|bắt đầu cuộc gọi|start a voice call|start a video call|start a call)\b/i.test(headerSection);
+    const hasDirectControls =
+      (/\b(?:profile|trang cá nhân)\b/i.test(structuredHeaderText) ||
+        hasDirectCalls ||
+        hasDirectPresence) &&
+      !hasChatMembers;
+    const hasDirectParticipant = Boolean(threadTitle && structuredHeaderText.includes(threadTitle) && hasDirectControls);
+
+    if (hasDirectTestId || hasDirectAria || hasDirectParticipant || hasDirectControls) {
+      return {
+        kind: "DIRECT",
+        reliability: "VERIFIED",
+        evidence: [
+          {
+            source: "DOM_SELECTOR",
+            signal: "direct_header_indicator",
+            confidence: 1.0,
+            details: { hasDirectTestId, hasDirectAria, hasDirectParticipant, hasDirectPresence, hasDirectCalls },
+          },
+        ],
+      };
+    }
+  } else {
+    // When no explicit header element is found, exclude message rows from surrounding HTML
+    // to avoid false signals from customer text or shared cards
+    const rows = extractMessageRowElements(html);
+    let surroundingHtml = html;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const r = rows[i]!;
+      surroundingHtml = surroundingHtml.slice(0, r.startIndex) + surroundingHtml.slice(r.startIndex + r.fullHtml.length);
+    }
+    const structuredSurrounding = cleanHtmlText(surroundingHtml);
+
+    const hasDirectPresence = /\b(?:active now|đang hoạt động|active \d+[smhd]? ago|hoạt động \d+ phút trước)\b/i.test(surroundingHtml);
+    const hasDirectCalls = /\b(?:bắt đầu gọi thoại|bắt đầu gọi video|bắt đầu cuộc gọi|start a voice call|start a video call|start a call)\b/i.test(surroundingHtml);
+    const hasDirectControls =
+      (/\b(?:profile|trang cá nhân)\b/i.test(structuredSurrounding) ||
+        hasDirectCalls ||
+        hasDirectPresence) &&
+      !/\b(?:chat members|thành viên (?:đoạn chat|nhóm))\b/i.test(structuredSurrounding);
+    const hasDirectParticipant = Boolean(threadTitle && structuredSurrounding.includes(threadTitle) && hasDirectControls);
+
+    const hasDirectTestId =
+      /data-testid=["'](?:direct_chat_header|mw_chat_header_direct)["']/i.test(surroundingHtml) ||
+      /data-thread-type=["']DIRECT["']/i.test(surroundingHtml);
+
+    const hasDirectAria =
+      /aria-label=["'][^"']*(?:thông tin cuộc trò chuyện|conversation info|chat details)[^"']*["']/i.test(surroundingHtml);
+
+    if (hasDirectTestId || hasDirectAria || hasDirectParticipant) {
+      return {
+        kind: "DIRECT",
+        reliability: "VERIFIED",
+        evidence: [
+          {
+            source: "DOM_SELECTOR",
+            signal: "direct_header_indicator",
+            confidence: 1.0,
+            details: { hasDirectTestId, hasDirectAria, hasDirectParticipant, hasDirectPresence, hasDirectCalls },
+          },
+        ],
+      };
+    }
   }
 
   // 3. Absent / Ambiguous -> fail closed
@@ -853,10 +988,151 @@ function cleanHtmlText(html: string): string {
   return normalized.replace(/___LINEBREAK___/g, "\n").trim();
 }
 
+export function stripNonContentElements(body: string): string {
+  let result = body;
+
+  // 1. Remove void tags like <img>, <input>, <textarea>
+  result = result.replace(/<(?:img|input|textarea)\b[^>]*>/gi, "");
+
+  // 2. Remove non-content container elements using balanced tag removal
+  const nonContentOpenTagRegex =
+    /<(div|span|button|section|aside|blockquote|header|a|ul|ol|li|time)\b(?=[^>]*\b(?:role=["'](?:button|toolbar|menu|menuitem)["']|data-testid=["'](?:message_actions|reaction_picker|message_action_menu|action_button|quick_replies|message_receipt|delivery_status|seen_receipt|seen_heads|delivery_receipt|user_presence|presence_indicator|presence_badge|author_link|message_sender_avatar|sender_name|author_name|avatar|quoted_message|reply_to_message|message_quote|reply_preview|message_timestamp)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|action-button|receipt|delivery-status|delivery-receipt|seen-receipt|presence|presence-indicator|author|sender_name|avatar|quoted_message|reply_preview|timestamp)\b|aria-label=["'][^"']*(?:bày tỏ cảm xúc|react|trả lời|reply|chuyển tiếp|forward|xem thêm|more|thao tác|actions|gửi tin nhắn|nhấn enter|message sent|đã gửi|đã chuyển|đã nhận|đã xem|seen by|delivered|active now|active \d+|đang hoạt động|hoạt động \d+|đang trả lời|replying to|replied to)[^"']*["']))/gi;
+
+  let maxIterations = 50;
+  while (maxIterations > 0) {
+    maxIterations--;
+    nonContentOpenTagRegex.lastIndex = 0;
+    const match = nonContentOpenTagRegex.exec(result);
+    if (!match) break;
+
+    const startIdx = match.index;
+    const tagName = match[1]!.toLowerCase();
+    const tagEnd = findTagEnd(result, startIdx);
+    if (tagEnd === -1) {
+      result = result.slice(0, startIdx);
+      break;
+    }
+
+    const closing = findMatchingClosingTag(result, tagEnd + 1, tagName);
+    if (closing) {
+      result = result.slice(0, startIdx) + result.slice(closing.fullEndIdx);
+    } else {
+      result = result.slice(0, startIdx) + result.slice(tagEnd + 1);
+    }
+  }
+
+  // Also remove standalone <time> and <blockquote> elements
+  const standaloneTagRegex = /<(time|blockquote|button)\b[^>]*>/gi;
+  maxIterations = 50;
+  while (maxIterations > 0) {
+    maxIterations--;
+    standaloneTagRegex.lastIndex = 0;
+    const match = standaloneTagRegex.exec(result);
+    if (!match) break;
+
+    const startIdx = match.index;
+    const tagName = match[1]!.toLowerCase();
+    const tagEnd = findTagEnd(result, startIdx);
+    if (tagEnd === -1) {
+      result = result.slice(0, startIdx);
+      break;
+    }
+
+    const closing = findMatchingClosingTag(result, tagEnd + 1, tagName);
+    if (closing) {
+      result = result.slice(0, startIdx) + result.slice(closing.fullEndIdx);
+    } else {
+      result = result.slice(0, startIdx) + result.slice(tagEnd + 1);
+    }
+  }
+
+  return result;
+}
+
+const TRUSTED_MID_REGEX = /^(?:mid[.$:]|m_|active\.\$)[A-Za-z0-9_$.-]+$/i;
+
+export function extractStableMessageId(openingTag: string, body: string): string | null {
+  // 1. Primary: explicitly designated message ID attributes on the message row opening tag
+  const messageIdAttrMatch = openingTag.match(/\b(?:data-message-id|data-mid)=["']([^"']+)["']/i);
+  if (messageIdAttrMatch && messageIdAttrMatch[1]) {
+    const val = messageIdAttrMatch[1].trim();
+    if (val) return val;
+  }
+
+  // 2. Secondary: id or data-id on the row opening tag if it matches trusted message ID syntax
+  const idAttrMatch = openingTag.match(/\b(?:id|data-id)=["']([^"']+)["']/i);
+  if (idAttrMatch && idAttrMatch[1]) {
+    const val = idAttrMatch[1].trim();
+    if (TRUSTED_MID_REGEX.test(val)) {
+      return val;
+    }
+  }
+
+  // 3. Dedicated message root / container elements inside the row (NOT arbitrary descendants!)
+  const containerMatch = body.match(
+    /<(?:div|span|li)\b(?=[^>]*\b(?:data-testid=["'](?:mw_message_row|message_row|message_bubble|bubble_text)["']|aria-roledescription=["']message["']))[^>]*\b(?:data-message-id|data-mid|id|data-id)=["']([^"']+)["']/i
+  );
+  if (containerMatch && containerMatch[1]) {
+    const val = containerMatch[1].trim();
+    if (TRUSTED_MID_REGEX.test(val)) {
+      return val;
+    }
+  }
+
+  return null;
+}
+
+export interface ExtractedRowElement {
+  openingTag: string;
+  body: string;
+  fullHtml: string;
+  startIndex: number;
+}
+
+export function extractMessageRowElements(html: string): ExtractedRowElement[] {
+  const rows: ExtractedRowElement[] = [];
+  const rowStartRegex =
+    /<(div|li)\b(?=[^>]*\b(?:role=["'](?:row|status)["']|aria-roledescription=["']message["']|data-testid=["'](?:mw_message_row|message_row|system_message|outgoing_message|incoming_group_row)["']))/gi;
+
+  let match: RegExpExecArray | null;
+  let searchIdx = 0;
+
+  while ((match = rowStartRegex.exec(html)) !== null) {
+    const startIndex = match.index;
+    if (startIndex < searchIdx) continue;
+
+    const tagName = match[1]!.toLowerCase();
+    const tagEnd = findTagEnd(html, startIndex);
+    if (tagEnd === -1) continue;
+
+    const openingTag = html.slice(startIndex, tagEnd + 1);
+    const closing = findMatchingClosingTag(html, tagEnd + 1, tagName);
+
+    if (closing) {
+      const body = html.slice(tagEnd + 1, closing.contentEndIdx);
+      const fullHtml = html.slice(startIndex, closing.fullEndIdx);
+      rows.push({ openingTag, body, fullHtml, startIndex });
+      searchIdx = closing.fullEndIdx;
+      rowStartRegex.lastIndex = closing.fullEndIdx;
+    } else {
+      // Fallback if tag is unclosed
+      const nextMatch = html.slice(tagEnd + 1).search(rowStartRegex);
+      const bodyEnd = nextMatch !== -1 ? tagEnd + 1 + nextMatch : html.length;
+      const body = html.slice(tagEnd + 1, bodyEnd);
+      const fullHtml = html.slice(startIndex, bodyEnd);
+      rows.push({ openingTag, body, fullHtml, startIndex });
+      searchIdx = bodyEnd;
+      rowStartRegex.lastIndex = bodyEnd;
+    }
+  }
+
+  return rows;
+}
+
 /**
  * Preserves complete nested bubble text including styled spans, mentions, and line breaks (Finding 6).
  */
-function extractNestedBubbleText(html: string): string {
+export function extractNestedBubbleText(html: string): string {
   const tagRegex = /<(div|span)\b(?=[^>]*\bdir=["']auto["'])[^>]*>/gi;
   let match: RegExpExecArray | null;
   const textSegments: string[] = [];
@@ -869,32 +1145,15 @@ function extractNestedBubbleText(html: string): string {
     const tagName = match[1]!.toLowerCase();
     const startIdx = match.index + match[0].length;
 
-    let depth = 1;
-    const tokenRegex = new RegExp(`(</?${tagName}\\b[^>]*>)`, "gi");
-    tokenRegex.lastIndex = startIdx;
-
-    let endIdx = -1;
-    let tokenMatch: RegExpExecArray | null;
-    while ((tokenMatch = tokenRegex.exec(html)) !== null) {
-      const token = tokenMatch[0];
-      if (token.startsWith(`</${tagName}`)) {
-        depth--;
-        if (depth === 0) {
-          endIdx = tokenMatch.index;
-          lastIndex = tokenRegex.lastIndex;
-          break;
-        }
-      } else if (!token.endsWith("/>")) {
-        depth++;
-      }
-    }
-
-    if (endIdx !== -1) {
-      const innerHtml = html.slice(startIdx, endIdx);
+    const closing = findMatchingClosingTag(html, startIdx, tagName);
+    if (closing) {
+      const innerHtml = html.slice(startIdx, closing.contentEndIdx);
       const clean = cleanHtmlText(innerHtml);
       if (clean) {
         textSegments.push(clean);
       }
+      lastIndex = closing.fullEndIdx;
+      tagRegex.lastIndex = closing.fullEndIdx;
     }
   }
 
@@ -902,11 +1161,7 @@ function extractNestedBubbleText(html: string): string {
     return textSegments.join("\n");
   }
 
-  // Fallback: strip timestamp tags before cleaning text
-  const stripped = html
-    .replace(/<time\b[^>]*>[\s\S]*?<\/time>/gi, "")
-    .replace(/<(?:span|div)\b[^>]*\bdata-testid=["']message_timestamp["'][^>]*>[\s\S]*?<\/(?:span|div)>/gi, "");
-  return cleanHtmlText(stripped);
+  return "";
 }
 
 /**
@@ -974,53 +1229,33 @@ export function parseMessengerBubblesFromHtml(
   let isDegraded = false;
   let degradedReason: string | undefined;
 
-  // Classify thread from surrounding HTML header/banner cues (Finding 2)
+  // Classify thread from surrounding HTML header/banner cues (Finding 2, F08)
   const threadClassification = parseThreadClassification(html, options);
 
-  // Split by message rows or status rows
-  const rowChunks = html.split(
-    /<div\b(?=[^>]*\b(?:role=["'](?:row|status)["']|aria-roledescription=["']message["']|data-testid=["'](?:mw_message_row|system_message)["']))/i
-  );
+  const messageRows = extractMessageRowElements(html);
 
-  for (let i = 1; i < rowChunks.length; i++) {
-    const chunk = rowChunks[i]!;
-    const tagEndIdx = chunk.indexOf(">");
-    if (tagEndIdx === -1) continue;
+  for (const row of messageRows) {
+    const { openingTag, body, fullHtml: chunk } = row;
 
-    const openingTag = chunk.slice(0, tagEndIdx);
-    const body = chunk.slice(tagEndIdx + 1);
+    // 1. Strip non-content UI elements (controls, receipts, presence, avatars, quotes, headers, timestamps)
+    const cleanBody = stripNonContentElements(body);
 
-    // Strip dedicated author links before extracting text
-    const bodyWithoutAuthor = body.replace(
-      /<a\b(?=[^>]*\b(?:data-testid=["'](?:author_link|message_sender_avatar|sender_name)["']|class=["'][^"']*\bauthor\b))[\s\S]*?<\/a>/gi,
-      ""
-    );
-
-    const ariaLabelMatch =
-      openingTag.match(/aria-label=["']([^"']+)["']/i) ||
-      body.match(/aria-label=["']([^"']+)["']/i);
+    const ariaLabelMatch = openingTag.match(/aria-label=["']([^"']+)["']/i);
     const ariaLabel = ariaLabelMatch ? cleanHtmlText(ariaLabelMatch[1]!) : "";
     const ariaMessageText = ariaLabel.match(/^(?:at|lúc)\s+.+,\s*[^:;]+[:;]\s*([\s\S]+)$/i)?.[1]?.trim();
 
-    // Current Facebook containers include surrounding chat UI inside the row body.
-    const cleanText = ariaMessageText || extractNestedBubbleText(bodyWithoutAuthor) || extractNestedBubbleText(body);
+    // Prefer bubble container text, fall back to opening tag's ariaMessageText or cleanBody text
+    const bubbleText = extractNestedBubbleText(cleanBody);
+    const cleanText = bubbleText || ariaMessageText || cleanHtmlText(cleanBody);
 
     if (!cleanText) {
       continue;
     }
 
-    // Look for stable message ID (e.g. mid.$..., id="mid...", data-message-id, data-mid, data-id)
-    const idMatch =
-      openingTag.match(/\b(?:id|data-message-id|data-mid|data-id)=["']([^"']+)["']/i) ||
-      body.match(/\b(?:id|data-message-id|data-mid|data-id)=["']([^"']+)["']/i);
+    // Look for stable message ID from trusted sources (P0: tighten native message ID)
+    const stableId = extractStableMessageId(openingTag, body);
 
-    const rawId = idMatch ? idMatch[1] : null;
-    const isValidMid = Boolean(
-      rawId &&
-      (rawId.startsWith("mid.") || rawId.startsWith("mid.$") || rawId.length >= 12)
-    );
-
-    if (!isValidMid) {
+    if (!stableId) {
       // Degraded only for ACTUAL message rows (Finding 4)
       if (isActualMessageRow(openingTag, body, cleanText)) {
         isDegraded = true;
@@ -1028,8 +1263,6 @@ export function parseMessengerBubblesFromHtml(
       }
       continue;
     }
-
-    const stableId = rawId!;
 
     // Check outgoing vs incoming with anchored aria prefixes (Finding 5)
     const normalizedAriaLabel = ariaLabel.toLowerCase();
@@ -1066,7 +1299,7 @@ export function parseMessengerBubblesFromHtml(
       id: stableId,
       text: cleanText,
       isOutgoing,
-      senderName: senderResult.senderName,
+      senderName: isOutgoing ? undefined : senderResult.senderName,
       senderId: isOutgoing ? (options?.botParticipantId ?? options?.botChannelAccountId ?? null) : senderResult.senderId,
       senderProfileUrl: isOutgoing ? (options?.botProfileUrl ?? null) : senderResult.senderProfileUrl,
       senderKind: isOutgoing ? "PERSON" : senderResult.senderKind,

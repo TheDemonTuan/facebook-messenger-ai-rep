@@ -744,4 +744,139 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(b12!.mentions![0]!.isVerified).toBe(false);
     });
   });
+
+  describe("8. PR-02: Messenger Message Pipeline Boundaries & Sibling Panel Isolation", () => {
+    const lastRowPanelHtml = fs.readFileSync(
+      path.resolve(__dirname, "fixtures/messenger-dom-last-row-sibling-panel.html"),
+      "utf-8"
+    );
+
+    it("isolates last message row from sibling panels (Enter, Message sent, Active now, Profile, Mute, Search)", () => {
+      const result = parseMessengerBubblesFromHtml(lastRowPanelHtml, mockBotOptions);
+      expect(result.ok).toBe(true);
+      expect(result.isDegraded).toBe(false);
+
+      const lastBubble = result.bubbles.find((b) => b.id === "mid.$lastRow005");
+      expect(lastBubble).toBeDefined();
+      expect(lastBubble!.text).toBe("Em muốn lấy 1 áo size L màu đen, shop ship giúp em nhé");
+
+      // Verify no sibling panel text leaked into last bubble
+      const forbiddenTokens = [
+        "Enter",
+        "Message sent",
+        "Active 12m ago",
+        "Profile",
+        "Mute",
+        "Search",
+        "Chat info",
+        "Customize chat",
+        "Media, files and links",
+        "Privacy & support",
+        "Thích",
+        "Trả lời",
+        "Xem thêm",
+        "Đã chuyển",
+      ];
+      for (const token of forbiddenTokens) {
+        expect(lastBubble!.text).not.toContain(token);
+      }
+    });
+
+    it("preserves legitimate customer words 'Search' and 'Enter' when genuinely inside message bubble", () => {
+      const result = parseMessengerBubblesFromHtml(lastRowPanelHtml, mockBotOptions);
+      const keywordsBubble = result.bubbles.find((b) => b.id === "mid.$validKeywords003");
+      expect(keywordsBubble).toBeDefined();
+      expect(keywordsBubble!.text).toBe(
+        "Em có thể bấm Enter hoặc dùng ô Search để tra mã sản phẩm không?"
+      );
+      expect(keywordsBubble!.text).toContain("Enter");
+      expect(keywordsBubble!.text).toContain("Search");
+    });
+
+    it("classifies conversation kind from header only; group share card in direct conversation remains DIRECT", () => {
+      const result = parseMessengerBubblesFromHtml(lastRowPanelHtml, mockBotOptions);
+      expect(result.threadClassification).toMatchObject({
+        kind: "DIRECT",
+        reliability: "VERIFIED",
+      });
+
+      // Also verify direct classification via parseThreadClassification directly
+      const threadClassification = parseThreadClassification(lastRowPanelHtml);
+      expect(threadClassification.kind).toBe("DIRECT");
+      expect(threadClassification.reliability).toBe("VERIFIED");
+    });
+
+    it("tightens native message ID: rejects arbitrary descendant id and removes loose length >= 12 rule", () => {
+      // Row with arbitrary descendant ID lacking trusted MID prefix must be marked degraded
+      const degradedHtmlWithArbitraryDescendant = `
+        <div role="main">
+          <div data-scope="messages_table">
+            <div role="row">
+              <div id="arbitrary_descendant_container_id_12345" dir="auto">
+                Tin nhắn không có mid hợp lệ
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      const degradedResult = parseMessengerBubblesFromHtml(degradedHtmlWithArbitraryDescendant);
+      expect(degradedResult.isDegraded).toBe(true);
+      expect(degradedResult.ok).toBe(false);
+      expect(degradedResult.bubbles.length).toBe(0);
+
+      // Row with trusted native mid (mid.$... or data-message-id) is accepted
+      const validHtml = `
+        <div role="main">
+          <div data-scope="messages_table">
+            <div role="row" id="mid.$validTest001">
+              <div dir="auto">Tin nhắn có ID hợp lệ</div>
+            </div>
+          </div>
+        </div>
+      `;
+      const validResult = parseMessengerBubblesFromHtml(validHtml);
+      expect(validResult.ok).toBe(true);
+      expect(validResult.isDegraded).toBe(false);
+      expect(validResult.bubbles[0]!.id).toBe("mid.$validTest001");
+    });
+
+    it("ensures dedupe textHash is completely unaffected by presence, avatar URL, or button control changes", async () => {
+      const crypto = await import("crypto");
+      const result1 = parseMessengerBubblesFromHtml(lastRowPanelHtml, mockBotOptions);
+      const bubble1 = result1.bubbles.find((b) => b.id === "mid.$lastRow005")!;
+      const hash1 = crypto.createHash("sha256").update(bubble1.text.trim()).digest("hex");
+
+      // Mutate presence, avatar token, and button text in the sibling panel and row
+      const mutatedHtml = lastRowPanelHtml
+        .replace("Active 12m ago", "Active now")
+        .replace("avatar_sinsin_token_123.jpg", "avatar_sinsin_token_99999_refreshed.jpg")
+        .replace("Enter, Message sent 7:26 PM", "Enter, Message sent 8:30 PM");
+
+      const result2 = parseMessengerBubblesFromHtml(mutatedHtml, mockBotOptions);
+      const bubble2 = result2.bubbles.find((b) => b.id === "mid.$lastRow005")!;
+      const hash2 = crypto.createHash("sha256").update(bubble2.text.trim()).digest("hex");
+
+      expect(bubble1.text).toBe(bubble2.text);
+      expect(hash1).toBe(hash2);
+    });
+
+    it("separates quote, avatar, receipt, presence, and action controls within a single row", () => {
+      const singleRowHtml = `
+        <div role="main">
+          <div role="row" id="mid.$singleRowMultiPart">
+            <div data-testid="avatar" class="avatar"><img src="/avatar.png" alt="Avatar User" /></div>
+            <div data-testid="quoted_message" class="quote"><span>Tin nhắn được trích dẫn</span></div>
+            <div class="bubble"><div dir="auto">Nội dung thực sự của tin nhắn</div></div>
+            <div role="toolbar" class="message-actions"><button aria-label="Bày tỏ cảm xúc">React</button></div>
+            <div data-testid="message_receipt" class="receipt"><span>Message sent 10:00 AM by User</span></div>
+            <div data-testid="user_presence" class="presence">Active now</div>
+          </div>
+        </div>
+      `;
+      const result = parseMessengerBubblesFromHtml(singleRowHtml);
+      expect(result.ok).toBe(true);
+      expect(result.bubbles.length).toBe(1);
+      expect(result.bubbles[0]!.text).toBe("Nội dung thực sự của tin nhắn");
+    });
+  });
 });

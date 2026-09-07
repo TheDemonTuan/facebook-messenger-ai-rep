@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="utf-8"><title>Messenger DOM Last Row With Sibling Panel</title></head>
+<body>
+  <!-- Thread header indicating a DIRECT conversation with Sin Sin -->
+  <div role="banner" data-testid="conversation_header" aria-label="Thông tin cuộc trò chuyện">
+    <h2>Sin Sin</h2>
+  </div>
+
+  <div role="main">
+    <!-- Messages list container -->
+    <div data-scope="messages_table" role="grid">
+      <!-- Row 1: Historical customer inbound -->
+      <div role="row" id="mid.$hist001" aria-label="Sin Sin: Chào shop em muốn hỏi áo khoác">
+        <div dir="auto">Chào shop em muốn hỏi áo khoác</div>
+        <time datetime="2026-09-07T09:00:00Z"></time>
+      </div>
+
+      <!-- Row 2: Outbound response -->
+      <div role="row" id="mid.$hist002" data-outgoing="true" aria-label="Bạn đã gửi: Dạ chào bạn, bên em có sẵn nhiều mẫu áo khoác ạ">
+        <div dir="auto">Dạ chào bạn, bên em có sẵn nhiều mẫu áo khoác ạ</div>
+        <time datetime="2026-09-07T09:02:00Z"></time>
+      </div>
+
+      <!-- Row 3: Customer bubble legitimately containing 'Search' and 'Enter' text -->
+      <div role="row" id="mid.$validKeywords003" aria-label="Sin Sin: Em có thể bấm Enter hoặc dùng ô Search để tra mã sản phẩm không?">
+        <div class="bubble">
+          <div dir="auto">Em có thể bấm Enter hoặc dùng ô Search để tra mã sản phẩm không?</div>
+        </div>
+        <time datetime="2026-09-07T09:05:00Z"></time>
+      </div>
+
+      <!-- Row 4: Shared Facebook group card inside a DIRECT thread -->
+      <div role="row" id="mid.$groupShare004" aria-label="Sin Sin: Em thấy bài review trong nhóm này">
+        <div class="bubble">
+          <div dir="auto">Em thấy bài review trong nhóm này:</div>
+        </div>
+        <!-- Shared card preview with group indicators that must NOT flip conversation to GROUP -->
+        <div class="shared_card" data-thread-type="GROUP" aria-label="Thông tin nhóm: Hội Đam Mê Thời Trang">
+          <div class="group_title">Hội Đam Mê Thời Trang</div>
+          <div class="group_member_count">120.000 members · 500 thành viên mới</div>
+          <a href="https://www.facebook.com/groups/fashionclub" aria-label="Thông tin nhóm">Xem nhóm</a>
+        </div>
+        <time datetime="2026-09-07T09:08:00Z"></time>
+      </div>
+
+      <!-- Row 5: The LAST message row in the message table -->
+      <div role="row" id="mid.$lastRow005" aria-label="Sin Sin: Em muốn lấy 1 áo size L màu đen, shop ship giúp em nhé">
+        <!-- Avatar -->
+        <div data-testid="message_sender_avatar" class="avatar">
+          <img src="https://cdn.facebook.com/avatar_sinsin_token_123.jpg" alt="Sin Sin" />
+        </div>
+
+        <!-- Quoted message / reply preview -->
+        <div data-testid="quoted_message" class="reply_preview" aria-label="Đang trả lời: Dạ chào bạn, bên em có sẵn nhiều mẫu áo khoác ạ">
+          <span dir="auto">Dạ chào bạn, bên em có sẵn nhiều mẫu áo khoác ạ</span>
+        </div>
+
+        <!-- Real bubble content -->
+        <div class="bubble">
+          <div dir="auto">Em muốn lấy 1 áo size L màu đen, shop ship giúp em nhé</div>
+        </div>
+
+        <!-- Internal hover action controls -->
+        <div role="toolbar" aria-label="Hành động với tin nhắn" class="message-actions">
+          <button role="button" aria-label="Bày tỏ cảm xúc">Thích</button>
+          <button role="button" aria-label="Trả lời">Trả lời</button>
+          <button role="button" aria-label="Xem thêm">Xem thêm</button>
+        </div>
+
+        <!-- Internal delivery receipt -->
+        <div data-testid="delivery_status" class="receipt" aria-label="Đã chuyển">
+          <span>Đã chuyển</span>
+        </div>
+        <time datetime="2026-09-07T09:10:00Z"></time>
+      </div>
+    </div>
+    <!-- END OF MESSAGES TABLE -->
+
+    <!-- Sibling Panel 1: Composer area inside main, right after messages table -->
+    <div role="region" aria-label="Bộ soạn tin nhắn" class="composer-container">
+      <div role="textbox" contenteditable="true" aria-label="Tin nhắn"></div>
+      <div role="button" aria-label="Gửi tin nhắn">Enter</div>
+      <div class="delivery-receipt">Enter, Message sent 7:26 PM by Sin Sin</div>
+    </div>
+
+    <!-- Sibling Panel 2: Conversation detail sidebar / right panel -->
+    <div role="complementary" aria-label="Chi tiết cuộc trò chuyện" class="conversation-sidebar">
+      <div class="presence-badge" data-testid="user_presence">
+        Sin Sin Active 12m ago
+      </div>
+      <div class="panel-buttons">
+        <div role="button" aria-label="Xem trang cá nhân">Profile</div>
+        <div role="button" aria-label="Tắt thông báo">Mute</div>
+        <div role="button" aria-label="Tìm kiếm trong cuộc trò chuyện">Search</div>
+      </div>
+      <div class="chat-info">
+        <h3>Chat info</h3>
+        <div>Customize chat</div>
+        <div>Media, files and links</div>
+        <div>Privacy & support</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

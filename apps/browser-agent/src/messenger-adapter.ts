@@ -1151,45 +1151,47 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               }
             }
 
-            for (const key of Object.keys(source)) {
-              if (!key.startsWith("__reactProps") && !key.startsWith("__reactFiber")) continue;
+            if (isMessageRow) {
+              for (const key of Object.keys(source)) {
+                if (!key.startsWith("__reactProps") && !key.startsWith("__reactFiber")) continue;
 
-              const pending: Array<{ value: unknown; depth: number }> = [
-                { value: (source as unknown as Record<string, unknown>)[key], depth: 0 },
-              ];
-              const visited = new Set<object>();
-              let inspected = 0;
+                const pending: Array<{ value: unknown; depth: number }> = [
+                  { value: (source as unknown as Record<string, unknown>)[key], depth: 0 },
+                ];
+                const visited = new Set<object>();
+                let inspected = 0;
 
-              while (pending.length > 0 && inspected < 300) {
-                const item = pending.shift()!;
-                inspected += 1;
+                while (pending.length > 0 && inspected < 300) {
+                  const item = pending.shift()!;
+                  inspected += 1;
 
-                if (typeof item.value === "string") {
-                  const id = item.value.match(/mid\.[A-Za-z0-9_$.-]+/)?.[0];
-                  if (id) {
-                    target.setAttribute("data-message-id", id);
+                  if (typeof item.value === "string") {
+                    const id = item.value.match(/mid\.[A-Za-z0-9_$.-]+/)?.[0];
+                    if (id) {
+                      target.setAttribute("data-message-id", id);
+                    }
+                    continue;
                   }
-                  continue;
-                }
 
-                if (!item.value || typeof item.value !== "object" || item.depth >= 4) continue;
-                if (visited.has(item.value)) continue;
-                visited.add(item.value);
+                  if (!item.value || typeof item.value !== "object" || item.depth >= 4) continue;
+                  if (visited.has(item.value)) continue;
+                  visited.add(item.value);
 
-                const rec = item.value as Record<string, unknown>;
-                if (
-                  rec.isOutgoing === true ||
-                  rec.is_outgoing === true ||
-                  rec.isViewer === true ||
-                  rec.fromViewer === true ||
-                  rec.isSender === true
-                ) {
-                  target.setAttribute("data-outgoing", "true");
-                  target.setAttribute("data-testid", "outgoing_message");
-                }
+                  const rec = item.value as Record<string, unknown>;
+                  if (
+                    rec.isOutgoing === true ||
+                    rec.is_outgoing === true ||
+                    rec.isViewer === true ||
+                    rec.fromViewer === true ||
+                    rec.isSender === true
+                  ) {
+                    target.setAttribute("data-outgoing", "true");
+                    target.setAttribute("data-testid", "outgoing_message");
+                  }
 
-                for (const child of Object.values(rec)) {
-                  pending.push({ value: child, depth: item.depth + 1 });
+                  for (const child of Object.values(rec)) {
+                    pending.push({ value: child, depth: item.depth + 1 });
+                  }
                 }
               }
             }
@@ -1200,8 +1202,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         const currentThreadId = hints?.threadId || extractMessengerThreadId(page.url()) || "";
 
         const isGroup = await page.evaluate(() => {
-          const main = document.querySelector('div[role="main"]');
-          if (!main) return false;
+          const header =
+            document.querySelector('header, [role="banner"], [data-testid*="header"], [data-testid="conversation_header"]') ||
+            document.querySelector('div[role="main"]')?.querySelector('header, [role="banner"], [data-testid*="header"]');
+          if (!header) return false;
           const groupSelector = `
             [aria-label*="Chat members" i],
             [aria-label*="Thành viên" i],
@@ -1215,15 +1219,19 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             [aria-label*="Đổi tên nhóm" i],
             [aria-label*="Đổi tên đoạn chat" i]
           `;
-          if (main.querySelector(groupSelector) !== null) return true;
-          const text = (main as HTMLElement).innerText || main.textContent || "";
+          if (header.querySelector(groupSelector) !== null) return true;
+          const headerAria = header.getAttribute("aria-label") || "";
+          if (/thông tin nhóm|group info|group options|tùy chọn nhóm/i.test(headerAria)) return true;
+          const text = (header as HTMLElement).innerText || header.textContent || "";
           return /\b(\d+)\s*(?:thành viên|members)\b/i.test(text);
         }).catch(() => false);
 
         const directProfileId = await page.evaluate(() => {
-          const main = document.querySelector('div[role="main"]');
-          if (!main) return null;
-          const links = Array.from(main.querySelectorAll('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i], a[href*="facebook.com/"], a[href^="/"]'));
+          const header =
+            document.querySelector('header, [role="banner"], [data-testid*="header"], [data-testid="conversation_header"]') ||
+            document.querySelector('div[role="main"]')?.querySelector('header, [role="banner"], [data-testid*="header"]');
+          if (!header) return null;
+          const links = Array.from(header.querySelectorAll('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i], a[href*="facebook.com/"], a[href^="/"]'));
           for (const a of links) {
             const href = a.getAttribute("href") || "";
             if (href.includes("/messages/")) continue;
