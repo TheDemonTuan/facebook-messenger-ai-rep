@@ -16,6 +16,7 @@ export interface CreateOutboundActionParams {
   ownerToken?: string;
   fencingToken?: number;
   fencingEpoch?: number;
+  controlEpoch?: number;
 }
 
 export interface TransitionActionOptions {
@@ -48,15 +49,18 @@ export class OutboundRepository {
   constructor(private db: Database) {}
 
   /**
-   * Deterministically generates action_id: sha256(channelAccountId + conversationId + inboundVersion + responseIndex)
+   * Deterministically generates action_id: sha256(channelAccountId + conversationId + inboundVersion + responseIndex + [nonceOrActor])
    */
   static computeActionId(
     channelAccountId: string,
     conversationId: string,
     inboundVersion: number,
-    responseIndex: number
+    responseIndex: number,
+    nonceOrActor?: string
   ): string {
-    const raw = `${channelAccountId}:${conversationId}:${inboundVersion}:${responseIndex}`;
+    const raw = nonceOrActor
+      ? `${channelAccountId}:${conversationId}:${inboundVersion}:${responseIndex}:${nonceOrActor}`
+      : `${channelAccountId}:${conversationId}:${inboundVersion}:${responseIndex}`;
     return createHash("sha256").update(raw).digest("hex");
   }
 
@@ -64,13 +68,17 @@ export class OutboundRepository {
    * Idempotently creates an action.
    * If action already exists in a terminal state (CONFIRMED, CANCELLED), does NOT overwrite.
    */
-  async createAction(params: CreateOutboundActionParams, tx?: DatabaseOrTx) {
+  async createAction(params: CreateOutboundActionParams & { intentId?: string }, tx?: DatabaseOrTx) {
     const executor = tx || this.db;
+    const actionNonce =
+      params.intentId ||
+      (params.actor && params.actor !== "AI" ? `${params.actor}:${Date.now()}` : undefined);
     const actionId = OutboundRepository.computeActionId(
       params.channelAccountId,
       params.conversationId,
       params.inboundVersion,
-      params.responseIndex
+      params.responseIndex,
+      actionNonce
     );
     const textHash = createHash("sha256").update(params.text.trim()).digest("hex");
     const owner = params.ownerToken || params.claimToken || null;
@@ -98,6 +106,7 @@ export class OutboundRepository {
           claimToken: owner,
           fencingEpoch: epoch,
           fencingToken: epoch,
+          metadata: { controlEpoch: params.controlEpoch ?? 0 },
           updatedAt: new Date(),
         })
         .where(
@@ -128,6 +137,7 @@ export class OutboundRepository {
         ownerToken: owner,
         fencingToken: epoch,
         fencingEpoch: epoch,
+        metadata: { controlEpoch: params.controlEpoch ?? 0 },
       })
       .returning();
 

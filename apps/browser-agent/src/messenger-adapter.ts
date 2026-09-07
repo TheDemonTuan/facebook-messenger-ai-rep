@@ -121,6 +121,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private hasReportedHealthySession = false;
   private lastSuccessfulPollAt: Date | null = null;
   private consecutiveEmptyInboxPolls = 0;
+  private recentBotSentTexts: Array<{ text: string; sentAt: number }> = [];
+  private seenOutgoingBubbleIds = new Set<string>();
+  private externalOutboundCallback: ((outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>) | null = null;
 
   constructor(options: PlaywrightAdapterOptions) {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
@@ -263,6 +266,43 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
   onSessionRecovered(callback: () => Promise<void>): void {
     this.sessionRecoveredCallback = callback;
+  }
+
+  onExternalOutbound(
+    callback: (outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>
+  ): void {
+    this.externalOutboundCallback = callback;
+  }
+
+  rememberBotSentText(text: string): void {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.recentBotSentTexts.push({ text: trimmed, sentAt: Date.now() });
+    if (this.recentBotSentTexts.length > 50) {
+      this.recentBotSentTexts.shift();
+    }
+  }
+
+  async checkLastBubbleIsExternalOutbound(threadId: string): Promise<boolean> {
+    if (!this.senderPage) return false;
+    try {
+      const bubbleResult = await this.readBubblesFromPage(this.senderPage, { threadId });
+      if (bubbleResult.bubbles.length === 0) return false;
+      const lastBubble = bubbleResult.bubbles[bubbleResult.bubbles.length - 1];
+      if (!lastBubble || !lastBubble.isOutgoing) return false;
+
+      const outText = lastBubble.text.trim();
+      const now = Date.now();
+      const isBotSent = this.recentBotSentTexts.some((botMsg) => {
+        return (
+          botMsg.text === outText ||
+          (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
+        );
+      });
+      return !isBotSent;
+    } catch {
+      return false;
+    }
   }
 
   private async setSessionIssue(issue: BrowserSessionIssue): Promise<void> {
@@ -760,6 +800,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const currentBubbles = await this.readBubblesFromPage(observerPage, { threadId: currentThreadId });
             for (const bubble of currentBubbles.bubbles) {
               this.lastSeenMessageIds.add(bubble.id);
+              if (bubble.isOutgoing) {
+                this.seenOutgoingBubbleIds.add(bubble.id || `out:${currentThreadId}:${bubble.text.trim()}`);
+              }
             }
             this.rememberActiveBubbleSequence(currentThreadId, currentBubbles);
           }
@@ -882,6 +925,44 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (bubbleResult.bubbles[i]?.isOutgoing) {
         lastOutgoingIdx = i;
         break;
+      }
+    }
+
+    // 1.5 Detect external human outgoing bubbles
+    if (lastOutgoingIdx >= 0 && this.externalOutboundCallback) {
+      const lastOutBubble = bubbleResult.bubbles[lastOutgoingIdx];
+      if (lastOutBubble) {
+        const outBubbleId = lastOutBubble.id || `out:${threadInfo.threadId}:${lastOutBubble.text.trim()}`;
+        if (!this.seenOutgoingBubbleIds.has(outBubbleId)) {
+          this.seenOutgoingBubbleIds.add(outBubbleId);
+          if (this.seenOutgoingBubbleIds.size > 1000) {
+            const firstKey = this.seenOutgoingBubbleIds.values().next().value;
+            if (firstKey) this.seenOutgoingBubbleIds.delete(firstKey);
+          }
+
+          const outText = lastOutBubble.text.trim();
+          const now = Date.now();
+          this.recentBotSentTexts = this.recentBotSentTexts.filter((item) => now - item.sentAt < 180000);
+          const isBotSent = this.recentBotSentTexts.some((botMsg) => {
+            return (
+              botMsg.text === outText ||
+              (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
+            );
+          });
+
+          if (!isBotSent && outText.length > 0) {
+            console.log(
+              `[BrowserAdapter] Detected external human outbound in thread ${threadInfo.threadId}: "${outText.slice(0, 40)}..."`
+            );
+            this.externalOutboundCallback({
+              threadId: threadInfo.threadId,
+              text: outText,
+              timestamp: now,
+            }).catch((err) => {
+              console.error("[BrowserAdapter] Error in externalOutboundCallback:", err);
+            });
+          }
+        }
       }
     }
 
@@ -1447,6 +1528,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     }
   ): Promise<{ completed: boolean; aborted?: boolean }> {
     if (!this.senderPage) return { completed: false, aborted: true };
+
+    this.rememberBotSentText(text);
 
     const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
     try {

@@ -11,7 +11,7 @@ import type {
   JobRepository,
   JobExecutionContext,
 } from "@messenger/db";
-import { aiRuns, aiDrafts, ReplyPolicyService } from "@messenger/db";
+import { aiRuns, aiDrafts, ReplyPolicyService, ConversationControlService } from "@messenger/db";
 import type { AiReplyGenerator } from "@messenger/ai";
 import { buildLeanConversationContext } from "@messenger/ai";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
@@ -20,6 +20,7 @@ export interface AiJobPayload {
   channelAccountId: string;
   conversationId: string;
   inboundVersion: number;
+  controlEpoch?: number;
   turnId?: string;
 }
 
@@ -55,10 +56,11 @@ export function createAiHandler(deps: AiHandlerDeps) {
     jobRepo,
   } = deps;
   const replyPolicyService = deps.replyPolicyService ?? new ReplyPolicyService(db);
+  const controlService = new ConversationControlService(db);
 
   return async function handleAi(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as AiJobPayload;
-    const { channelAccountId, conversationId, inboundVersion, turnId } = payload;
+    const { channelAccountId, conversationId, inboundVersion, controlEpoch, turnId } = payload;
 
     if (context.signal.aborted) {
       console.warn(`[AiHandler] Job ${context.job.id} aborted before execution`);
@@ -73,6 +75,19 @@ export function createAiHandler(deps: AiHandlerDeps) {
     }
 
     const { conversation, customer } = convData;
+    const expectedControlEpoch = controlEpoch ?? conversation.controlEpoch;
+
+    // Older jobs/tests may not carry control columns yet; their existing policy gates remain active.
+    if (
+      typeof (db as unknown as { select?: unknown }).select === "function" &&
+      typeof conversation.controlEpoch === "number" &&
+      typeof conversation.replyControlMode === "string" &&
+      !(await controlService.canAiReply(conversationId, expectedControlEpoch, inboundVersion))
+    ) {
+      console.warn(`[AiHandler] Conversation ${conversationId} lost AI reply control before generation.`);
+      if (turnId) await turnRepo.cancelTurn(turnId, "Reply control no longer permits AI");
+      return;
+    }
 
     // Check version staleness
     if (conversation.inboundVersion !== inboundVersion) {
@@ -184,7 +199,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
       apiKey: aiConfig.apiKey,
       model: aiConfig.model,
       timeoutMs: settings.aiTimeoutMs,
-    });
+    }, context.signal);
 
     // 4. Save AI Run record
     const isGuardRejected = !result.success && Boolean(result.errorMessage?.includes("Guard rejection"));
@@ -277,6 +292,36 @@ export function createAiHandler(deps: AiHandlerDeps) {
       return;
     }
 
+    // 5.5 Post-generation gate: verify conversation state hasn't moved or entered manual mode
+    const postGenConv = await convRepo.getConversationById(conversationId);
+    const freshConversation = postGenConv?.conversation;
+    if (
+      !freshConversation ||
+      freshConversation.inboundVersion !== inboundVersion ||
+      freshConversation.manualMode ||
+      freshConversation.isBlocked ||
+      freshConversation.status === "MANUAL"
+    ) {
+      console.log(
+        `[AiHandler] Discarding AI output for conv ${conversationId}: conversation changed during generation (manualMode=${freshConversation?.manualMode}, freshVer=${freshConversation?.inboundVersion}, jobVer=${inboundVersion})`
+      );
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_CANCELLED_STALE",
+        inboundVersion,
+        actor: "AI_WORKER",
+        payload: {
+          reason: freshConversation?.manualMode ? "HUMAN_TAKEOVER" : "VERSION_MOVED",
+          freshVersion: freshConversation?.inboundVersion,
+        },
+      });
+      if (turnId && typeof turnRepo.cancelTurn === "function") {
+        await turnRepo.cancelTurn(turnId, "Cancelled due to human takeover or stale version").catch(() => {});
+      }
+      return;
+    }
+
     // 6. Handle successful generation: save drafts and create outbound actions
     const messagesToDraft = result.data.messages;
 
@@ -302,6 +347,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
         actor: "AI",
         claimToken: context.ownerToken,
         fencingToken: currentFencingEpoch,
+        controlEpoch: expectedControlEpoch,
       });
 
       const effectiveFencingEpoch = action?.fencingEpoch ?? action?.fencingToken ?? currentFencingEpoch;
@@ -328,6 +374,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
             ownerToken: action.ownerToken || context.ownerToken,
             fencingToken: effectiveFencingEpoch,
             fencingEpoch: effectiveFencingEpoch,
+            controlEpoch: expectedControlEpoch,
           },
           idempotencyKey: `browser-send:${action.actionId}`,
         });

@@ -180,6 +180,7 @@ export class SenderWorkerService {
 
     const ownerToken = data.ownerToken || data.claimToken || ctx?.ownerToken || "browser-sender";
     const fencingEpoch = data.fencingEpoch ?? data.fencingToken ?? ctx?.fencingEpoch ?? 0;
+    const controlEpoch = data.controlEpoch ?? 0;
 
     console.log(`[Sender Worker] Processing outbound action ${actionId} (conv=${conversationId}, v=${inboundVersion}, actor=${actor})`);
 
@@ -246,7 +247,26 @@ export class SenderWorkerService {
       return;
     }
 
-    // Check manual mode takeover for AI actions
+    // Check reply-control epoch and manual takeover for AI actions
+    if (
+      actor === "AI" &&
+      typeof convData.conversation.controlEpoch === "number" &&
+      typeof convData.conversation.replyControlMode === "string" &&
+      (convData.conversation.controlEpoch !== controlEpoch ||
+        convData.conversation.replyControlMode !== "AUTO")
+    ) {
+      console.warn(`[Sender Worker] Conversation ${conversationId} lost AI reply control (expected epoch ${controlEpoch}, actual ${convData.conversation.controlEpoch}, mode ${convData.conversation.replyControlMode}).`);
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: "Conversation reply control changed; AI outbound action cancelled",
+        ownerToken,
+        fencingEpoch,
+      });
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "Conversation reply control changed").catch(() => {});
+      }
+      return;
+    }
+
     if (actor === "AI" && convData.conversation.manualMode) {
       console.warn(`[Sender Worker] Conversation ${conversationId} is in manual mode. Aborting AI action.`);
       await this.outboundRepo.updateStatus(actionId, "ABORTED", {
@@ -396,8 +416,41 @@ export class SenderWorkerService {
       return;
     }
 
-    // 7. Verify version and policy right before Enter to guard against late races
+    // 7. Verify version, external activity, and policy right before Enter to guard against late races
     const preSendCheck = await this.convRepo.getConversationById(conversationId);
+
+    if (
+      actor === "AI" &&
+      typeof this.adapter.checkLastBubbleIsExternalOutbound === "function"
+    ) {
+      const isExternal = await this.adapter.checkLastBubbleIsExternalOutbound(externalThreadRef);
+      if (isExternal) {
+        console.warn(
+          `[Sender Worker] External human outbound detected in active thread right before Enter! Aborting AI action.`
+        );
+        await this.adapter.clearComposer();
+        this.activeTypings.delete(conversationId);
+        cancelAck();
+
+        await this.convRepo.setHumanHold?.(conversationId, 30 * 60 * 1000);
+        await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+          errorMessage: "External human message appeared in thread right before Enter",
+          ownerToken,
+          fencingEpoch,
+        });
+
+        await this.eventRepo.recordEvent({
+          channelAccountId,
+          conversationId,
+          type: "TYPING_ABORTED",
+          inboundVersion,
+          actor,
+          payload: { actionId, reason: "external_outbound_pre_enter" },
+        });
+        return;
+      }
+    }
+
     if (preSendCheck && preSendCheck.conversation.inboundVersion > inboundVersion) {
       console.warn(`[Sender Worker] Stale inbound version detected right before send: expected v${inboundVersion}, found v${preSendCheck.conversation.inboundVersion}`);
       await this.adapter.clearComposer();

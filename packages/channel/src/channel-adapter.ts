@@ -119,6 +119,18 @@ export interface ChannelAdapter {
   onDegradedDom?: (callback: (reason: string) => Promise<void>) => void;
 
   /**
+   * Optional listener for external human outbound messages observed in channel.
+   */
+  onExternalOutbound?: (
+    callback: (outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>
+  ) => void;
+
+  /**
+   * Check if the latest visible message bubble in active thread is external outbound.
+   */
+  checkLastBubbleIsExternalOutbound?: (threadId: string) => Promise<boolean>;
+
+  /**
    * Acquire send lock to pause observer during outbound typing/sending.
    */
   acquireSendLock?: () => Promise<void>;

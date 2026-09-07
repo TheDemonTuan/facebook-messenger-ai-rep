@@ -17,6 +17,7 @@ export * from "./repository/policy-member-repo.js";
 export * from "./repository/decision-repo.js";
 export * from "./utils/safe-person.js";
 export * from "./service/reply-policy-service.js";
+export * from "./service/conversation-control-service.js";
 export * from "./runner/job-runner.js";
 export * from "./seed.js";
 export * from "./migrate.js";

@@ -17,6 +17,7 @@ export const OutboundActionSchema = z.object({
   ownerToken: z.string().nullable().optional(),
   fencingToken: z.number().int().nullable().optional(),
   fencingEpoch: z.number().int().default(0),
+  controlEpoch: z.number().int().default(0),
   retryCount: z.number().int().nonnegative().default(0),
   externalMessageRef: z.string().nullable().optional(),
   unconfirmedReason: z.string().nullable().optional(),
@@ -45,5 +46,6 @@ export const OutboundJobPayloadSchema = z.object({
   ownerToken: z.string().optional(),
   fencingToken: z.number().int().optional(),
   fencingEpoch: z.number().int().default(0).optional(),
+  controlEpoch: z.number().int().default(0).optional(),
 });
 export type OutboundJobPayload = z.infer<typeof OutboundJobPayloadSchema>;

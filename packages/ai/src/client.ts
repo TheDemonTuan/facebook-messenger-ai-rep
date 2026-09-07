@@ -8,6 +8,7 @@ export interface AiConnectionConfig {
   apiKey: string;
   model: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface AiCompletionResult {
@@ -59,7 +60,7 @@ export async function createAiCompletion(
       messages,
       temperature: 0.3,
       response_format: { type: "json_object" },
-    });
+    }, { signal: config.signal });
     const choice = completion.choices?.[0];
     if (!choice?.message?.content) {
       const responseError = "error" in completion ? JSON.stringify(completion.error) : "missing choices array";
@@ -86,7 +87,7 @@ export async function createAiCompletion(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({ model: config.model, max_tokens: 1024, temperature: 0.3, system, messages: anthropicMessages }),
-    signal: AbortSignal.timeout(config.timeoutMs || 30000),
+    signal: config.signal || AbortSignal.timeout(config.timeoutMs || 30000),
   });
   if (!response.ok) throw new Error(`AI provider returned ${response.status}: ${await readError(response)}`);
 

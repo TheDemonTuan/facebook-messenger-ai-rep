@@ -150,7 +150,11 @@ export function buildResponseSnapshot(
 }
 
 export class AiReplyGenerator {
-  async generateReply(context: ConversationContext, connection?: AiConnectionConfig): Promise<GenerationResult> {
+  async generateReply(
+    context: ConversationContext,
+    connection?: AiConnectionConfig,
+    signal?: AbortSignal
+  ): Promise<GenerationResult> {
     const env = getEnv();
     const defaults = getEffectiveAiConfig(env);
     const model = connection?.model || context.settings.aiModel || defaults.model;
@@ -171,7 +175,7 @@ export class AiReplyGenerator {
     try {
       // 1. Initial attempt
       const completion = await createAiCompletion(
-        { ...provider, model, timeoutMs: context.settings.aiTimeoutMs },
+        { ...provider, model, timeoutMs: context.settings.aiTimeoutMs, signal },
         initialMessages
       );
 

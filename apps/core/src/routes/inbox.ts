@@ -20,6 +20,7 @@ import {
   inboundMessages,
   replyEligibilityDecisions,
   sanitizeApiOutput,
+  ConversationControlService,
 } from "@messenger/db";
 import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
@@ -51,6 +52,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
     requireAuth,
     channelAccountId,
   } = options;
+  const controlService = new ConversationControlService(db);
 
   return async function (fastify) {
     fastify.addHook("preHandler", async (request, reply) => {
@@ -326,14 +328,14 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const user = (request as unknown as { user: SessionUser }).user;
         const { conversationId } = request.params;
 
-        await convRepo.setManualMode(conversationId, true);
-        await outboundRepo.abortStaleActions(conversationId, 9999999);
+        const control = await controlService.acquirePinned(conversationId, user.id);
         try {
           await db.execute(
             sql`SELECT pg_notify('browser_cancel_typing', ${JSON.stringify({
               channelAccountId,
               conversationId,
-              inboundVersion: 9999999,
+              inboundVersion: Number.MAX_SAFE_INTEGER,
+              controlEpoch: control.epoch,
             })})`
           );
         } catch {
@@ -356,7 +358,29 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
       }
     );
 
-    // 4. Release manual takeover
+    // 4. Acquire a short-lived draft lease before the operator begins typing.
+    fastify.post<{ Params: { conversationId: string }; Body: { leaseId?: string } }>(
+      "/api/inbox/:conversationId/draft-lease",
+      { preHandler: [requireRole("OPERATOR")] },
+      async (request, reply) => {
+        const user = (request as unknown as { user: SessionUser }).user;
+        const { conversationId } = request.params;
+        const leaseId = request.body?.leaseId;
+        if (!leaseId || leaseId.trim().length < 8) {
+          return reply.status(400).send({ error: "A valid draft lease ID is required" });
+        }
+        const control = await controlService.acquireDraft(conversationId, leaseId, user.id);
+        await broadcaster.broadcast("conversation:takeover", {
+          conversationId,
+          manualMode: true,
+          controlEpoch: control.epoch,
+          mode: control.mode,
+        });
+        return reply.send({ success: true, conversationId, control });
+      }
+    );
+
+    // 5. Release manual takeover
     fastify.post<{ Params: { conversationId: string } }>(
       "/api/inbox/:conversationId/release",
       { preHandler: [requireRole("OPERATOR")] },
@@ -364,7 +388,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const user = (request as unknown as { user: SessionUser }).user;
         const { conversationId } = request.params;
 
-        await convRepo.setManualMode(conversationId, false);
+        const control = await controlService.release(conversationId, user.id);
         await eventRepo.recordEvent({
           channelAccountId,
           conversationId,
@@ -372,8 +396,8 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           actor: user.email,
         });
 
-        await broadcaster.broadcast("conversation:takeover", { conversationId, manualMode: false });
-        return reply.send({ success: true, conversationId, manualMode: false });
+        await broadcaster.broadcast("conversation:takeover", { conversationId, manualMode: false, controlEpoch: control.epoch });
+        return reply.send({ success: true, conversationId, manualMode: false, control });
       }
     );
 
@@ -413,13 +437,13 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
     );
 
     // 6. Manual Send message from dashboard
-    fastify.post<{ Params: { conversationId: string }; Body: { text: string } }>(
+    fastify.post<{ Params: { conversationId: string }; Body: { text: string; clientMessageId?: string } }>(
       "/api/inbox/:conversationId/manual-send",
       { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
         const user = (request as unknown as { user: SessionUser }).user;
         const { conversationId } = request.params;
-        const { text } = request.body || {};
+        const { text, clientMessageId } = request.body || {};
 
         if (!text || text.trim().length === 0) {
           return reply.status(400).send({ error: "Text cannot be empty" });
@@ -430,9 +454,25 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           return reply.status(404).send({ error: "Conversation not found" });
         }
 
-        const currentVersion = convData.conversation.inboundVersion;
+        // 1. Enter manual session and cancel active AI typing/tasks immediately
+        const control = await controlService.acquireSession(conversationId, { userId: user.id });
+        try {
+          await db.execute(
+            sql`SELECT pg_notify('browser_cancel_typing', ${JSON.stringify({
+              channelAccountId,
+              conversationId,
+              inboundVersion: Number.MAX_SAFE_INTEGER,
+              controlEpoch: control.epoch,
+            })})`
+          );
+        } catch {
+          /* ignore notification failure */
+        }
 
-        // Create outbound action in PENDING status
+        const currentVersion = convData.conversation.inboundVersion;
+        const intentId = clientMessageId || `manual-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+        // Create outbound action in PENDING status with unique manual intent
         const action = await outboundRepo.createAction({
           channelAccountId,
           conversationId,
@@ -440,8 +480,10 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           responseIndex: 0,
           text: text.trim(),
           actor: "MANUAL_OWNER",
-          claimToken: "manual-send-token",
-          fencingToken: 1,
+          claimToken: `manual-send-${control.epoch}`,
+          fencingToken: control.epoch,
+          fencingEpoch: control.epoch,
+          intentId,
         });
 
         if (!action) {
@@ -492,8 +534,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               actor: "MANUAL_OWNER",
               claimToken: action.claimToken || "manual-send-token",
               ownerToken: action.ownerToken || "manual-send-token",
-              fencingToken: action.fencingToken ?? 1,
-              fencingEpoch: action.fencingEpoch ?? 1,
+              fencingToken: action.fencingToken ?? control.epoch,
+              fencingEpoch: action.fencingEpoch ?? control.epoch,
+              controlEpoch: control.epoch,
             },
             idempotencyKey: `browser-send:${action.actionId}`,
           });

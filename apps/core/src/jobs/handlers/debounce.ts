@@ -1,6 +1,6 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { Database, TurnRepository, JobRepository, OutboxRepository, EventRepository } from "@messenger/db";
-import { conversations, channelAccounts, ReplyPolicyService } from "@messenger/db";
+import { conversations, channelAccounts, ReplyPolicyService, ConversationControlService } from "@messenger/db";
 import { eq, and } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
@@ -23,6 +23,7 @@ export interface DebounceHandlerDeps {
 export function createDebounceHandler(deps: DebounceHandlerDeps) {
   const { db, turnRepo, jobRepo, outboxRepo, eventRepo, broadcaster } = deps;
   const replyPolicyService = deps.replyPolicyService ?? new ReplyPolicyService(db);
+  const controlService = new ConversationControlService(db);
 
   return async function handleDebounce(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as DebounceJobPayload;
@@ -61,10 +62,63 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
       return;
     }
 
-    // 3. Check manual mode or blocked
-    if (conv.manualMode || conv.isBlocked) {
+    // 3. Check reply control, manual mode, human hold, or blocked
+    // Older in-memory test doubles do not implement transactions. Production always does.
+    const control = typeof (db as unknown as { transaction?: unknown }).transaction === "function"
+      ? await controlService.expireSessionIfDue(conversationId)
+      : {
+          mode: ((conv.replyControlMode || "AUTO") as "AUTO" | "HUMAN_DRAFT" | "HUMAN_SESSION" | "HUMAN_PINNED" | "REVIEW_HOLD"),
+          epoch: conv.controlEpoch ?? 0,
+          holdUntil: conv.humanHoldUntil ?? null,
+          suppressedThroughInboundVersion: conv.suppressedThroughInboundVersion ?? 0,
+        };
+    if (!control) return;
+    if (control.mode !== "AUTO" || inboundVersion <= control.suppressedThroughInboundVersion) {
       console.log(
-        `[DebounceHandler] Conversation ${conversationId} is manualMode or blocked. Skipping AI generation.`
+        `[DebounceHandler] Conversation ${conversationId} is controlled by ${control.mode} or inbound v${inboundVersion} is suppressed through v${control.suppressedThroughInboundVersion}. Skipping.`
+      );
+      return;
+    }
+
+    if (conv.isBlocked) {
+      console.log(`[DebounceHandler] Conversation ${conversationId} is blocked. Skipping.`);
+      return;
+    }
+
+    if (conv.humanHoldUntil) {
+      const now = new Date();
+      if (conv.humanHoldUntil > now) {
+        console.log(
+          `[DebounceHandler] Conversation ${conversationId} is in human hold until ${conv.humanHoldUntil.toISOString()}. Skipping AI generation.`
+        );
+        return;
+      }
+      // Hold has expired. Verify if this inbound is strictly newer than suppressed watermark
+      if (inboundVersion <= (conv.suppressedThroughInboundVersion ?? 0)) {
+        console.log(
+          `[DebounceHandler] Conversation ${conversationId} human hold expired, but inbound v${inboundVersion} is at or below watermark (${conv.suppressedThroughInboundVersion}). No replay of stale messages.`
+        );
+        return;
+      }
+      // New inbound after expiry: automatically clear temporary human hold
+      console.log(
+        `[DebounceHandler] Conversation ${conversationId} human hold expired and received new inbound v${inboundVersion}. Clearing hold.`
+      );
+      await db
+        .update(conversations)
+        .set({
+          manualMode: false,
+          humanHoldUntil: null,
+          status: "WAITING_CUSTOMER",
+          updatedAt: new Date(),
+        })
+        .where(eq(conversations.id, conversationId));
+      conv.manualMode = false;
+    }
+
+    if (conv.manualMode) {
+      console.log(
+        `[DebounceHandler] Conversation ${conversationId} is in manualMode. Skipping AI generation.`
       );
       return;
     }
@@ -164,6 +218,7 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
         channelAccountId,
         conversationId,
         inboundVersion,
+        controlEpoch: control.epoch,
         turnId: turn.id,
       },
       idempotencyKey: `ai:${channelAccountId}:${conversationId}:${inboundVersion}`,

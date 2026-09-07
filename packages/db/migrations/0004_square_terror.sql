@@ -1,0 +1,2 @@
+ALTER TABLE "conversations" ADD COLUMN "human_hold_until" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "conversations" ADD COLUMN "suppressed_through_inbound_version" integer DEFAULT 0 NOT NULL;

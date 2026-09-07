@@ -61,13 +61,13 @@ export const SystemSettingsBaseShape = {
 
 // Default values for full system settings
 export const SystemSettingsDefaults = {
-  debounceMs: 3000,
+  debounceMs: 8000,
   stickyWindowMs: 45000,
   stickyMaxTurns: 3,
   stickyMaxDurationMs: 120000,
   aiModel: "auto/best-chat",
   aiTimeoutMs: 20000,
-  aiMaxResponseCount: 3,
+  aiMaxResponseCount: 1,
   aiTotalMaxChars: 480,
   aiSystemPersona:
     "Bạn là nhân viên CSKH duy nhất, nhiệt tình, lịch sự, ngắn gọn và trung thực. Chỉ trả lời dựa trên thông tin được cung cấp, không bịa thông tin về giá, đơn hàng, chính sách nếu chưa có dữ liệu rõ ràng. Nếu thiếu dữ kiện cần thiết, hãy lịch sự hỏi đúng 1 câu tối thiểu.",

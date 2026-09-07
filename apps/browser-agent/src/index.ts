@@ -10,6 +10,7 @@ import {
   IncidentRepository,
   JobRepository,
   TurnRepository,
+  ConversationControlService,
   channelAccounts,
 } from "@messenger/db";
 import { eq } from "drizzle-orm";
@@ -23,6 +24,7 @@ async function main() {
   const sql = getSql();
 
   const convRepo = new ConversationRepository(db);
+  const controlService = new ConversationControlService(db);
   const outboundRepo = new OutboundRepository(db);
   const eventRepo = new EventRepository(db);
   const settingsRepo = new SettingsRepository(db);
@@ -220,6 +222,66 @@ async function main() {
       console.warn("[Browser Agent] Failed to emit browser_cancel_typing notification:", err);
     }
   });
+
+  // Wire external human outbound listener (detects replies sent on phone/native Messenger)
+  if (typeof adapter.onExternalOutbound === "function") {
+    adapter.onExternalOutbound(async (outbound) => {
+      console.log(
+        `[Browser Agent] External human outbound detected in thread ${outbound.threadId}: "${outbound.text.slice(0, 30)}..."`
+      );
+      try {
+        const convResult = await convRepo.getConversationByThread(
+          env.DEFAULT_CHANNEL_ACCOUNT_ID,
+          outbound.threadId
+        );
+        if (!convResult) {
+          console.warn(
+            `[Browser Agent] No conversation matched for external outbound thread ${outbound.threadId}`
+          );
+          return;
+        }
+
+        const convId = convResult.conversation.id;
+
+        // 1. Give the observed human response a 30-minute control session.
+        const control = await controlService.acquireSession(convId, {
+          outboundRef: `messenger:${outbound.threadId}:${outbound.timestamp}`,
+          holdDurationMs: 30 * 60 * 1000,
+        });
+
+        // 2. Cancel typing immediately; the control transaction cancels queued AI actions.
+        senderWorker.cancelActiveTyping(convId, Number.MAX_SAFE_INTEGER);
+        try {
+          await sql.notify(
+            "browser_cancel_typing",
+            JSON.stringify({
+              channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+              conversationId: convId,
+              inboundVersion: Number.MAX_SAFE_INTEGER,
+              controlEpoch: control.epoch,
+            })
+          );
+        } catch (notifyErr) {
+          console.warn("[Browser Agent] Failed to emit cancel typing for external outbound:", notifyErr);
+        }
+
+        // 3. Record event
+        await eventRepo.recordEvent({
+          channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+          conversationId: convId,
+          type: "MANUAL_TAKEOVER",
+          actor: "HUMAN_MESSENGER",
+          payload: {
+            text: outbound.text.slice(0, 100),
+            detectedAt: new Date(outbound.timestamp).toISOString(),
+            holdDurationMinutes: 30,
+          },
+        });
+      } catch (err) {
+        console.error("[Browser Agent] Error handling external outbound:", err);
+      }
+    });
+  }
 
   const HEARTBEAT_FILE = "/tmp/healthy";
   const heartbeatInterval = setInterval(async () => {

@@ -19,6 +19,15 @@ export const ConversationStatusSchema = z.enum([
 ]);
 export type ConversationStatus = z.infer<typeof ConversationStatusSchema>;
 
+export const ReplyControlModeSchema = z.enum([
+  "AUTO",
+  "HUMAN_DRAFT",
+  "HUMAN_SESSION",
+  "HUMAN_PINNED",
+  "REVIEW_HOLD",
+]);
+export type ReplyControlMode = z.infer<typeof ReplyControlModeSchema>;
+
 export const ChannelStatusSchema = z.enum([
   "RUNNING",
   "PAUSED",

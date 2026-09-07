@@ -53,6 +53,7 @@ export const ConversationDetailPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reconcilingId, setReconcilingId] = useState<string | null>(null);
+  const [acquiringDraft, setAcquiringDraft] = useState(false);
 
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
@@ -158,6 +159,22 @@ export const ConversationDetailPage: React.FC = () => {
     } catch (err: unknown) {
       alert((err as Error).message);
       setTakeoverCtx(createTakeoverContext(false));
+    }
+  };
+
+  const handleAcquireDraft = async () => {
+    if (!conversationId) return;
+    setAcquiringDraft(true);
+    try {
+      await apiFetch(`/api/inbox/${conversationId}/draft-lease`, {
+        method: "POST",
+        body: JSON.stringify({ leaseId: crypto.randomUUID() }),
+      });
+      await loadDetails();
+    } catch (err: unknown) {
+      alert((err as Error).message);
+    } finally {
+      setAcquiringDraft(false);
     }
   };
 
@@ -435,6 +452,24 @@ export const ConversationDetailPage: React.FC = () => {
               <UserCheck size={15} /> Tiếp quản thủ công
             </button>
           )}
+
+          <button
+            onClick={handleAcquireDraft}
+            disabled={acquiringDraft || Boolean(conv.manualMode)}
+            title="Giữ bot im lặng trong 60 giây khi bạn bắt đầu soạn"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: "8px 12px",
+              backgroundColor: "#f8fafc",
+              border: "1px solid #cbd5e1",
+              borderRadius: "6px",
+              cursor: acquiringDraft || conv.manualMode ? "not-allowed" : "pointer",
+            }}
+          >
+            <User size={15} /> {acquiringDraft ? "Đang giữ..." : "Tôi đang soạn"}
+          </button>
 
           <button
             onClick={() => loadDetails()}

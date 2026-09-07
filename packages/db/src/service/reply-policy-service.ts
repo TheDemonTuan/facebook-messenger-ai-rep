@@ -126,7 +126,11 @@ export class ReplyPolicyService {
         if (convRows.length > 0 && convRows[0]) {
           const conv = convRows[0];
           isBlocked = conv.isBlocked;
-          manualMode = conv.manualMode;
+          const isHumanHold = Boolean(
+            (conv as { humanHoldUntil?: Date | null }).humanHoldUntil &&
+              new Date((conv as { humanHoldUntil?: Date | null }).humanHoldUntil!) > now
+          );
+          manualMode = Boolean(conv.manualMode || isHumanHold);
           if (conv.threadKind && conv.threadKind !== "UNKNOWN") {
             threadKind = conv.threadKind as ThreadKind;
           }
@@ -526,13 +530,17 @@ export class ReplyPolicyService {
       botProfileUrl,
     };
 
+    const isHumanHold = Boolean(
+      (conv as { humanHoldUntil?: Date | null }).humanHoldUntil &&
+        new Date((conv as { humanHoldUntil?: Date | null }).humanHoldUntil!) > now
+    );
     const threadContext = {
       id: params.conversationId ?? undefined,
       externalThreadId,
       kind: ((conv.threadKind as ThreadKind) || rawPayload.threadKind || "UNKNOWN"),
       reliability: ((conv.reliability as ClassificationReliability) || rawPayload.threadReliability || "UNVERIFIED"),
       isBlocked: Boolean(conv.isBlocked),
-      manualMode: Boolean(conv.manualMode),
+      manualMode: Boolean(conv.manualMode || isHumanHold),
       evidence: rawPayload.threadEvidence ?? [],
     };
 

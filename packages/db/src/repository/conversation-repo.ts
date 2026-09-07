@@ -1,4 +1,4 @@
-import { eq, and, desc, sql, gte, isNull, inArray, notInArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, gte, isNull, inArray, notInArray } from "drizzle-orm";
 import type { Database } from "../client.js";
 import {
   customers,
@@ -723,6 +723,7 @@ export class ConversationRepository {
       .set({
         manualMode,
         status,
+        humanHoldUntil: manualMode ? undefined : null,
         updatedAt: new Date(),
       })
       .where(eq(conversations.id, conversationId));
@@ -733,6 +734,69 @@ export class ConversationRepository {
         .delete(conversationQueue)
         .where(eq(conversationQueue.conversationId, conversationId));
     }
+  }
+
+  async setHumanHold(conversationId: string, holdDurationMs: number = 30 * 60 * 1000): Promise<void> {
+    const holdUntil = new Date(Date.now() + holdDurationMs);
+    const [conv] = await this.db
+      .select({ inboundVersion: conversations.inboundVersion })
+      .from(conversations)
+      .where(eq(conversations.id, conversationId))
+      .limit(1);
+
+    const currentVersion = conv?.inboundVersion ?? 0;
+
+    await this.db
+      .update(conversations)
+      .set({
+        manualMode: true,
+        status: "MANUAL",
+        humanHoldUntil: holdUntil,
+        suppressedThroughInboundVersion: currentVersion,
+        updatedAt: new Date(),
+      })
+      .where(eq(conversations.id, conversationId));
+
+    await this.db
+      .delete(conversationQueue)
+      .where(eq(conversationQueue.conversationId, conversationId));
+  }
+
+  async clearHumanHold(conversationId: string): Promise<void> {
+    await this.db
+      .update(conversations)
+      .set({
+        manualMode: false,
+        status: "WAITING_CUSTOMER",
+        humanHoldUntil: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(conversations.id, conversationId));
+  }
+
+  async getConversationByThread(channelAccountId: string, threadIdOrRef: string) {
+    const trimmed = threadIdOrRef.trim();
+    const rows = await this.db
+      .select({
+        conversation: conversations,
+        customer: customers,
+      })
+      .from(conversations)
+      .leftJoin(customers, eq(conversations.customerId, customers.id))
+      .where(
+        and(
+          eq(conversations.channelAccountId, channelAccountId),
+          or(
+            eq(conversations.externalThreadId, trimmed),
+            eq(conversations.externalThreadRef, trimmed),
+            sql`${conversations.externalThreadRef} LIKE ${`%${trimmed}%`}`
+          )
+        )
+      )
+      .limit(1);
+
+    if (rows.length === 0 || !rows[0]) return null;
+    return rows[0];
   }
 
   async updateSummary(conversationId: string, summary: string, expectedVersion: number): Promise<boolean> {
