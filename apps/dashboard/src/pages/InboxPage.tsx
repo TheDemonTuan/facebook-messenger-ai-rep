@@ -6,6 +6,7 @@ import { buildInboxQuery, mergePaginatedConversations } from "../helpers/paginat
 import { shouldRefetchInbox } from "../helpers/sse-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import { formatDateTime } from "../helpers/date-helpers";
+import { MessagePreviewRenderer } from "../components/messages";
 import {
   MessageSquare,
   Clock,
@@ -284,10 +285,12 @@ export const InboxPage: React.FC = () => {
                     {item.latestInboundMessage ? (
                       <>
                         <div
-                          title={item.latestInboundMessage.text}
                           style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "560px" }}
                         >
-                          {item.latestInboundMessage.text}
+                          <MessagePreviewRenderer
+                            message={item.latestInboundMessage}
+                            maxLength={100}
+                          />
                         </div>
                         <span style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "2px", fontSize: "0.74rem" }}>
                           <Clock size={12} /> {formatDateTime(item.latestInboundMessage.timestamp)}

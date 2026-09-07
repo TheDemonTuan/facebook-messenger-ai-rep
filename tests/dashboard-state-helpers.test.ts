@@ -220,13 +220,72 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
       expect(merged[2]?.id).toBe("m-2");
     });
 
-    it("extracts next cursor timestamp when page is full", () => {
+    it("breaks ties deterministically on equal timestamp using message id", () => {
+      const sameTime = "2026-09-05T10:00:00.000Z";
+      const mb: MessageItem = {
+        id: "msg-b",
+        direction: "INBOUND",
+        actor: "SYSTEM",
+        text: "Second",
+        inboundVersion: 1,
+        responseIndex: 0,
+        timestamp: sameTime,
+      };
+      const ma: MessageItem = {
+        id: "msg-a",
+        direction: "INBOUND",
+        actor: "SYSTEM",
+        text: "First",
+        inboundVersion: 1,
+        responseIndex: 0,
+        timestamp: sameTime,
+      };
+
+      const merged = mergePaginatedMessages([mb], [ma]);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.id).toBe("msg-a");
+      expect(merged[1]?.id).toBe("msg-b");
+    });
+
+    it("updates existing messages when incoming has higher contentRevision", () => {
+      const m1v1: MessageItem = {
+        id: "m-1",
+        direction: "INBOUND",
+        actor: "SYSTEM",
+        text: "Pending audio",
+        inboundVersion: 1,
+        responseIndex: 0,
+        timestamp: "2026-09-05T10:00:00.000Z",
+        contentRevision: 1,
+        contentStatus: "PENDING",
+      };
+      const m1v2: MessageItem = {
+        id: "m-1",
+        direction: "INBOUND",
+        actor: "SYSTEM",
+        text: "Transcribed audio",
+        inboundVersion: 1,
+        responseIndex: 0,
+        timestamp: "2026-09-05T10:00:00.000Z",
+        contentRevision: 2,
+        contentStatus: "READY",
+      };
+
+      const merged = mergePaginatedMessages([m1v1], [m1v2]);
+      expect(merged).toHaveLength(1);
+      expect(merged[0]?.contentRevision).toBe(2);
+      expect(merged[0]?.contentStatus).toBe("READY");
+      expect(merged[0]?.text).toBe("Transcribed audio");
+    });
+
+    it("extracts next composite cursor timestamp__id when page is full", () => {
       const items = [
         { id: "1", createdAt: "2026-09-05T10:00:00.000Z" },
         { id: "2", createdAt: "2026-09-05T09:00:00.000Z" },
       ];
 
       expect(extractNextCursor(items, 2, (i) => i.createdAt)).toBe("2026-09-05T09:00:00.000Z");
+      expect(extractNextCursor(items, 2, (i) => i.createdAt, (i) => i.id)).toBe("2026-09-05T09:00:00.000Z__2");
       // Not enough items for next page:
       expect(extractNextCursor(items, 3, (i) => i.createdAt)).toBeNull();
     });
@@ -346,6 +405,8 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
   describe("5. SSE Event Routing & Wakeup Matching", () => {
     it("routes inbox events accurately", () => {
       expect(shouldRefetchInbox("inbound:received")).toBe(true);
+      expect(shouldRefetchInbox("message:updated")).toBe(true);
+      expect(shouldRefetchInbox("outbox:message_updated")).toBe(true);
       expect(shouldRefetchInbox("conversation:takeover")).toBe(true);
       expect(shouldRefetchInbox("conversation:manual-send")).toBe(true);
       expect(shouldRefetchInbox("unrelated:event")).toBe(false);
@@ -354,6 +415,12 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
     it("routes conversation detail events matching target conversationId", () => {
       expect(
         shouldRefetchConversationDetail("inbound:received", "conv-1", { conversationId: "conv-1" })
+      ).toBe(true);
+      expect(
+        shouldRefetchConversationDetail("message:updated", "conv-1", { conversationId: "conv-1" })
+      ).toBe(true);
+      expect(
+        shouldRefetchConversationDetail("outbox:message_updated", "conv-1", { conversationId: "conv-1" })
       ).toBe(true);
       // Different conversation ID ignored:
       expect(

@@ -119,15 +119,45 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           ? await db
               .selectDistinctOn([messages.conversationId], {
                 conversationId: messages.conversationId,
+                id: messages.id,
                 text: messages.text,
                 timestamp: messages.timestamp,
+                content: messages.content,
+                contentStatus: messages.contentStatus,
+                contentRevision: messages.contentRevision,
+                eventKind: messages.eventKind,
+                timestampProvenance: messages.timestampProvenance,
+                timestampPrecision: messages.timestampPrecision,
               })
               .from(messages)
               .where(and(inArray(messages.conversationId, conversationIds), eq(messages.direction, "INBOUND")))
               .orderBy(messages.conversationId, desc(messages.timestamp), desc(messages.createdAt))
           : [];
         const latestInboundByConversation = new Map(
-          latestInboundRows.map((message) => [message.conversationId, message])
+          latestInboundRows.map((message) => {
+            let resolvedParts: MessagePart[] = [];
+            const contentObj = message.content as { parts?: MessagePart[] } | null;
+            if (contentObj && Array.isArray(contentObj.parts) && contentObj.parts.length > 0) {
+              resolvedParts = contentObj.parts;
+            } else if (message.text && message.text.trim().length > 0) {
+              resolvedParts = [{ type: "TEXT", text: message.text }];
+            }
+
+            return [
+              message.conversationId,
+              {
+                id: message.id,
+                text: message.text,
+                timestamp: message.timestamp,
+                parts: resolvedParts,
+                contentStatus: message.contentStatus || "READY",
+                contentRevision: message.contentRevision ?? 1,
+                eventKind: message.eventKind || "MESSAGE_CREATED",
+                timestampProvenance: message.timestampProvenance || "OBSERVED",
+                timestampPrecision: message.timestampPrecision || "UNKNOWN",
+              },
+            ];
+          })
         );
 
         const safeRows = rows.map((r) => {
@@ -277,9 +307,17 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           }
         }
 
+        const toSafeIso = (d: unknown): string | null => {
+          if (d === null || d === undefined) return null;
+          const parsed = d instanceof Date ? d : new Date(d as string | number);
+          return isNaN(parsed.getTime()) ? null : parsed.toISOString();
+        };
+
         const chronologicalMessages = [...convMessages]
           .sort((a, b) => {
-            const timeDiff = new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+            const timeA = new Date(a.timestamp).getTime();
+            const timeB = new Date(b.timestamp).getTime();
+            const timeDiff = (isNaN(timeA) ? 0 : timeA) - (isNaN(timeB) ? 0 : timeB);
             if (timeDiff !== 0) return timeDiff;
             return a.id.localeCompare(b.id);
           })
@@ -319,12 +357,6 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             const contentRevision = msg.contentRevision ?? 1;
             const eventKind = msg.eventKind || "MESSAGE_CREATED";
 
-            const toIsoOrNull = (value: Date | string | null | undefined) => {
-              if (!value) return null;
-              const date = value instanceof Date ? value : new Date(value);
-              return Number.isNaN(date.getTime()) ? null : date.toISOString();
-            };
-
             return {
               ...msg,
               parts: resolvedParts,
@@ -338,9 +370,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
                 isVerified: part?.isVerified ?? false,
               },
               time: {
-                eventAt: toIsoOrNull(msg.eventTimestamp),
-                observedAt: toIsoOrNull(msg.observedTimestamp) ?? toIsoOrNull(msg.timestamp),
-                displayAt: toIsoOrNull(msg.timestamp),
+                eventAt: toSafeIso(msg.eventTimestamp),
+                observedAt: toSafeIso(msg.observedTimestamp) ?? toSafeIso(msg.timestamp),
+                displayAt: toSafeIso(msg.timestamp),
                 source: (msg.timestampProvenance as "FACEBOOK_EVENT" | "OBSERVED" | "SYSTEM" | "UNKNOWN") || "OBSERVED",
                 precision: msg.timestampPrecision || "UNKNOWN",
               },
@@ -353,13 +385,10 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           });
 
         const oldestMessage = convMessages[convMessages.length - 1];
-        const oldestTimestamp = oldestMessage ? new Date(oldestMessage.timestamp) : null;
+        const oldestIso = oldestMessage ? toSafeIso(oldestMessage.timestamp) : null;
         const nextMessageCursor =
-          convMessages.length >= messageLimit &&
-          oldestMessage &&
-          oldestTimestamp &&
-          !Number.isNaN(oldestTimestamp.getTime())
-            ? `${oldestTimestamp.toISOString()}__${oldestMessage.id}`
+          convMessages.length >= messageLimit && oldestMessage && oldestIso
+            ? `${oldestIso}__${oldestMessage.id}`
             : null;
 
         return reply.send(

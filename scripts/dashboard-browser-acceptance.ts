@@ -67,6 +67,11 @@ async function mockApi(page: Page): Promise<void> {
         {
           conversation: { id: conversationId, status: "WAITING", manualMode, inboundVersion: 1, updatedAt: now },
           customer: { name: "Khách thử nghiệm", externalCustomerId: "customer-1" },
+          latestInboundMessage: {
+            text: "Cần tư vấn mẫu áo",
+            parts: [{ type: "IMAGE", media: { mediaId: "m-1" } }],
+            timestamp: now,
+          },
         },
       ];
       return json({
@@ -80,7 +85,32 @@ async function mockApi(page: Page): Promise<void> {
       return json({
         conversation: { id: conversationId, status: "WAITING", manualMode, inboundVersion: 1 },
         customer: { name: "Khách thử nghiệm" },
-        messages: [{ id: "message-1", direction: "INBOUND", text: "Xin chào shop", createdAt: now }],
+        messages: [
+          {
+            id: "message-1",
+            direction: "INBOUND",
+            text: "Xin chào shop, mình muốn hỏi sản phẩm này",
+            parts: [
+              { type: "TEXT", text: "Xin chào shop, mình muốn hỏi sản phẩm này" },
+              { type: "IMAGE", media: { mediaId: "img-1", sourceUrl: "https://example.com/test.jpg" } },
+              { type: "VOICE", media: { mediaId: "v-1", durationMs: 12000 }, transcriptRef: "tr-1" },
+            ],
+            contentStatus: "READY",
+            contentRevision: 1,
+            time: {
+              source: "FACEBOOK_EVENT",
+              precision: "MINUTE",
+              eventAt: now,
+            },
+            replyDecision: {
+              action: "GENERATE",
+              reasonCode: "ELIGIBLE",
+              displayLabel: "AI tạo phản hồi",
+            },
+            createdAt: now,
+            timestamp: now,
+          },
+        ],
         aiRuns: [],
         outboundActions: [],
         events: [],
@@ -249,6 +279,8 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   const convDetailText = await page.locator("main").innerText();
   assert(convDetailText.includes("Chi tiết kỹ thuật"), `${name}: missing collapsible technical details block`);
   assert(!convDetailText.includes("Inbound Version:"), `${name}: raw 'Inbound Version:' exposed in default detail view`);
+  assert(convDetailText.includes("Tin nhắn thoại"), `${name}: missing rich voice component in conversation detail`);
+  assert(convDetailText.includes("AI tạo phản hồi"), `${name}: missing decision badge in conversation detail`);
 
   await page.getByRole("button", { name: /tiếp quản thủ công/i }).click();
   const composer = page.locator('input[placeholder*="Nhập tin nhắn"]').first();

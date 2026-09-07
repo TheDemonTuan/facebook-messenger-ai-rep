@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { AiRunItem } from "../types";
 import { formatDateTime, formatTime } from "../helpers/date-helpers";
+import { MessageContentRenderer } from "../components/messages";
 import {
   Cpu,
   RefreshCw,
@@ -397,7 +398,9 @@ export const AiLogsPage: React.FC = () => {
                     <div style={{ fontWeight: "600", fontSize: "0.75rem", color: isUser ? "#1d4ed8" : isSystem ? "#475569" : "#15803d", marginBottom: "2px" }}>
                       {isUser ? "Khách hàng" : isSystem ? "Hướng dẫn hệ thống" : "Trợ lý phản hồi trước"}:
                     </div>
-                    <div style={{ whiteSpace: "pre-wrap", color: "#1e293b" }}>{m.content}</div>
+                    <MessageContentRenderer
+                      text={typeof m.content === "string" ? m.content : JSON.stringify(m.content)}
+                    />
                   </div>
                 );
               })}
@@ -518,7 +521,7 @@ export const AiLogsPage: React.FC = () => {
                 <div style={{ fontWeight: "600", fontSize: "0.75rem", marginBottom: "4px" }}>
                   Câu phản hồi #{idx + 1}:
                 </div>
-                <div>{msg}</div>
+                <MessageContentRenderer text={msg} />
               </div>
             ))}
           </div>
@@ -1066,7 +1069,7 @@ export const AiLogsPage: React.FC = () => {
           <div style={{ overflowY: "auto", flex: 1 }}>
             {activeRuns.length === 0 ? (
               <div style={{ padding: "32px 16px", textAlign: "center", color: "#94a3b8", fontSize: "0.82rem" }}>
-                Không tìm thấy lượt xử lý nào.
+                Không tìm thấy lượt xử lý AI nào phù hợp bộ lọc.
               </div>
             ) : (
               activeRuns.map((run) => {

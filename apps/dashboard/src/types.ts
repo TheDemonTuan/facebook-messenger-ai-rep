@@ -53,10 +53,159 @@ export interface ConversationItem {
     externalCustomerId?: string | null;
   };
   latestInboundMessage?: {
+    id?: string;
     text: string;
     timestamp: string;
+    parts?: MessagePart[];
+    contentStatus?: ContentStatus;
+    contentRevision?: number;
+    eventKind?: string;
+    timestampProvenance?: string;
+    timestampPrecision?: string;
     skipReason?: SkipReasonInfo | null;
+    replyDecision?: ReplyDecisionInfo | null;
   } | null;
+}
+
+export type ContentStatus =
+  | "PENDING"
+  | "READY"
+  | "PARTIAL"
+  | "UNAVAILABLE"
+  | "UNSUPPORTED"
+  | "QUARANTINED";
+
+export type MediaRole = "ATTACHMENT" | "SHARE_PREVIEW" | "VIDEO_POSTER";
+
+export interface MediaRef {
+  mediaId: string;
+  role?: MediaRole;
+  mimeType?: string;
+  byteSize?: number;
+  width?: number;
+  height?: number;
+  durationMs?: number;
+  status?: ContentStatus;
+  sourceUrl?: string;
+  storagePath?: string;
+  thumbnailRef?: string;
+  fileName?: string;
+}
+
+export interface TextPart {
+  type: "TEXT";
+  text: string;
+}
+
+export interface ImagePart {
+  type: "IMAGE";
+  media: MediaRef;
+  altText?: string;
+}
+
+export interface VoicePart {
+  type: "VOICE";
+  media: MediaRef;
+  transcriptRef?: string;
+  durationMs?: number;
+}
+
+export interface AudioPart {
+  type: "AUDIO";
+  media: MediaRef;
+  transcriptRef?: string;
+  durationMs?: number;
+}
+
+export interface VideoPart {
+  type: "VIDEO";
+  media: MediaRef;
+  posterRef?: string;
+  analysisRef?: string;
+  durationMs?: number;
+}
+
+export interface StickerPart {
+  type: "STICKER";
+  label?: string;
+  media?: MediaRef;
+}
+
+export interface GifPart {
+  type: "GIF";
+  media: MediaRef;
+}
+
+export interface SharePart {
+  type: "SHARE";
+  origin?: "FACEBOOK_GROUP" | "FACEBOOK_POST" | "REEL" | "EXTERNAL" | "UNKNOWN";
+  url?: string;
+  title?: string;
+  previewText?: string;
+  previewMedia?: MediaRef;
+  access?: "PREVIEW_ONLY" | "READABLE" | "UNAVAILABLE" | "UNKNOWN";
+}
+
+export interface FilePart {
+  type: "FILE";
+  media: MediaRef;
+  fileName?: string;
+  byteSize?: number;
+}
+
+export interface LocationPart {
+  type: "LOCATION";
+  label?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface ContactPart {
+  type: "CONTACT";
+  displayName?: string;
+  normalizedFields?: Record<string, string>;
+}
+
+export interface UnknownPart {
+  type: "UNKNOWN";
+  observedLabel?: string;
+}
+
+export type MessagePart =
+  | TextPart
+  | ImagePart
+  | VoicePart
+  | AudioPart
+  | VideoPart
+  | StickerPart
+  | GifPart
+  | SharePart
+  | FilePart
+  | LocationPart
+  | ContactPart
+  | UnknownPart;
+
+export interface MessageTimeDetail {
+  eventAt?: string | null;
+  observedAt?: string | null;
+  displayAt?: string | null;
+  source?: "FACEBOOK_EVENT" | "OBSERVED" | "SYSTEM" | "UNKNOWN";
+  precision?: "MILLISECOND" | "SECOND" | "MINUTE" | "APPROXIMATE" | "UNKNOWN" | string;
+  rawLabel?: string;
+}
+
+export interface ReplyDecisionInfo {
+  action: "SKIP" | "DEFER" | "GENERATE" | "CLARIFY" | "HANDOFF";
+  reasonCode: string;
+  displayLabel: string;
+}
+
+export interface NormalizationInfo {
+  parserVersion?: string;
+  identityQuality?: "VERIFIED" | "UNVERIFIED";
+  directionQuality?: "VERIFIED" | "UNVERIFIED";
+  parseQuality?: "VERIFIED" | "PARTIAL" | "UNVERIFIED";
+  warnings?: string[];
 }
 
 export interface SkipReasonInfo {
@@ -82,6 +231,18 @@ export interface MessageItem {
   senderKind?: string;
   isVerified?: boolean;
   skipReason?: SkipReasonInfo | null;
+  // PR-03/PR-04 rich content fields
+  parts?: MessagePart[];
+  contentStatus?: ContentStatus;
+  contentRevision?: number;
+  eventKind?: string;
+  time?: MessageTimeDetail;
+  replyDecision?: ReplyDecisionInfo | null;
+  normalization?: NormalizationInfo;
+  eventTimestamp?: string | Date | null;
+  observedTimestamp?: string | Date | null;
+  timestampProvenance?: string;
+  timestampPrecision?: string;
 }
 
 export type OutboundActionStatus =

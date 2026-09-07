@@ -57,33 +57,53 @@ export function mergePaginatedConversations(
 
 /**
  * Merge messages without duplicates, keeping chronological order (oldest to newest).
+ * Ties on equal timestamp are deterministically broken using message ID.
+ * Incoming messages with higher or equal contentRevision update existing messages.
  */
 export function mergePaginatedMessages(
   existing: MessageItem[],
   incoming: MessageItem[]
 ): MessageItem[] {
-  const seen = new Set<string>();
-  const merged: MessageItem[] = [];
+  const byId = new Map<string, MessageItem>();
 
-  for (const msg of [...existing, ...incoming]) {
-    if (!seen.has(msg.id)) {
-      seen.add(msg.id);
-      merged.push(msg);
+  for (const msg of existing) {
+    byId.set(msg.id, msg);
+  }
+
+  for (const msg of incoming) {
+    const prev = byId.get(msg.id);
+    if (!prev) {
+      byId.set(msg.id, msg);
+    } else {
+      const prevRev = prev.contentRevision ?? 1;
+      const nextRev = msg.contentRevision ?? 1;
+      if (nextRev >= prevRev) {
+        byId.set(msg.id, {
+          ...prev,
+          ...msg,
+        });
+      }
     }
   }
 
-  return merged.sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-  );
+  return Array.from(byId.values()).sort((a, b) => {
+    const timeA = new Date(a.timestamp || (a.time?.displayAt ?? 0)).getTime();
+    const timeB = new Date(b.timestamp || (b.time?.displayAt ?? 0)).getTime();
+    if (timeA !== timeB) {
+      return timeA - timeB;
+    }
+    return a.id.localeCompare(b.id);
+  });
 }
 
 /**
- * Extract next cursor timestamp from a list of items.
+ * Extract next cursor timestamp or composite cursor from a list of items.
  */
 export function extractNextCursor<T>(
   items: T[],
   limit: number,
-  getTimestamp: (item: T) => string | null | undefined
+  getTimestamp: (item: T) => string | null | undefined,
+  getId?: (item: T) => string | null | undefined
 ): string | null {
   if (items.length < limit) {
     return null;
@@ -91,5 +111,13 @@ export function extractNextCursor<T>(
   const last = items[items.length - 1];
   if (!last) return null;
   const ts = getTimestamp(last);
-  return ts ? new Date(ts).toISOString() : null;
+  if (!ts) return null;
+  const iso = new Date(ts).toISOString();
+  if (getId) {
+    const id = getId(last);
+    if (id) {
+      return `${iso}__${id}`;
+    }
+  }
+  return iso;
 }

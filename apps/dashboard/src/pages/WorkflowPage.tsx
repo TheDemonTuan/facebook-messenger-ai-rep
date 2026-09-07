@@ -15,6 +15,12 @@ import {
   type WorkflowStage,
 } from "../features/workflow/model";
 import {
+  MessageContentRenderer,
+  MessageTimeBadge,
+  MessageStatusBadges,
+  getMessagePreviewSummary,
+} from "../components/messages";
+import {
   RefreshCw,
   Pause,
   Play,
@@ -96,7 +102,10 @@ export const WorkflowPage: React.FC = () => {
     const q = query.trim().toLocaleLowerCase("vi");
     return conversations.filter((item) => {
       const name = (item.customer?.name || item.conversation?.title || "").toLocaleLowerCase("vi");
-      const lastText = (item.latestInboundMessage?.text || "").toLocaleLowerCase("vi");
+      const lastText = (
+        item.latestInboundMessage?.text ||
+        getMessagePreviewSummary(item.latestInboundMessage).text
+      ).toLocaleLowerCase("vi");
       const matchQuery = !q || name.includes(q) || lastText.includes(q);
       if (!matchQuery) return false;
 
@@ -300,7 +309,8 @@ export const WorkflowPage: React.FC = () => {
                 const isSelected = selectedConversationId === id;
                 const needsAtt = itemNeedsAttention(item);
                 const isActive = itemIsActive(item);
-                const previewText = item.latestInboundMessage?.text || "Chưa có tin nhắn mới";
+                const previewSummary = getMessagePreviewSummary(item.latestInboundMessage);
+                const previewText = previewSummary.text || "Chưa có tin nhắn mới";
 
                 return (
                   <button
@@ -527,14 +537,30 @@ export const WorkflowPage: React.FC = () => {
                         <article key={m.id} className="wf-message">
                           <div className="wf-message-meta">
                             <span>{viewData.name}</span>
-                            <time>{formatTime(m.timestamp)}</time>
+                            <MessageTimeBadge
+                              time={m.time}
+                              timestamp={m.timestamp}
+                              eventTimestamp={m.eventTimestamp}
+                              observedTimestamp={m.observedTimestamp}
+                              timestampProvenance={m.timestampProvenance}
+                              timestampPrecision={m.timestampPrecision}
+                            />
                           </div>
-                          <div className="wf-bubble">{m.text}</div>
-                          {m.skipReason && !m.skipReason.eligible && (
-                            <div className="wf-output-note" style={{ textAlign: "left", color: "#a96b20" }}>
-                              Kiểm tra: {m.skipReason.humanReadableReason}
-                            </div>
-                          )}
+                          <div className="wf-bubble">
+                            <MessageContentRenderer
+                              parts={m.parts}
+                              text={m.text}
+                              contentStatus={m.contentStatus}
+                              isOutbound={false}
+                            />
+                          </div>
+                          <MessageStatusBadges
+                            actor={m.actor}
+                            replyDecision={m.replyDecision}
+                            skipReason={m.skipReason}
+                            contentStatus={m.contentStatus}
+                            normalization={m.normalization}
+                          />
                         </article>
                       ))
                     )}
@@ -564,7 +590,12 @@ export const WorkflowPage: React.FC = () => {
                                 {statusText}
                               </span>
                             </div>
-                            <div className="wf-bubble">{a.text}</div>
+                            <div className="wf-bubble">
+                              <MessageContentRenderer
+                                text={a.text}
+                                isOutbound={true}
+                              />
+                            </div>
                           </article>
                         );
                       })
@@ -573,11 +604,27 @@ export const WorkflowPage: React.FC = () => {
                         <article key={m.id} className="wf-message outbound">
                           <div className="wf-message-meta">
                             <span>Nhân viên hỗ trợ</span>
-                            <time>{formatTime(m.timestamp)}</time>
+                            <MessageTimeBadge
+                              time={m.time}
+                              timestamp={m.timestamp}
+                              eventTimestamp={m.eventTimestamp}
+                              observedTimestamp={m.observedTimestamp}
+                              timestampProvenance={m.timestampProvenance}
+                              timestampPrecision={m.timestampPrecision}
+                            />
                           </div>
                           <div className="wf-bubble" style={{ backgroundColor: "#e2e8f0", color: "#1e293b" }}>
-                            {m.text}
+                            <MessageContentRenderer
+                              parts={m.parts}
+                              text={m.text}
+                              contentStatus={m.contentStatus}
+                              isOutbound={true}
+                            />
                           </div>
+                          <MessageStatusBadges
+                            actor={m.actor || "MANUAL_OWNER"}
+                            contentStatus={m.contentStatus}
+                          />
                         </article>
                       ))
                     ) : (

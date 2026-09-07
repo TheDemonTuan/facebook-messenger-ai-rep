@@ -21,6 +21,11 @@ import { useSseWakeup } from "../context/SseContext";
 import { formatTime } from "../helpers/date-helpers";
 import { eventLabel } from "../helpers/event-helpers";
 import {
+  MessageContentRenderer,
+  MessageTimeBadge,
+  MessageStatusBadges,
+} from "../components/messages";
+import {
   ArrowLeft,
   User,
   UserCheck,
@@ -680,7 +685,14 @@ export const ConversationDetailPage: React.FC = () => {
                         </span>
                       )}
                       <span>•</span>
-                      <span>{formatTime(msg.timestamp)}</span>
+                      <MessageTimeBadge
+                        time={msg.time}
+                        timestamp={msg.timestamp}
+                        eventTimestamp={msg.eventTimestamp}
+                        observedTimestamp={msg.observedTimestamp}
+                        timestampProvenance={msg.timestampProvenance}
+                        timestampPrecision={msg.timestampPrecision}
+                      />
                     </div>
 
                     {/* Message bubble */}
@@ -696,35 +708,22 @@ export const ConversationDetailPage: React.FC = () => {
                         wordBreak: "break-word",
                       }}
                     >
-                      {msg.text}
+                      <MessageContentRenderer
+                        parts={msg.parts}
+                        text={msg.text}
+                        contentStatus={msg.contentStatus}
+                        isOutbound={!isInbound}
+                      />
                     </div>
 
-                    {/* Readable Skip Reason Badge */}
-                    {msg.skipReason && !msg.skipReason.eligible && (
-                      <div
-                        style={{
-                          marginTop: "2px",
-                          maxWidth: "80%",
-                          padding: "6px 10px",
-                          borderRadius: "6px",
-                          backgroundColor: "#fef2f2",
-                          border: "1px solid #fecaca",
-                          color: "#991b1b",
-                          fontSize: "0.75rem",
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "2px",
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", gap: "5px", fontWeight: "600" }}>
-                          <AlertTriangle size={12} color="#dc2626" />
-                          <span>Tự động bỏ qua: {msg.skipReason.humanReadableReason}</span>
-                        </div>
-                        <div style={{ fontSize: "0.7rem", color: "#b91c1c" }}>
-                          Bước kiểm tra: {msg.skipReason.precedenceStep} • Mã: {msg.skipReason.reasonCode} {msg.skipReason.evaluationMode && `• Chế độ: ${msg.skipReason.evaluationMode}`}
-                        </div>
-                      </div>
-                    )}
+                    {/* Distinct Badges: Decision, Manual, Waiting, Parse Error */}
+                    <MessageStatusBadges
+                      actor={msg.actor}
+                      replyDecision={msg.replyDecision}
+                      skipReason={msg.skipReason}
+                      contentStatus={msg.contentStatus}
+                      normalization={msg.normalization}
+                    />
                   </div>
                 );
               })

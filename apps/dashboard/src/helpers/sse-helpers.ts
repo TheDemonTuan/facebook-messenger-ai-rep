@@ -4,12 +4,14 @@
 export function shouldRefetchInbox(eventType: string): boolean {
   return [
     "inbound:received",
+    "message:updated",
     "conversation:status",
     "conversation:takeover",
     "conversation:manual-send",
     "conversation:block",
     "outbox:inbound_received",
     "outbox:manual_send",
+    "outbox:message_updated",
   ].includes(eventType);
 }
 
@@ -30,6 +32,7 @@ export function shouldRefetchConversationDetail(
 
   return [
     "inbound:received",
+    "message:updated",
     "conversation:status",
     "conversation:takeover",
     "conversation:manual-send",
@@ -41,6 +44,7 @@ export function shouldRefetchConversationDetail(
     "action:reconciled",
     "outbox:inbound_received",
     "outbox:manual_send",
+    "outbox:message_updated",
     "outbox:ai_generated",
     "outbox:browser_confirmed",
   ].includes(eventType);
