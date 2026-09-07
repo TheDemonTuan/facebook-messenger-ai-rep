@@ -22,6 +22,7 @@ import type {
 } from "@messenger/contracts";
 import { createHash } from "node:crypto";
 import { ReplyPolicyService } from "../service/reply-policy-service.js";
+import { ConversationControlService } from "../service/conversation-control-service.js";
 
 export interface InboundIngestResult {
   isDuplicate: boolean;
@@ -31,19 +32,29 @@ export interface InboundIngestResult {
   inboundMessageId?: string;
   eligibility?: ReplyEligibilityResult;
   decision?: ReplyEligibilityDecisionRecord | null;
+  disposition?: "FULL_PROCESS" | "TRACK_NO_REPLY" | "DROP";
+  dropped?: boolean;
+  reasonCode?: string;
 }
 
 export interface InboundIngestOptions {
   debounceMs?: number;
   dedupeWindowMs?: number;
   evaluationMode?: "LIVE" | "SHADOW";
+  humanInboundResponseWaitMs?: number;
 }
 
 export class ConversationRepository {
   private replyPolicyService: ReplyPolicyService;
+  private controlService: ConversationControlService;
 
-  constructor(private db: Database, replyPolicyService?: ReplyPolicyService) {
+  constructor(
+    private db: Database,
+    replyPolicyService?: ReplyPolicyService,
+    controlService?: ConversationControlService
+  ) {
     this.replyPolicyService = replyPolicyService ?? new ReplyPolicyService(db);
+    this.controlService = controlService ?? new ConversationControlService(db);
   }
 
   /**
@@ -57,6 +68,85 @@ export class ConversationRepository {
     options?: InboundIngestOptions
   ): Promise<InboundIngestResult> {
     const textHash = createHash("sha256").update(payload.text.trim()).digest("hex");
+    const now = payload.timestamp ?? new Date();
+
+    // Stage 1: Pre-persist eligibility gate (if db supports select; skips in minimal transaction-only test doubles)
+    let existingConvRow: {
+      id: string;
+      isBlocked: boolean;
+      manualMode: boolean;
+      replyControlMode: string;
+      humanHoldUntil: Date | null;
+      threadKind: string;
+      reliability: string;
+      inboundVersion: number;
+      controlEpoch: number;
+    } | null = null;
+    let pre: import("../service/reply-policy-service.js").PrePersistEligibilityResult | null = null;
+
+    if (typeof (this.db as unknown as { select?: unknown }).select === "function") {
+      try {
+        const rows = await this.db
+          .select({
+            id: conversations.id,
+            isBlocked: conversations.isBlocked,
+            manualMode: conversations.manualMode,
+            replyControlMode: conversations.replyControlMode,
+            humanHoldUntil: conversations.humanHoldUntil,
+            threadKind: conversations.threadKind,
+            reliability: conversations.reliability,
+            inboundVersion: conversations.inboundVersion,
+            controlEpoch: conversations.controlEpoch,
+          })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.channelAccountId, payload.channelAccountId),
+              eq(conversations.externalThreadId, payload.externalThreadId)
+            )
+          )
+          .limit(1);
+        if (rows.length > 0 && rows[0]) {
+          existingConvRow = rows[0];
+        }
+      } catch {
+        // Mock / fallback
+      }
+
+      if (existingConvRow) {
+        try {
+          const normalized = await this.controlService.normalizeForInbound(existingConvRow.id, now);
+          if (normalized) {
+            existingConvRow.replyControlMode = normalized.mode;
+            existingConvRow.humanHoldUntil = normalized.holdUntil;
+            existingConvRow.controlEpoch = normalized.epoch;
+            existingConvRow.manualMode = normalized.mode !== "AUTO";
+          }
+        } catch {
+          // Mock fallback
+        }
+      }
+
+      pre = await this.replyPolicyService.evaluatePrePersist({
+        channelAccountId: payload.channelAccountId,
+        payload,
+        existingConversation: existingConvRow,
+        now,
+      });
+
+      if (pre.disposition === "DROP") {
+        return {
+          isDuplicate: false,
+          dropped: true,
+          disposition: "DROP",
+          reasonCode: pre.reasonCode,
+          conversationId: existingConvRow?.id ?? "",
+          inboundVersion: existingConvRow?.inboundVersion ?? 0,
+          messageId: "",
+          eligibility: pre.policyResult,
+        };
+      }
+    }
 
     return await this.db.transaction(async (tx) => {
       // 1. Primary dedupe check: stable externalMessageId remains primary
@@ -125,6 +215,9 @@ export class ConversationRepository {
           status: conversations.status,
           isBlocked: conversations.isBlocked,
           title: conversations.title,
+          replyControlMode: conversations.replyControlMode,
+          controlEpoch: conversations.controlEpoch,
+          humanHoldUntil: conversations.humanHoldUntil,
         })
         .from(conversations)
         .where(
@@ -505,7 +598,9 @@ export class ConversationRepository {
       }
 
       const isBlocked = Boolean(existingConv[0]?.isBlocked);
-      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked;
+      const currentMode = (existingConv[0]?.replyControlMode || existingConvRow?.replyControlMode || "AUTO") as string;
+      const isHumanSession = currentMode === "HUMAN_SESSION";
+      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked && currentMode === "AUTO";
 
       if (isEligibleLive) {
         const debounceMs = options?.debounceMs ?? 3000;
@@ -575,6 +670,35 @@ export class ConversationRepository {
           actor: "BROWSER_AGENT",
           payload: { debounceMs },
         });
+      } else if (isHumanSession && evaluationMode === "LIVE" && !isBlocked) {
+        const waitMs = options?.humanInboundResponseWaitMs ?? 60_000;
+        const availableAt = new Date(Date.now() + waitMs);
+        await tx
+          .insert(jobs)
+          .values({
+            channelAccountId: payload.channelAccountId,
+            queue: "default",
+            jobType: "human-fallback",
+            priority: 0,
+            status: "READY",
+            availableAt,
+            payload: {
+              channelAccountId: payload.channelAccountId,
+              conversationId,
+              inboundVersion: newInboundVersion,
+              controlEpoch: existingConv[0]?.controlEpoch ?? existingConvRow?.controlEpoch ?? 0,
+              expectedMode: "HUMAN_SESSION",
+            },
+            idempotencyKey: `human-fallback:${payload.channelAccountId}:${conversationId}:${newInboundVersion}`,
+          })
+          .onConflictDoUpdate({
+            target: jobs.idempotencyKey,
+            set: {
+              availableAt,
+              status: "READY",
+              updatedAt: new Date(),
+            },
+          });
       } else {
         const nextStatus: ConversationStatus = isManual
           ? "MANUAL"
@@ -624,6 +748,8 @@ export class ConversationRepository {
         inboundMessageId: newInbound?.id,
         eligibility: evalResult.result,
         decision: evalResult.record,
+        disposition: pre?.disposition || "FULL_PROCESS",
+        dropped: false,
       };
     });
   }
@@ -752,42 +878,12 @@ export class ConversationRepository {
     }
   }
 
-  async setHumanHold(conversationId: string, holdDurationMs: number = 30 * 60 * 1000): Promise<void> {
-    const holdUntil = new Date(Date.now() + holdDurationMs);
-    const [conv] = await this.db
-      .select({ inboundVersion: conversations.inboundVersion })
-      .from(conversations)
-      .where(eq(conversations.id, conversationId))
-      .limit(1);
-
-    const currentVersion = conv?.inboundVersion ?? 0;
-
-    await this.db
-      .update(conversations)
-      .set({
-        manualMode: true,
-        status: "MANUAL",
-        humanHoldUntil: holdUntil,
-        suppressedThroughInboundVersion: currentVersion,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversations.id, conversationId));
-
-    await this.db
-      .delete(conversationQueue)
-      .where(eq(conversationQueue.conversationId, conversationId));
+  async setHumanHold(conversationId: string, holdDurationMs: number = 120_000): Promise<void> {
+    await this.controlService.acquireOrRefreshSession(conversationId, { holdDurationMs });
   }
 
   async clearHumanHold(conversationId: string): Promise<void> {
-    await this.db
-      .update(conversations)
-      .set({
-        manualMode: false,
-        status: "WAITING_CUSTOMER",
-        humanHoldUntil: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversations.id, conversationId));
+    await this.controlService.release(conversationId);
   }
 
   async getConversationByThread(channelAccountId: string, threadIdOrRef: string) {

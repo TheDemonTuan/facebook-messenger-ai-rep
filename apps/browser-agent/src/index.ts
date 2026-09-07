@@ -195,6 +195,10 @@ async function main() {
       console.log(`[Browser Agent] Deduplicated message ${inbound.externalMessageId}`);
       return;
     }
+    if (result.dropped) {
+      console.log(`[Browser Agent] Inbound message DROPPED by eligibility-first gate (${result.reasonCode})`);
+      return;
+    }
 
     if (result.eligibility?.eligible) {
       console.log(`[Browser Agent] Inbound message is ELIGIBLE for reply: debounce scheduled (v${result.inboundVersion})`);
@@ -243,10 +247,21 @@ async function main() {
 
         const convId = convResult.conversation.id;
 
-        // 1. Give the observed human response a 30-minute control session.
-        const control = await controlService.acquireSession(convId, {
+        // 1. Give the observed human response a configurable control session from settings.
+        let holdDurationMs = 120_000;
+        let maxSessionMs = 600_000;
+        try {
+          const s = await settingsRepo.getSettings(env.DEFAULT_CHANNEL_ACCOUNT_ID);
+          if (s?.settings?.humanOutboundGraceMs) holdDurationMs = s.settings.humanOutboundGraceMs;
+          if (s?.settings?.humanSessionMaxMs) maxSessionMs = s.settings.humanSessionMaxMs;
+        } catch (err) {
+          console.warn("[Browser Agent] Failed to read settings for human hold, using default 120s:", err);
+        }
+
+        const control = await controlService.acquireOrRefreshSession(convId, {
           outboundRef: `messenger:${outbound.threadId}:${outbound.timestamp}`,
-          holdDurationMs: 30 * 60 * 1000,
+          holdDurationMs,
+          maxSessionMs,
         });
 
         // 2. Cancel typing immediately; the control transaction cancels queued AI actions.

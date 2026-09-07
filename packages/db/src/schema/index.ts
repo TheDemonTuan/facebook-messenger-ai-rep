@@ -149,6 +149,7 @@ export const conversations = pgTable(
     controlledByUserId: text("controlled_by_user_id"),
     lastHumanOutboundAt: timestamp("last_human_outbound_at", { withTimezone: true }),
     lastHumanOutboundRef: text("last_human_outbound_ref"),
+    humanSessionStartedAt: timestamp("human_session_started_at", { withTimezone: true }),
     humanSessionLastActivityAt: timestamp("human_session_last_activity_at", { withTimezone: true }),
     draftLeaseId: text("draft_lease_id"),
     draftLeaseExpiresAt: timestamp("draft_lease_expires_at", { withTimezone: true }),
@@ -164,6 +165,8 @@ export const conversations = pgTable(
     index("conversations_status_idx").on(t.status),
     index("conversations_last_inbound_idx").on(t.lastInboundAt),
     index("conversations_thread_kind_idx").on(t.threadKind),
+    index("conversations_human_hold_until_idx").on(t.humanHoldUntil),
+    index("conversations_draft_lease_expires_idx").on(t.draftLeaseExpiresAt),
   ]
 );
 

@@ -57,6 +57,17 @@ export const SystemSettingsBaseShape = {
   contextMaxMessagesPerSender: z.number().int().min(1).max(25).optional(),
   contextHistoryMaxAgeHours: z.number().int().min(1).max(168).optional(),
   aiMaxOutputTokens: z.number().int().min(50).max(4096).optional(),
+  // Human priority & handoff configuration
+  humanHandoffEnabled: z.boolean(),
+  humanOutboundGraceMs: z.number().int().min(5000).max(30 * 60 * 1000),
+  humanInboundResponseWaitMs: z.number().int().min(5000).max(10 * 60 * 1000),
+  humanDraftLeaseMs: z.number().int().min(5000).max(5 * 60 * 1000),
+  humanSessionMaxMs: z.number().int().min(30000).max(60 * 60 * 1000),
+  autoResumeAfterHuman: z.boolean(),
+  // Eligibility-first persistence configuration
+  persistenceMode: z.enum(["ELIGIBLE_ONLY", "ALL_OBSERVED"]),
+  persistExcludedInbound: z.boolean(),
+  persistDropTelemetry: z.boolean(),
 };
 
 // Default values for full system settings
@@ -92,6 +103,15 @@ export const SystemSettingsDefaults = {
   contextMaxMessagesPerSender: 6,
   contextHistoryMaxAgeHours: 24,
   aiMaxOutputTokens: 384,
+  humanHandoffEnabled: true,
+  humanOutboundGraceMs: 120_000,
+  humanInboundResponseWaitMs: 60_000,
+  humanDraftLeaseMs: 30_000,
+  humanSessionMaxMs: 10 * 60_000,
+  autoResumeAfterHuman: true,
+  persistenceMode: "ELIGIBLE_ONLY" as const,
+  persistExcludedInbound: false,
+  persistDropTelemetry: true,
 };
 
 // Patch schema for partial updates without default population
@@ -129,6 +149,15 @@ export const SystemSettingsSchema = z.object({
   contextMaxMessagesPerSender: SystemSettingsBaseShape.contextMaxMessagesPerSender.default(SystemSettingsDefaults.contextMaxMessagesPerSender),
   contextHistoryMaxAgeHours: SystemSettingsBaseShape.contextHistoryMaxAgeHours.default(SystemSettingsDefaults.contextHistoryMaxAgeHours),
   aiMaxOutputTokens: SystemSettingsBaseShape.aiMaxOutputTokens.default(SystemSettingsDefaults.aiMaxOutputTokens),
+  humanHandoffEnabled: SystemSettingsBaseShape.humanHandoffEnabled.default(SystemSettingsDefaults.humanHandoffEnabled),
+  humanOutboundGraceMs: SystemSettingsBaseShape.humanOutboundGraceMs.default(SystemSettingsDefaults.humanOutboundGraceMs),
+  humanInboundResponseWaitMs: SystemSettingsBaseShape.humanInboundResponseWaitMs.default(SystemSettingsDefaults.humanInboundResponseWaitMs),
+  humanDraftLeaseMs: SystemSettingsBaseShape.humanDraftLeaseMs.default(SystemSettingsDefaults.humanDraftLeaseMs),
+  humanSessionMaxMs: SystemSettingsBaseShape.humanSessionMaxMs.default(SystemSettingsDefaults.humanSessionMaxMs),
+  autoResumeAfterHuman: SystemSettingsBaseShape.autoResumeAfterHuman.default(SystemSettingsDefaults.autoResumeAfterHuman),
+  persistenceMode: SystemSettingsBaseShape.persistenceMode.default(SystemSettingsDefaults.persistenceMode),
+  persistExcludedInbound: SystemSettingsBaseShape.persistExcludedInbound.default(SystemSettingsDefaults.persistExcludedInbound),
+  persistDropTelemetry: SystemSettingsBaseShape.persistDropTelemetry.default(SystemSettingsDefaults.persistDropTelemetry),
 });
 
 // Override .partial() so partial update callers do not get whole-object default resets

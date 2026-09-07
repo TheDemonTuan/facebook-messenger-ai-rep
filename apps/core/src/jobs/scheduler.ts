@@ -1,4 +1,4 @@
-import { JobRunner } from "@messenger/db";
+import { JobRunner, ConversationControlService } from "@messenger/db";
 import type { Database } from "@messenger/db";
 import type {
   JobRepository,
@@ -18,6 +18,7 @@ import { createAiHandler } from "./handlers/ai.js";
 import { createReconcileHandler } from "./handlers/reconcile.js";
 import { createOutboxHandler } from "./handlers/outbox.js";
 import { createRetentionHandler } from "./handlers/retention.js";
+import { createHumanFallbackHandler } from "./handlers/human-fallback.js";
 
 export interface CoreJobServiceDeps {
   db: Database;
@@ -39,13 +40,16 @@ export class CoreJobService {
   private outboxTimer: NodeJS.Timeout | null = null;
   private reconcileTimer: NodeJS.Timeout | null = null;
   private retentionTimer: NodeJS.Timeout | null = null;
+  private humanControlTimer: NodeJS.Timeout | null = null;
   private isRunning = false;
+  private deps: CoreJobServiceDeps;
 
   private handleReconcile: ReturnType<typeof createReconcileHandler>;
   private handleOutbox: ReturnType<typeof createOutboxHandler>;
   private handleRetention: ReturnType<typeof createRetentionHandler>;
 
   constructor(deps: CoreJobServiceDeps) {
+    this.deps = deps;
     this.runner = new JobRunner({
       jobRepo: deps.jobRepo,
       queues: ["default", "debounce", "ai", "system"],
@@ -97,12 +101,21 @@ export class CoreJobService {
       convRepo: deps.convRepo,
     });
 
-    // Register all 5 job handlers
+    const handleHumanFallback = createHumanFallbackHandler({
+      db: deps.db,
+      jobRepo: deps.jobRepo,
+      eventRepo: deps.eventRepo,
+      outboxRepo: deps.outboxRepo,
+      broadcaster: deps.broadcaster,
+    });
+
+    // Register all 6 job handlers
     this.runner.registerHandler("debounce", handleDebounce);
     this.runner.registerHandler("ai", handleAi);
     this.runner.registerHandler("reconcile", this.handleReconcile);
     this.runner.registerHandler("outbox", this.handleOutbox);
     this.runner.registerHandler("retention", this.handleRetention);
+    this.runner.registerHandler("human-fallback", handleHumanFallback);
   }
 
   async start(): Promise<void> {
@@ -150,6 +163,17 @@ export class CoreJobService {
       }
     }, 3600000);
     if (this.retentionTimer.unref) this.retentionTimer.unref();
+
+    // 6. Periodic Human Control expiration cleaner (every 30s)
+    this.humanControlTimer = setInterval(async () => {
+      try {
+        const controlService = new ConversationControlService(this.deps.db);
+        await controlService.expireOverdueHumanSessions(new Date(), 100);
+      } catch (err) {
+        console.error("[CoreJobService] Periodic human control cleanup error:", err);
+      }
+    }, 30000);
+    if (this.humanControlTimer.unref) this.humanControlTimer.unref();
   }
 
   async stop(): Promise<void> {
@@ -157,6 +181,11 @@ export class CoreJobService {
     this.isRunning = false;
 
     console.log("[CoreJobService] Stopping background job service and draining active jobs...");
+
+    if (this.humanControlTimer) {
+      clearInterval(this.humanControlTimer);
+      this.humanControlTimer = null;
+    }
 
     if (this.outboxTimer) {
       clearInterval(this.outboxTimer);

@@ -281,6 +281,15 @@ export interface NonSecretSettings {
   requireGroupMention?: boolean;
   selectedParticipantIds?: string[];
   excludedParticipantIds?: string[];
+  humanHandoffEnabled?: boolean;
+  humanOutboundGraceMs?: number;
+  humanInboundResponseWaitMs?: number;
+  humanDraftLeaseMs?: number;
+  humanSessionMaxMs?: number;
+  autoResumeAfterHuman?: boolean;
+  persistenceMode?: "ELIGIBLE_ONLY" | "ALL_OBSERVED";
+  persistExcludedInbound?: boolean;
+  persistDropTelemetry?: boolean;
 }
 
 export interface SettingItem {

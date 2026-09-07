@@ -24,6 +24,8 @@ import {
   Globe,
   Lock,
   MessageSquare,
+  UserCog,
+  Database,
 } from "lucide-react";
 
 const POPULAR_TIMEZONES = [
@@ -1049,6 +1051,189 @@ export const SettingsPage: React.FC = () => {
               />
               <span>Tạm dừng tiếp nhận tin nhắn mới</span>
             </label>
+          </div>
+        </div>
+
+        {/* ================================================================= */}
+        {/* 3.1. ƯU TIÊN NGƯỜI THẬT & TIẾP QUẢN HỘI THOẠI (HUMAN HANDOFF) */}
+        {/* ================================================================= */}
+        <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "24px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px", marginBottom: "14px" }}>
+            <div>
+              <h2 style={{ fontSize: "1.1rem", fontWeight: "700", margin: "0 0 2px 0", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
+                <UserCog size={18} color="#2563eb" /> Ưu tiên người thật & Tiếp quản hội thoại
+              </h2>
+              <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                Khi bạn hoặc nhân viên trả lời khách hàng, bot lập tức nhường quyền và tự động tiếp quản lại khi nhân viên ngưng nhắn.
+              </span>
+            </div>
+            {/* Presets */}
+            <div style={{ display: "flex", gap: "6px" }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormData({
+                    ...formData,
+                    humanOutboundGraceMs: 60000,
+                    humanInboundResponseWaitMs: 30000,
+                  });
+                }}
+                style={{ padding: "4px 10px", fontSize: "0.75rem", borderRadius: "4px", border: "1px solid #cbd5e1", backgroundColor: "#f8fafc", cursor: "pointer", fontWeight: "600" }}
+              >
+                Nhanh (60s/30s)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormData({
+                    ...formData,
+                    humanOutboundGraceMs: 120000,
+                    humanInboundResponseWaitMs: 60000,
+                  });
+                }}
+                style={{ padding: "4px 10px", fontSize: "0.75rem", borderRadius: "4px", border: "1px solid #cbd5e1", backgroundColor: "#f8fafc", cursor: "pointer", fontWeight: "600" }}
+              >
+                Cân bằng (120s/60s)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFormData({
+                    ...formData,
+                    humanOutboundGraceMs: 300000,
+                    humanInboundResponseWaitMs: 120000,
+                  });
+                }}
+                style={{ padding: "4px 10px", fontSize: "0.75rem", borderRadius: "4px", border: "1px solid #cbd5e1", backgroundColor: "#f8fafc", cursor: "pointer", fontWeight: "600" }}
+              >
+                Ưu tiên người thật (300s/120s)
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "16px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={formData.humanHandoffEnabled ?? true}
+                onChange={(e) => setFormData({ ...formData, humanHandoffEnabled: e.target.checked })}
+              />
+              <span style={{ fontWeight: "600", color: "#1e293b" }}>Tự động nhường khi phát hiện tôi hoặc nhân viên nhắn tin Messenger</span>
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={formData.autoResumeAfterHuman ?? true}
+                onChange={(e) => setFormData({ ...formData, autoResumeAfterHuman: e.target.checked })}
+              />
+              <span>Tự động giao lại quyền trả lời cho AI khi nhân viên ngưng hoạt động (không bị kẹt thủ công vĩnh viễn)</span>
+            </label>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+            <div>
+              <label style={labelStyle}>Ưu tiên sau khi nhân viên gửi (giây)</label>
+              <input
+                type="number"
+                min={5}
+                max={1800}
+                value={Math.round((formData.humanOutboundGraceMs || 120000) / 1000)}
+                onChange={(e) => setFormData({ ...formData, humanOutboundGraceMs: Number(e.target.value) * 1000 })}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>AI không can thiệp trong thời gian này</span>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Khi khách hỏi tiếp, chờ nhân viên (giây)</label>
+              <input
+                type="number"
+                min={5}
+                max={600}
+                value={Math.round((formData.humanInboundResponseWaitMs || 60000) / 1000)}
+                onChange={(e) => setFormData({ ...formData, humanInboundResponseWaitMs: Number(e.target.value) * 1000 })}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Sau đó AI sẽ tự trả lời câu hỏi nếu nhân viên im lặng</span>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Thời gian giữ gõ tin trên Dashboard (giây)</label>
+              <input
+                type="number"
+                min={5}
+                max={300}
+                value={Math.round((formData.humanDraftLeaseMs || 30000) / 1000)}
+                onChange={(e) => setFormData({ ...formData, humanDraftLeaseMs: Number(e.target.value) * 1000 })}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>Khi bạn đang soạn tin nhắn trên Dashboard</span>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Giới hạn tối đa một phiên tạm (phút)</label>
+              <input
+                type="number"
+                min={1}
+                max={60}
+                value={Math.round((formData.humanSessionMaxMs || 600000) / 60000)}
+                onChange={(e) => setFormData({ ...formData, humanSessionMaxMs: Number(e.target.value) * 60000 })}
+                style={inputStyle}
+              />
+              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>An toàn tránh treo quyền tạm thời quá lâu</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ================================================================= */}
+        {/* 3.2. PHẠM VI LƯU TRỮ & TỐI ƯU VPS (ELIGIBILITY-FIRST PERSISTENCE) */}
+        {/* ================================================================= */}
+        <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "24px" }}>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: "700", margin: "0 0 4px 0", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Database size={18} color="#2563eb" /> Phạm vi lưu trữ & Tối ưu VPS (Eligibility-First)
+          </h2>
+          <span style={{ fontSize: "0.8rem", color: "#64748b", display: "block", marginBottom: "14px" }}>
+            Bỏ qua các tin nhắn ngoài phạm vi trước khi ghi vào Database để tiết kiệm dung lượng ổ cứng, giảm RAM và CPU máy chủ.
+          </span>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "14px", marginBottom: "12px" }}>
+            <div>
+              <label style={labelStyle}>Chế độ lưu trữ dữ liệu</label>
+              <select
+                value={formData.persistenceMode || "ELIGIBLE_ONLY"}
+                onChange={(e) => setFormData({ ...formData, persistenceMode: e.target.value as "ELIGIBLE_ONLY" | "ALL_OBSERVED" })}
+                style={inputStyle}
+              >
+                <option value="ELIGIBLE_ONLY">Chỉ lưu tin nhắn trong phạm vi phục vụ (Khuyến nghị)</option>
+                <option value="ALL_OBSERVED">Lưu tất cả tin nhắn quan sát được (Chỉ dùng khi debug)</option>
+              </select>
+              {formData.persistenceMode === "ALL_OBSERVED" && (
+                <span style={{ fontSize: "0.75rem", color: "#b45309", fontWeight: "600", display: "block", marginTop: "4px" }}>
+                  ⚠️ Lưu ý: Chế độ này sẽ tăng đáng kể dung lượng lưu trữ trên VPS.
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: "10px" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={formData.persistExcludedInbound ?? false}
+                  onChange={(e) => setFormData({ ...formData, persistExcludedInbound: e.target.checked })}
+                />
+                <span>Vẫn lưu tin nhắn của danh sách người bị loại trừ (Excluded)</span>
+              </label>
+
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={formData.persistDropTelemetry ?? true}
+                  onChange={(e) => setFormData({ ...formData, persistDropTelemetry: e.target.checked })}
+                />
+                <span>Ghi nhận số lượng tin bị bỏ qua (Telemetry không chứa nội dung)</span>
+              </label>
+            </div>
           </div>
         </div>
 

@@ -99,6 +99,10 @@ export function getHumanReadableReason(reasonCode: string, fallback?: string): s
       return "Cuộc trò chuyện này đã bị chặn.";
     case "CONVERSATION_MANUAL_MODE":
       return "Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.";
+    case "HUMAN_SESSION_ACTIVE":
+      return "Nhân viên vừa trả lời, đang ưu tiên người thật hỗ trợ.";
+    case "HUMAN_PINNED_ACTIVE":
+      return "Nhân viên đã tiếp quản hội thoại thủ công.";
     case "STALE_INBOUND_VERSION":
       return "Phiên bản tin nhắn đã cũ, đã có tin nhắn mới hơn.";
     case "DIRECTION_NOT_INBOUND":

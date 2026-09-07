@@ -105,6 +105,11 @@ export const EventTypeSchema = z.enum([
   "MANUAL_TAKEOVER",
   "MANUAL_RELEASED",
   "SETTING_CHANGED",
+  "HUMAN_SESSION_STARTED",
+  "HUMAN_SESSION_REFRESHED",
+  "HUMAN_SESSION_EXPIRED",
+  "AI_RESUMED_AFTER_HUMAN",
+  "INBOUND_DROPPED_POLICY",
 ]);
 export type EventType = z.infer<typeof EventTypeSchema>;
 
@@ -202,6 +207,8 @@ export const ReplyEligibilityReasonCodeSchema = z.enum([
   "CHANNEL_PAUSED",
   "CONVERSATION_BLOCKED",
   "CONVERSATION_MANUAL_MODE",
+  "HUMAN_SESSION_ACTIVE",
+  "HUMAN_PINNED_ACTIVE",
   "STALE_INBOUND_VERSION",
   "DIRECTION_NOT_INBOUND",
   "SELF_MESSAGE",

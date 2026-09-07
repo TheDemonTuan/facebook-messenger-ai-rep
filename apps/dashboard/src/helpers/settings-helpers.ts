@@ -86,6 +86,37 @@ export function sanitizeSettingsForSave(
       .map((id) => id.trim());
   }
 
+  // Human priority & handoff configuration
+  if (typeof input.humanHandoffEnabled === "boolean") {
+    sanitized.humanHandoffEnabled = input.humanHandoffEnabled;
+  }
+  if (typeof input.humanOutboundGraceMs === "number" && !isNaN(input.humanOutboundGraceMs)) {
+    sanitized.humanOutboundGraceMs = Math.max(5000, Math.min(1800000, input.humanOutboundGraceMs));
+  }
+  if (typeof input.humanInboundResponseWaitMs === "number" && !isNaN(input.humanInboundResponseWaitMs)) {
+    sanitized.humanInboundResponseWaitMs = Math.max(5000, Math.min(600000, input.humanInboundResponseWaitMs));
+  }
+  if (typeof input.humanDraftLeaseMs === "number" && !isNaN(input.humanDraftLeaseMs)) {
+    sanitized.humanDraftLeaseMs = Math.max(5000, Math.min(300000, input.humanDraftLeaseMs));
+  }
+  if (typeof input.humanSessionMaxMs === "number" && !isNaN(input.humanSessionMaxMs)) {
+    sanitized.humanSessionMaxMs = Math.max(30000, Math.min(3600000, input.humanSessionMaxMs));
+  }
+  if (typeof input.autoResumeAfterHuman === "boolean") {
+    sanitized.autoResumeAfterHuman = input.autoResumeAfterHuman;
+  }
+
+  // Eligibility-first persistence configuration
+  if (input.persistenceMode === "ELIGIBLE_ONLY" || input.persistenceMode === "ALL_OBSERVED") {
+    sanitized.persistenceMode = input.persistenceMode;
+  }
+  if (typeof input.persistExcludedInbound === "boolean") {
+    sanitized.persistExcludedInbound = input.persistExcludedInbound;
+  }
+  if (typeof input.persistDropTelemetry === "boolean") {
+    sanitized.persistDropTelemetry = input.persistDropTelemetry;
+  }
+
   // Safety invariant: NEVER include aiBaseUrl or aiApiKey in output
   delete (sanitized as Record<string, unknown>).aiBaseUrl;
   delete (sanitized as Record<string, unknown>).aiApiKey;

@@ -80,6 +80,11 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
       return;
     }
 
+    if (control.mode === "AUTO") {
+      conv.manualMode = false;
+      conv.humanHoldUntil = null;
+    }
+
     if (conv.isBlocked) {
       console.log(`[DebounceHandler] Conversation ${conversationId} is blocked. Skipping.`);
       return;

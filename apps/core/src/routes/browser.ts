@@ -61,10 +61,11 @@ export function createBrowserRoutes(options: BrowserRoutesOptions): FastifyPlugi
         // Get debounce window from settings
         const { settings } = await settingsRepo.getSettings(payload.channelAccountId);
         const debounceMs = settings.debounceMs || 3000;
+        const humanInboundResponseWaitMs = settings.humanInboundResponseWaitMs || 60000;
 
         // Ingest into database (deduplication, bumps version, records message, atomically sets up debounce job if eligible LIVE)
-        const result = await convRepo.ingestInboundMessage(payload, { debounceMs });
-        if (result.isDuplicate) {
+        const result = await convRepo.ingestInboundMessage(payload, { debounceMs, humanInboundResponseWaitMs });
+        if (result.isDuplicate || result.dropped) {
           return reply.send(result);
         }
 

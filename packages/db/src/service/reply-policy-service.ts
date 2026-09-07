@@ -53,6 +53,35 @@ export interface RecheckEligibilityParams {
   now?: Date;
 }
 
+export interface PrePersistEligibilityInput {
+  channelAccountId: string;
+  payload: InboundMessagePayload;
+  existingConversation?: {
+    id: string;
+    replyControlMode?: string | null;
+    humanHoldUntil?: Date | null;
+    isBlocked?: boolean | null;
+    manualMode?: boolean | null;
+    threadKind?: string | null;
+    reliability?: string | null;
+  } | null;
+  tx?: DatabaseOrTx;
+  now?: Date;
+}
+
+export interface PrePersistEligibilityResult {
+  disposition: "FULL_PROCESS" | "TRACK_NO_REPLY" | "DROP";
+  eligibleForReply: boolean;
+  reasonCode: string;
+  reason: string;
+  identity?: {
+    participantId?: string;
+    senderKind: SenderKind;
+    reliability: ClassificationReliability;
+  };
+  policyResult: ReplyEligibilityResult;
+}
+
 export class ReplyPolicyService {
   private settingsRepo: SettingsRepository;
   private policyMemberRepo: PolicyMemberRepository;
@@ -677,6 +706,289 @@ export class ReplyPolicyService {
     return {
       ...evalResult,
       evaluationMode: effectiveEvaluationMode,
+    };
+  }
+
+  /**
+   * Evaluates eligibility BEFORE persisting any data into PostgreSQL.
+   * Cheap, stateless, read-only. Protects DB from out-of-scope bubbles.
+   */
+  async evaluatePrePersist(params: PrePersistEligibilityInput): Promise<PrePersistEligibilityResult> {
+    const executor = params.tx ?? this.db;
+    const now = params.now ?? new Date();
+    const payload = params.payload;
+
+    // 1. Channel context
+    let channelRows: (typeof channelAccounts.$inferSelect)[] = [];
+    try {
+      channelRows = await executor
+        .select()
+        .from(channelAccounts)
+        .where(eq(channelAccounts.id, params.channelAccountId))
+        .limit(1);
+    } catch {
+      channelRows = [];
+    }
+
+    const channel = channelRows[0];
+    const channelMetadata = (channel?.metadata as Record<string, unknown>) || {};
+    const botParticipantId =
+      typeof channelMetadata.botParticipantId === "string"
+        ? channelMetadata.botParticipantId
+        : channel?.id;
+    const botProfileUrl =
+      typeof channelMetadata.botProfileUrl === "string"
+        ? channelMetadata.botProfileUrl
+        : undefined;
+
+    const channelContext = {
+      id: params.channelAccountId,
+      accountType: ((channel?.type as ChannelAccountType) || "PERSONAL_MESSENGER"),
+      isSuspended: Boolean(channel?.isSuspended || channel?.status === "SUSPENDED" || channel?.status === "DEGRADED"),
+      isPaused: Boolean(channel?.isPaused || channel?.status === "PAUSED"),
+      botParticipantId,
+      botProfileUrl,
+    };
+
+    // 2. Thread context
+    let isBlocked = false;
+    let manualMode = false;
+    let threadKind: ThreadKind = payload.threadKind ?? "UNKNOWN";
+    let threadReliability: ClassificationReliability = payload.threadReliability ?? "UNVERIFIED";
+
+    if (params.existingConversation) {
+      isBlocked = Boolean(params.existingConversation.isBlocked);
+      const isHumanHold = Boolean(
+        params.existingConversation.humanHoldUntil &&
+          new Date(params.existingConversation.humanHoldUntil) > now
+      );
+      manualMode = Boolean(
+        params.existingConversation.manualMode ||
+          isHumanHold ||
+          (params.existingConversation.replyControlMode &&
+            params.existingConversation.replyControlMode !== "AUTO")
+      );
+      if (params.existingConversation.threadKind && params.existingConversation.threadKind !== "UNKNOWN") {
+        threadKind = params.existingConversation.threadKind as ThreadKind;
+      }
+      if (params.existingConversation.reliability && params.existingConversation.reliability === "VERIFIED") {
+        threadReliability = "VERIFIED";
+      }
+    }
+
+    const threadContext = {
+      id: params.existingConversation?.id ?? undefined,
+      externalThreadId: payload.externalThreadId,
+      kind: threadKind,
+      reliability: threadReliability,
+      isBlocked,
+      manualMode,
+      evidence: payload.threadEvidence ?? [],
+    };
+
+    // 3. Sender context
+    const externalThreadIdTrimmed = payload.externalThreadId.trim();
+    const isVerifiedDirectParticipant =
+      threadKind === "DIRECT" &&
+      threadReliability === "VERIFIED" &&
+      payload.participantIdentity?.isVerified === true;
+
+    const isAllowedParticipantId = (id: string): boolean =>
+      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
+
+    let candidateParticipantId: string | null = null;
+    if (payload.participantIdentity?.participantId) {
+      const pId = payload.participantIdentity.participantId.trim();
+      if (isAllowedParticipantId(pId)) {
+        candidateParticipantId = pId;
+      }
+    } else if (payload.senderParticipantId) {
+      const pId = payload.senderParticipantId.trim();
+      if (isAllowedParticipantId(pId)) {
+        candidateParticipantId = pId;
+      }
+    } else if (payload.externalCustomerId) {
+      const pId = payload.externalCustomerId.trim();
+      if (isAllowedParticipantId(pId)) {
+        candidateParticipantId = pId;
+      }
+    }
+
+    let senderKind: SenderKind = payload.senderKind ?? "UNKNOWN";
+    let senderReliability: ClassificationReliability = payload.senderReliability ?? "UNVERIFIED";
+    let participantIdentity: VerifiedParticipantIdentity | null = null;
+
+    if (payload.participantIdentity) {
+      if (candidateParticipantId) {
+        participantIdentity = {
+          channelAccountId: params.channelAccountId,
+          participantId: candidateParticipantId,
+          senderKind: payload.participantIdentity.senderKind || "PERSON",
+          isVerified: Boolean(payload.participantIdentity.isVerified),
+          profileUrl: payload.participantIdentity.profileUrl ?? null,
+          displayName: payload.participantIdentity.displayName ?? null,
+          verifiedAt: payload.participantIdentity.verifiedAt,
+          metadata: payload.participantIdentity.metadata ?? {},
+        };
+        senderKind = participantIdentity.senderKind;
+        senderReliability = participantIdentity.isVerified ? "VERIFIED" : "UNVERIFIED";
+      }
+    } else if (candidateParticipantId) {
+      try {
+        const participantRows = await executor
+          .select()
+          .from(participants)
+          .where(
+            and(
+              eq(participants.channelAccountId, params.channelAccountId),
+              eq(participants.participantId, candidateParticipantId)
+            )
+          )
+          .limit(1);
+
+        if (participantRows.length > 0 && participantRows[0]?.isVerified) {
+          const p = participantRows[0];
+          participantIdentity = {
+            channelAccountId: p.channelAccountId,
+            participantId: p.participantId,
+            senderKind: (p.senderKind as SenderKind) || "PERSON",
+            isVerified: true,
+            profileUrl: p.profileUrl,
+            displayName: p.displayName,
+            verifiedAt: p.verifiedAt ?? undefined,
+            metadata: (p.metadata as Record<string, unknown>) || {},
+          };
+          senderKind = participantIdentity.senderKind;
+          senderReliability = "VERIFIED";
+        }
+      } catch {
+        // Mock fallback
+      }
+    }
+
+    const senderContext = {
+      id: candidateParticipantId ?? undefined,
+      kind: senderKind,
+      reliability: senderReliability,
+      participantIdentity,
+      evidence: payload.senderEvidence ?? [],
+    };
+
+    // 4. Message context
+    const messageContext = {
+      id: "pre-persist-check",
+      direction: "INBOUND" as const,
+      actor: "SYSTEM" as const,
+      text: payload.text,
+      mentions: payload.mentions ?? [],
+      timestamps: payload.timestamps,
+      eventTimestamp: payload.eventTimestamp ?? payload.timestamp,
+      observedTimestamp: payload.timestamp,
+    };
+
+    // 5. Settings & Policy Members
+    let settings = SystemSettingsSchema.parse({});
+    try {
+      const res = await this.settingsRepo.getSettings(params.channelAccountId);
+      settings = res.settings;
+    } catch {
+      // Use defaults
+    }
+
+    let policyIncludeIds: string[] = [];
+    let policyExcludeIds: string[] = [];
+    try {
+      const policyRows = await executor
+        .select()
+        .from(replyPolicyMembers)
+        .where(eq(replyPolicyMembers.channelAccountId, params.channelAccountId));
+
+      policyIncludeIds = policyRows
+        .filter((m) => m.policyMode === "INCLUDE")
+        .map((m) => m.participantId.trim());
+      policyExcludeIds = policyRows
+        .filter((m) => m.policyMode === "EXCLUDE")
+        .map((m) => m.participantId.trim());
+    } catch {
+      // Mock fallback
+    }
+
+    const effectiveSettings = {
+      ...settings,
+      selectedParticipantIds: Array.from(
+        new Set([...settings.selectedParticipantIds, ...policyIncludeIds])
+      ),
+      excludedParticipantIds: Array.from(
+        new Set([...settings.excludedParticipantIds, ...policyExcludeIds])
+      ),
+    };
+
+    const policyResult = evaluateReplyEligibility({
+      channel: channelContext,
+      thread: threadContext,
+      sender: senderContext,
+      message: messageContext,
+      settings: effectiveSettings,
+      now,
+    });
+
+    // 6. Disposition determination
+    let disposition: "FULL_PROCESS" | "TRACK_NO_REPLY" | "DROP" = "FULL_PROCESS";
+
+    if (params.existingConversation) {
+      // Existing in-scope conversation: keep records for customer history (Section 17)
+      if (params.existingConversation.isBlocked) {
+        disposition = "TRACK_NO_REPLY";
+      } else if (
+        params.existingConversation.replyControlMode === "HUMAN_SESSION" ||
+        params.existingConversation.replyControlMode === "HUMAN_PINNED" ||
+        params.existingConversation.manualMode
+      ) {
+        disposition = "FULL_PROCESS";
+      } else if (policyResult.eligible) {
+        disposition = "FULL_PROCESS";
+      } else {
+        disposition = "TRACK_NO_REPLY";
+      }
+    } else {
+      // New conversation / bubble: check if out of scope
+      if (policyResult.eligible) {
+        disposition = "FULL_PROCESS";
+      } else if (effectiveSettings.persistenceMode === "ALL_OBSERVED") {
+        disposition = "TRACK_NO_REPLY";
+      } else {
+        // ELIGIBLE_ONLY mode: drop traffic outside permitted scope
+        const DROP_REASONS = new Set([
+          "PERSON_NOT_SELECTED",
+          "PERSON_EXCLUDED",
+          "GROUP_REPLIES_DISABLED",
+          "PAGE_REPLIES_DISABLED",
+          "NON_PERSON_REPLIES_DISABLED",
+          "DIRECTION_NOT_INBOUND",
+          "SELF_MESSAGE",
+        ]);
+
+        if (effectiveSettings.persistExcludedInbound) {
+          disposition = "TRACK_NO_REPLY";
+        } else if (DROP_REASONS.has(policyResult.reasonCode)) {
+          disposition = "DROP";
+        } else {
+          disposition = "TRACK_NO_REPLY";
+        }
+      }
+    }
+
+    return {
+      disposition,
+      eligibleForReply: disposition === "FULL_PROCESS" && policyResult.eligible,
+      reasonCode: policyResult.reasonCode,
+      reason: policyResult.reason,
+      identity: {
+        participantId: candidateParticipantId ?? undefined,
+        senderKind,
+        reliability: senderReliability,
+      },
+      policyResult,
     };
   }
 }

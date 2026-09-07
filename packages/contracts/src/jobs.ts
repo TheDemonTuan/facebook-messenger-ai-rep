@@ -33,3 +33,13 @@ export const EnqueueJobSchema = z.object({
   idempotencyKey: z.string().optional(),
 });
 export type EnqueueJob = z.infer<typeof EnqueueJobSchema>;
+
+export const HumanFallbackJobPayloadSchema = z.object({
+  channelAccountId: z.string(),
+  conversationId: z.string(),
+  inboundVersion: z.number().int(),
+  controlEpoch: z.number().int(),
+  expectedMode: z.string().default("HUMAN_SESSION"),
+});
+export type HumanFallbackJobPayload = z.infer<typeof HumanFallbackJobPayloadSchema>;
+
