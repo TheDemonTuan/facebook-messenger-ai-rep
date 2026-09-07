@@ -319,13 +319,21 @@ export function matchesParticipantList(list: string[], channelId: string, partic
   });
 }
 
-function senderMatchesList(list: string[], channelId: string, sender: ReplyEligibilitySenderContext): boolean {
+function senderMatchesList(
+  list: string[],
+  channelId: string,
+  sender: ReplyEligibilitySenderContext,
+  thread?: ReplyEligibilityThreadContext
+): boolean {
   const ids: string[] = [];
   if (sender.id && sender.id.trim().length > 0) {
     ids.push(sender.id.trim());
   }
   if (sender.participantIdentity?.participantId && sender.participantIdentity.participantId.trim().length > 0) {
     ids.push(sender.participantIdentity.participantId.trim());
+  }
+  if (thread && thread.kind !== "GROUP" && thread.externalThreadId && thread.externalThreadId.trim().length > 0) {
+    ids.push(thread.externalThreadId.trim());
   }
   return ids.some((id) => matchesParticipantList(list, channelId, id));
 }
@@ -648,7 +656,7 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
   // --------------------------------------------------------------------------
   if (input.sender.kind === "PERSON") {
     if (input.settings.replyMode === "EVERYONE_EXCEPT") {
-      if (senderMatchesList(input.settings.excludedParticipantIds, input.channel.id, input.sender)) {
+      if (senderMatchesList(input.settings.excludedParticipantIds, input.channel.id, input.sender, input.thread)) {
         return {
           decision: "INELIGIBLE",
           eligible: false,
@@ -660,7 +668,7 @@ export function evaluateReplyEligibility(rawInput: ReplyEligibilityInput): Reply
         };
       }
     } else if (input.settings.replyMode === "ONLY_SELECTED") {
-      if (!senderMatchesList(input.settings.selectedParticipantIds, input.channel.id, input.sender)) {
+      if (!senderMatchesList(input.settings.selectedParticipantIds, input.channel.id, input.sender, input.thread)) {
         return {
           decision: "INELIGIBLE",
           eligible: false,

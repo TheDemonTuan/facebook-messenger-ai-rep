@@ -190,7 +190,7 @@ export class ReplyPolicyService {
       threadReliability === "VERIFIED" &&
       payload.participantIdentity?.isVerified === true;
     const isAllowedParticipantId = (id: string): boolean =>
-      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
+      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant || threadKind === "DIRECT");
     let candidateParticipantId: string | null = null;
 
     if (payload.participantIdentity?.participantId) {
@@ -208,6 +208,10 @@ export class ReplyPolicyService {
       if (isAllowedParticipantId(sId)) {
         candidateParticipantId = sId;
       }
+    }
+
+    if (!candidateParticipantId && threadKind === "DIRECT") {
+      candidateParticipantId = externalThreadIdTrimmed;
     }
 
     let participantIdentity: VerifiedParticipantIdentity | null = null;
@@ -794,7 +798,7 @@ export class ReplyPolicyService {
       payload.participantIdentity?.isVerified === true;
 
     const isAllowedParticipantId = (id: string): boolean =>
-      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant);
+      Boolean(id) && (id !== externalThreadIdTrimmed || isVerifiedDirectParticipant || threadKind === "DIRECT");
 
     let candidateParticipantId: string | null = null;
     if (payload.participantIdentity?.participantId) {
@@ -812,6 +816,10 @@ export class ReplyPolicyService {
       if (isAllowedParticipantId(pId)) {
         candidateParticipantId = pId;
       }
+    }
+
+    if (!candidateParticipantId && threadKind === "DIRECT") {
+      candidateParticipantId = externalThreadIdTrimmed;
     }
 
     let senderKind: SenderKind = payload.senderKind ?? "UNKNOWN";

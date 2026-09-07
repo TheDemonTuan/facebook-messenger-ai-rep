@@ -29,6 +29,10 @@ type AdapterInternals = {
   lastSeenMessageIds: Set<string>;
   confirmedOutboundMessageIds: Set<string>;
   lastSeenActiveSignatures: Map<string, number>;
+  seenOutgoingBubbleIds?: Set<string>;
+  threadBaselinesEstablished?: Set<string>;
+  externalOutboundCallback?: unknown;
+  isDurableBotOutboundChecker?: unknown;
   senderPage?: unknown;
   processInboundBubbles: (...args: unknown[]) => Promise<number>;
 };
@@ -804,6 +808,40 @@ describe("Messenger session hardening", () => {
     expect(result).toEqual({ verified: true, messageRef: "mid.reused-latest" });
     expect(internals(adapter).lastSeenMessageIds.has("mid.reused-latest")).toBe(true);
     expect(internals(adapter).confirmedOutboundMessageIds.has("mid.reused-latest")).toBe(true);
+  });
+
+  it("does not classify a just-sent bot bubble as a human takeover when DB matching briefly misses", async () => {
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+    const externalCallback = vi.fn().mockResolvedValue(undefined);
+    adapter.onExternalOutbound(externalCallback);
+    adapter.setDurableBotOutboundChecker(vi.fn().mockResolvedValue(false));
+    adapter.rememberBotSentText("Dạ shop sẽ hỗ trợ bạn ngay.", "thread-1");
+    Object.assign(internals(adapter), {
+      threadBaselinesEstablished: new Set(["thread-1"]),
+      seenOutgoingBubbleIds: new Set<string>(),
+    });
+
+    await internals(adapter).processInboundBubbles(
+      {
+        ok: true,
+        isDegraded: false,
+        bubbles: [{
+          id: "mid.bot-confirmed-late",
+          text: "Dạ shop sẽ hỗ trợ bạn ngay.",
+          isOutgoing: true,
+          parts: [{ type: "TEXT", text: "Dạ shop sẽ hỗ trợ bạn ngay." }],
+          observedTimestamp: new Date(),
+        }],
+      },
+      { threadId: "thread-1", customerName: "Khách hàng", avatarUrl: null },
+      true
+    );
+
+    expect(externalCallback).not.toHaveBeenCalled();
+    expect(internals(adapter).seenOutgoingBubbleIds?.has("mid.bot-confirmed-late")).toBe(true);
   });
 
   it("does not emit a confirmed outgoing id when the DOM later misclassifies it as incoming", async () => {

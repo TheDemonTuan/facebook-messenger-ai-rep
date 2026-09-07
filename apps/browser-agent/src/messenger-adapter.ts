@@ -121,7 +121,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private hasReportedHealthySession = false;
   private lastSuccessfulPollAt: Date | null = null;
   private consecutiveEmptyInboxPolls = 0;
-  private recentBotSentTexts: Array<{ text: string; sentAt: number }> = [];
+  private recentBotSentTexts: Array<{ threadId?: string; text: string; sentAt: number }> = [];
   private seenOutgoingBubbleIds = new Set<string>();
   private threadBaselinesEstablished = new Set<string>();
   private isDurableBotOutboundChecker: ((info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>) | null = null;
@@ -296,10 +296,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.isDurableBotOutboundChecker = checker;
   }
 
-  rememberBotSentText(text: string): void {
+  rememberBotSentText(text: string, threadId?: string): void {
     const trimmed = text.trim();
     if (!trimmed) return;
-    this.recentBotSentTexts.push({ text: trimmed, sentAt: Date.now() });
+    this.recentBotSentTexts.push({ threadId, text: trimmed, sentAt: Date.now() });
     if (this.recentBotSentTexts.length > 50) {
       this.recentBotSentTexts.shift();
     }
@@ -327,6 +327,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       }
 
       const isBotSent = this.recentBotSentTexts.some((botMsg) => {
+        if (botMsg.threadId && botMsg.threadId !== threadId) return false;
         return (
           botMsg.text === outText ||
           (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
@@ -979,12 +980,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
         } else if (!this.seenOutgoingBubbleIds.has(outBubbleId)) {
-          this.seenOutgoingBubbleIds.add(outBubbleId);
-          if (this.seenOutgoingBubbleIds.size > 1000) {
-            const firstKey = this.seenOutgoingBubbleIds.values().next().value;
-            if (firstKey) this.seenOutgoingBubbleIds.delete(firstKey);
-          }
-
           const outText = lastOutBubble.text.trim();
           const hasMedia = Boolean(lastOutBubble.hasMedia || (lastOutBubble.parts && lastOutBubble.parts.length > 0));
           const now = Date.now();
@@ -1005,6 +1000,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
           this.recentBotSentTexts = this.recentBotSentTexts.filter((item) => now - item.sentAt < 180000);
           const isRecentBotSent = this.recentBotSentTexts.some((botMsg) => {
+            if (botMsg.threadId && botMsg.threadId !== threadInfo.threadId) return false;
             return (
               botMsg.text === outText ||
               (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
@@ -1012,6 +1008,14 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           });
 
           const isBot = isDurableBot || isRecentBotSent;
+
+          // Commit observation state only after bot identity checks finish. This avoids a
+          // transient DB miss permanently consuming the bubble as a human action.
+          this.seenOutgoingBubbleIds.add(outBubbleId);
+          if (this.seenOutgoingBubbleIds.size > 1000) {
+            const firstKey = this.seenOutgoingBubbleIds.values().next().value;
+            if (firstKey) this.seenOutgoingBubbleIds.delete(firstKey);
+          }
 
           if (!isBot && (outText.length > 0 || hasMedia)) {
             console.log(
@@ -1644,7 +1648,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   ): Promise<{ completed: boolean; aborted?: boolean }> {
     if (!this.senderPage) return { completed: false, aborted: true };
 
-    this.rememberBotSentText(text);
+    this.rememberBotSentText(text, extractMessengerThreadId(this.senderPage.url()) || undefined);
 
     const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
     try {

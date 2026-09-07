@@ -690,6 +690,19 @@ describe("PR 1: Messenger Reply Eligibility Contracts & Pure Policy", () => {
       expect(result.eligible).toBe(true);
       expect(result.reasonCode).toBe("ELIGIBLE");
     });
+
+    it("ONLY_SELECTED: allows direct conversation participant when threadId is in selectedParticipantIds even if senderId is secondary numeric ID", () => {
+      const input = createPersonInput();
+      input.settings.replyMode = "ONLY_SELECTED";
+      input.settings.selectedParticipantIds = ["100010082286691"]; // Conversation thread ID saved from UI
+      input.thread.kind = "DIRECT";
+      input.thread.externalThreadId = "100010082286691";
+      input.sender.id = "1010276030"; // Facebook profile hovercard ID
+
+      const result = evaluateReplyEligibility(input);
+      expect(result.eligible).toBe(true);
+      expect(result.reasonCode).toBe("ELIGIBLE");
+    });
   });
 
   describe("7. Policy Precedence: Page & Non-Person Controls (Channel Account Type Separate from Sender Kind)", () => {

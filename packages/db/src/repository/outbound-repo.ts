@@ -1,4 +1,4 @@
-import { eq, and, sql, notInArray, gte } from "drizzle-orm";
+import { eq, and, sql, notInArray, gte, or } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { outboundActions, conversations, messages } from "../schema/index.js";
 import type { OutboundActionStatus, SenderActor } from "@messenger/contracts";
@@ -461,7 +461,8 @@ export class OutboundRepository {
 
     // 2. Check recent bot actions matching text or textHash within last 15 minutes
     if (text && text.trim().length > 0) {
-      const textHash = createHash("sha256").update(text.trim()).digest("hex");
+      const trimmed = text.trim();
+      const textHash = createHash("sha256").update(trimmed).digest("hex");
       const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
       const matching = await executor
         .select({ id: outboundActions.id })
@@ -469,13 +470,34 @@ export class OutboundRepository {
         .where(
           and(
             eq(outboundActions.channelAccountId, channelAccountId),
-            eq(outboundActions.textHash, textHash),
             eq(outboundActions.actor, "AI"),
-            gte(outboundActions.createdAt, recentThreshold)
+            gte(outboundActions.createdAt, recentThreshold),
+            or(
+              eq(outboundActions.textHash, textHash),
+              eq(outboundActions.text, trimmed)
+            )
           )
         )
         .limit(1);
       if (matching.length > 0) return true;
+
+      const matchingMsg = await executor
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.channelAccountId, channelAccountId),
+            eq(messages.actor, "AI"),
+            eq(messages.direction, "OUTBOUND"),
+            gte(messages.createdAt, recentThreshold),
+            or(
+              eq(messages.textHash, textHash),
+              eq(messages.text, trimmed)
+            )
+          )
+        )
+        .limit(1);
+      if (matchingMsg.length > 0) return true;
     }
 
     return false;
