@@ -210,7 +210,7 @@ if [[ "${#PULL_SERVICES[@]}" -gt 0 ]]; then
   dc pull "${PULL_SERVICES[@]}"
 fi
 
-# DB Backup ONLY before migration, and run migration using the newly resolved & pulled image
+# Database migrations always run against the newly pulled core image before application services restart.
 if [[ "$DO_MIGRATE" == true ]]; then
   if dc ps --status running --services 2>/dev/null | grep -qx postgres; then
     backup_file="$BACKUP_DIR/messenger_ai_$(date -u '+%Y%m%d_%H%M%S').sql.gz"
@@ -219,8 +219,17 @@ if [[ "$DO_MIGRATE" == true ]]; then
     test -s "$backup_file" || die "database backup is empty"
   fi
 
+  migration_log="$(mktemp)"
   log "Running database migrations with updated core image"
-  dc run --rm migrate
+  if ! dc run --rm migrate 2>&1 | tee "$migration_log"; then
+    rm -f "$migration_log"
+    die "database migration command failed"
+  fi
+  if ! grep -q 'Migrations applied successfully' "$migration_log"; then
+    rm -f "$migration_log"
+    die "database migration did not report successful completion"
+  fi
+  rm -f "$migration_log"
 fi
 
 if [[ "${#DEPLOYED_SERVICES[@]}" -gt 0 ]]; then
@@ -270,6 +279,22 @@ for svc in "${CHECK_SERVICES[@]}"; do
   fi
   log "Service $svc is healthy ($st)"
 done
+
+# A healthy container is insufficient: verify the core process can query PostgreSQL after deploy.
+if [[ " ${CHECK_SERVICES[*]} " == *" core " ]]; then
+  log "Verifying core readiness endpoint"
+  if ! docker exec messenger-core node -e '
+    fetch("http://127.0.0.1:3000/readyz")
+      .then(async (response) => {
+        const body = await response.text();
+        if (!response.ok) throw new Error(`readyz returned ${response.status}: ${body}`);
+        console.log(body);
+      })
+      .catch((error) => { console.error(error); process.exit(1); });
+  '; then
+    die "core readiness probe failed after deployment"
+  fi
+fi
 
 # Persist release manifest
 cp -f "$DEPLOY_ENV" "$IMAGES_STATE"
