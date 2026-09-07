@@ -135,11 +135,176 @@ export function getHumanReadableReason(reasonCode: string, fallback?: string): s
       return "Tin nhắn trong nhóm cần được gắn thẻ (@mention) chính xác tên bot.";
     case "GROUP_MENTION_UNVERIFIED":
       return "Thẻ gắn trong nhóm chưa được xác minh hợp lệ.";
+    case "NON_MESSAGE_EVENT":
+      return "Sự kiện hệ thống hoặc thay đổi trạng thái, không phải tin nhắn khách.";
+    case "REACTION_ONLY":
+      return "Khách hàng thả cảm xúc, không yêu cầu phản hồi.";
+    case "NO_RESPONSE_NEEDED":
+      return "Nội dung xác nhận hoặc cảm ơn ngắn, không cần phản hồi tự động.";
+    case "CONTENT_NOT_READY":
+      return "Nội dung đang được tải hoặc xử lý.";
+    case "CONTENT_UNAVAILABLE":
+      return "Nội dung không khả dụng hoặc đã bị thu hồi.";
+    case "CONTENT_UNSUPPORTED":
+      return "Định dạng tệp đính kèm chưa được hỗ trợ tự động.";
+    case "PARSE_UNCERTAIN":
+      return "Cấu trúc tin nhắn không rõ ràng, chuyển nhân viên kiểm tra.";
+    case "DIRECTION_UNVERIFIED":
+      return "Chiều tin nhắn chưa được xác minh rõ ràng.";
+    case "SOURCE_ID_UNVERIFIED":
+      return "Định danh tin nhắn nguồn chưa được xác minh.";
+    case "MEDIA_BUDGET_EXCEEDED":
+      return "Số lượng tệp gửi cùng lúc vượt quá giới hạn xử lý.";
+    case "CLARIFICATION_ALREADY_SENT":
+      return "Đã gửi câu hỏi làm rõ cho lượt tin nhắn này.";
+    case "NO_ACTIONABLE_CONTENT":
+      return "Chưa có thông tin câu hỏi hoặc yêu cầu cụ thể từ khách.";
     case "ELIGIBLE":
       return "Đủ điều kiện phản hồi tự động.";
     default:
       return fallback || reasonCode;
   }
+}
+
+// --------------------------------------------------------------------------
+// PR-05 Content Disposition Contract & Evaluator
+// --------------------------------------------------------------------------
+
+export const ContentDispositionSchema = z.discriminatedUnion("action", [
+  z.object({
+    action: z.literal("SKIP"),
+    reasonCode: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    action: z.literal("DEFER"),
+    reasonCode: z.string(),
+    deadlineAt: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    action: z.literal("GENERATE"),
+    reasonCode: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    action: z.literal("CLARIFY"),
+    reasonCode: z.string(),
+    clarificationKey: z.string(),
+    promptText: z.string().optional(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+  z.object({
+    action: z.literal("HANDOFF"),
+    reasonCode: z.string(),
+    details: z.record(z.string(), z.unknown()).optional(),
+  }),
+]);
+export type ContentDisposition = z.infer<typeof ContentDispositionSchema>;
+
+export interface EvaluateContentDispositionInput {
+  eventKind?: string;
+  direction?: string;
+  text?: string | null;
+  parts?: Array<{ type: string; [key: string]: unknown }>;
+  contentStatus?: string;
+  hasMedia?: boolean;
+  clarificationSent?: boolean;
+  clarificationKey?: string;
+  controlMode?: string;
+  isBlocked?: boolean;
+  now?: Date;
+  deadlineMs?: number;
+}
+
+export function evaluateContentDisposition(input: EvaluateContentDispositionInput): ContentDisposition {
+  const now = input.now ?? new Date();
+
+  // 1. Hard gates overrides
+  if (input.isBlocked) {
+    return { action: "SKIP", reasonCode: "CONVERSATION_BLOCKED" };
+  }
+  if (input.controlMode && input.controlMode !== "AUTO") {
+    return { action: "SKIP", reasonCode: "CONVERSATION_MANUAL_MODE" };
+  }
+  if (input.direction && input.direction !== "INBOUND") {
+    return { action: "SKIP", reasonCode: "DIRECTION_NOT_INBOUND" };
+  }
+
+  // 2. Non-message events / Reactions
+  const eventKind = input.eventKind || "MESSAGE_CREATED";
+  if (eventKind === "REACTION_CHANGED") {
+    return { action: "SKIP", reasonCode: "REACTION_ONLY" };
+  }
+  if (
+    eventKind === "DELIVERY_UPDATED" ||
+    eventKind === "PRESENCE_CHANGED" ||
+    eventKind === "THREAD_UPDATED" ||
+    eventKind === "SYSTEM_NOTICE"
+  ) {
+    return { action: "SKIP", reasonCode: "NON_MESSAGE_EVENT" };
+  }
+  if (eventKind === "MESSAGE_UNSENT") {
+    return { action: "SKIP", reasonCode: "CONTENT_UNAVAILABLE" };
+  }
+
+  // 3. Content status & Readiness
+  const status = input.contentStatus || "READY";
+  if (status === "PENDING") {
+    const deadlineAt = new Date(now.getTime() + (input.deadlineMs ?? 5000)).toISOString();
+    return { action: "DEFER", reasonCode: "CONTENT_NOT_READY", deadlineAt };
+  }
+  if (status === "UNSUPPORTED") {
+    return { action: "HANDOFF", reasonCode: "CONTENT_UNSUPPORTED" };
+  }
+  if (status === "UNAVAILABLE") {
+    return { action: "SKIP", reasonCode: "CONTENT_UNAVAILABLE" };
+  }
+  if (status === "QUARANTINED") {
+    return { action: "HANDOFF", reasonCode: "PARSE_UNCERTAIN" };
+  }
+
+  // 4. Inspect text and parts
+  const rawText = (input.text || "").trim();
+  const parts = input.parts || [];
+  const hasMedia = Boolean(
+    input.hasMedia ||
+      parts.some((p) => p.type === "IMAGE" || p.type === "AUDIO" || p.type === "VIDEO" || p.type === "FILE")
+  );
+
+  // Acknowledgment / trivial skip check (e.g. "ok", "dạ ok", "cảm ơn") when no media and short
+  const isTrivialAck =
+    !hasMedia &&
+    rawText.length > 0 &&
+    rawText.length <= 25 &&
+    /^(ok|oki|okie|dạ ok|da ok|cảm ơn|cảm ơn ạ|cam on|cam on a|thanks|thank|thx|vâng|vâng ạ|vang|vang a|dạ vâng|da vang|dạ|da)[!.\s]*$/i.test(
+      rawText
+    );
+  if (isTrivialAck) {
+    return { action: "SKIP", reasonCode: "NO_RESPONSE_NEEDED" };
+  }
+
+  // Empty text without media
+  if (!rawText && !hasMedia) {
+    return { action: "SKIP", reasonCode: "NO_ACTIONABLE_CONTENT" };
+  }
+
+  // Media without text
+  if (hasMedia && !rawText) {
+    if (input.clarificationSent) {
+      return { action: "SKIP", reasonCode: "CLARIFICATION_ALREADY_SENT" };
+    }
+    const key = input.clarificationKey || `clarify:${now.getTime()}`;
+    return {
+      action: "CLARIFY",
+      reasonCode: "CONTENT_NOT_READY",
+      clarificationKey: key,
+      promptText: "Dạ bạn đang quan tâm mẫu sản phẩm nào để shop hỗ trợ tư vấn chi tiết ạ?",
+    };
+  }
+
+  // Default: ready to generate reply
+  return { action: "GENERATE", reasonCode: hasMedia ? "MEDIA_READY" : "TEXT_READY" };
 }
 
 export function matchesParticipantList(list: string[], channelId: string, participantId: string): boolean {

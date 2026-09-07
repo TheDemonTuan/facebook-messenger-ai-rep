@@ -414,6 +414,63 @@ describe("PR-03: Message Pipeline Persistence v2 & Updates", () => {
     expect(dbState.inboundMessages).toHaveLength(1);
   });
 
+  it("handles non-turn events (REACTION_CHANGED, DELIVERY_UPDATED, PRESENCE_CHANGED, SYSTEM_NOTICE): does not bump inboundVersion and does not enqueue debounce", async () => {
+    const { repo, dbState } = setupTestDb();
+
+    // 1. Ingest initial message to establish turn v1
+    const initialMsg: InboundMessagePayload = {
+      channelAccountId: "acc-fb-1",
+      externalThreadId: "thread-100",
+      externalThreadRef: "https://facebook.com/messages/t/thread-100",
+      externalMessageId: "mid-msg-1",
+      text: "Shop có áo sơ mi trắng không?",
+      timestamp: new Date(),
+    };
+    const res1 = await repo.ingestInboundMessage(initialMsg);
+    expect(res1.inboundVersion).toBe(2);
+
+    // 2. Customer reacts to message (REACTION_CHANGED)
+    const reactionPayload: InboundMessagePayload = {
+      channelAccountId: "acc-fb-1",
+      externalThreadId: "thread-100",
+      externalThreadRef: "https://facebook.com/messages/t/thread-100",
+      externalMessageId: "mid-react-1",
+      eventKind: "REACTION_CHANGED",
+      timestamp: new Date(),
+    };
+    const res2 = await repo.ingestInboundMessage(reactionPayload);
+    // Crucial: inboundVersion on conversation was NOT bumped from 2 to 3!
+    expect(res2.inboundVersion).toBe(2);
+    const debounceJobsAfterReaction = dbState.jobs.filter(
+      (j) => j.jobType === "debounce" && (j.payload as { inboundVersion?: number })?.inboundVersion === 3
+    );
+    expect(debounceJobsAfterReaction).toHaveLength(0);
+
+    // 3. Delivery receipt (DELIVERY_UPDATED)
+    const deliveryPayload: InboundMessagePayload = {
+      channelAccountId: "acc-fb-1",
+      externalThreadId: "thread-100",
+      externalThreadRef: "https://facebook.com/messages/t/thread-100",
+      externalMessageId: "mid-deliv-1",
+      eventKind: "DELIVERY_UPDATED",
+      timestamp: new Date(),
+    };
+    const res3 = await repo.ingestInboundMessage(deliveryPayload);
+    expect(res3.inboundVersion).toBe(2);
+
+    // 4. System notice (SYSTEM_NOTICE)
+    const systemPayload: InboundMessagePayload = {
+      channelAccountId: "acc-fb-1",
+      externalThreadId: "thread-100",
+      externalThreadRef: "https://facebook.com/messages/t/thread-100",
+      externalMessageId: "mid-sys-1",
+      eventKind: "SYSTEM_NOTICE",
+      timestamp: new Date(),
+    };
+    const res4 = await repo.ingestInboundMessage(systemPayload);
+    expect(res4.inboundVersion).toBe(2);
+  });
+
   it("updates message enrichment via dedicated updateMessageEnrichment method", async () => {
     const { repo } = setupTestDb();
 

@@ -1,4 +1,4 @@
-import { eq, and, sql, notInArray } from "drizzle-orm";
+import { eq, and, sql, notInArray, gte } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { outboundActions, conversations, messages } from "../schema/index.js";
 import type { OutboundActionStatus, SenderActor } from "@messenger/contracts";
@@ -417,5 +417,67 @@ export class OutboundRepository {
           notInArray(outboundActions.status, TERMINAL_STATUSES)
         )
       );
+  }
+
+  /**
+   * Durable bot identity check: verifies if an observed outgoing bubble was produced by the bot,
+   * checking durable outbound action records and message history (survives process restart).
+   */
+  async isBotOutbound(params: {
+    channelAccountId: string;
+    externalMessageRef?: string;
+    text?: string;
+    externalThreadId?: string;
+  }, tx?: DatabaseOrTx): Promise<boolean> {
+    const executor = tx || this.db;
+    const { channelAccountId, externalMessageRef, text } = params;
+
+    // 1. Check if externalMessageRef matches an outbound action or bot message
+    if (externalMessageRef) {
+      const actions = await executor
+        .select({ id: outboundActions.id })
+        .from(outboundActions)
+        .where(
+          and(
+            eq(outboundActions.channelAccountId, channelAccountId),
+            eq(outboundActions.externalMessageRef, externalMessageRef)
+          )
+        )
+        .limit(1);
+      if (actions.length > 0) return true;
+
+      const msgs = await executor
+        .select({ id: messages.id, actor: messages.actor })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.channelAccountId, channelAccountId),
+            eq(messages.externalMessageId, externalMessageRef)
+          )
+        )
+        .limit(1);
+      if (msgs.length > 0 && msgs[0]?.actor === "AI") return true;
+    }
+
+    // 2. Check recent bot actions matching text or textHash within last 15 minutes
+    if (text && text.trim().length > 0) {
+      const textHash = createHash("sha256").update(text.trim()).digest("hex");
+      const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
+      const matching = await executor
+        .select({ id: outboundActions.id })
+        .from(outboundActions)
+        .where(
+          and(
+            eq(outboundActions.channelAccountId, channelAccountId),
+            eq(outboundActions.textHash, textHash),
+            eq(outboundActions.actor, "AI"),
+            gte(outboundActions.createdAt, recentThreshold)
+          )
+        )
+        .limit(1);
+      if (matching.length > 0) return true;
+    }
+
+    return false;
   }
 }

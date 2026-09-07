@@ -122,7 +122,14 @@ export interface ChannelAdapter {
    * Optional listener for external human outbound messages observed in channel.
    */
   onExternalOutbound?: (
-    callback: (outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>
+    callback: (outbound: {
+      threadId: string;
+      text: string;
+      timestamp: number;
+      hasMedia?: boolean;
+      parts?: unknown[];
+      bubbleId?: string;
+    }) => Promise<void>
   ) => void;
 
   /**

@@ -168,6 +168,18 @@ async function main() {
     }
   });
 
+  // Register durable bot checker so process restarts do not mistake bot actions for human outbound
+  if (typeof adapter.setDurableBotOutboundChecker === "function") {
+    adapter.setDurableBotOutboundChecker(async ({ threadId, bubbleId, text }) => {
+      return await outboundRepo.isBotOutbound({
+        channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+        externalMessageRef: bubbleId,
+        text,
+        externalThreadId: threadId,
+      });
+    });
+  }
+
   // Wire inbound observer (runs continuously, independent of sender typing)
   await adapter.observeInbound(async (inbound) => {
     console.log(`[Browser Agent] Inbound received from ${inbound.externalCustomerId}: "${inbound.text.slice(0, 30)}..."`);

@@ -451,6 +451,39 @@ export class SenderWorkerService {
       }
     }
 
+    if (
+      actor === "AI" &&
+      preSendCheck &&
+      typeof preSendCheck.conversation.controlEpoch === "number" &&
+      (preSendCheck.conversation.controlEpoch > controlEpoch ||
+        (preSendCheck.conversation.replyControlMode && preSendCheck.conversation.replyControlMode !== "AUTO"))
+    ) {
+      console.warn(`[Sender Worker] Control epoch moved or human takeover occurred right before send for conv ${conversationId}`);
+      await this.adapter.clearComposer();
+      this.activeTypings.delete(conversationId);
+      cancelAck();
+
+      await this.outboundRepo.updateStatus(actionId, "ABORTED", {
+        errorMessage: "Control epoch moved or human takeover pre-enter",
+        ownerToken,
+        fencingEpoch,
+      });
+
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "Control epoch moved or human takeover pre-enter").catch(() => {});
+      }
+
+      await this.eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "TYPING_ABORTED",
+        inboundVersion,
+        actor,
+        payload: { actionId, reason: "control_epoch_moved_pre_enter" },
+      });
+      return;
+    }
+
     if (preSendCheck && preSendCheck.conversation.inboundVersion > inboundVersion) {
       console.warn(`[Sender Worker] Stale inbound version detected right before send: expected v${inboundVersion}, found v${preSendCheck.conversation.inboundVersion}`);
       await this.adapter.clearComposer();
@@ -462,6 +495,10 @@ export class SenderWorkerService {
         ownerToken,
         fencingEpoch,
       });
+
+      if (turnId && this.turnRepo) {
+        await this.turnRepo.cancelTurn(turnId, "New inbound received right before send").catch(() => {});
+      }
 
       await this.eventRepo.recordEvent({
         channelAccountId,
@@ -494,6 +531,10 @@ export class SenderWorkerService {
           ownerToken,
           fencingEpoch,
         });
+
+        if (turnId && this.turnRepo) {
+          await this.turnRepo.cancelTurn(turnId, `Policy ineligible pre-enter: ${preSendPolicy.reason}`).catch(() => {});
+        }
 
         await this.eventRepo.recordEvent({
           channelAccountId,

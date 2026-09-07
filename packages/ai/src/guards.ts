@@ -228,19 +228,42 @@ export function validateAiOutput(
     } else {
       const record = parsedJson as Record<string, unknown>;
 
+      if (typeof record.action === "string") {
+        record.action = record.action.trim().toUpperCase();
+      }
+
       // If "messages" is a single string: { messages: "..." }
       if (typeof record.messages === "string") {
         record.messages = [record.messages.trim()];
       }
 
-      // If alternative singular key used: message, reply, response, text
-      if (!record.messages) {
-        const alt = record.message || record.reply || record.response || record.text;
+      // Support action-based decision union (SKIP, NO_REPLY, HANDOFF, NEEDS_HUMAN)
+      const action = record.action;
+      const isZeroMsgAction =
+        action === "SKIP" || action === "NO_REPLY" || action === "HANDOFF" || action === "NEEDS_HUMAN";
+      if (isZeroMsgAction) {
+        if (!Array.isArray(record.messages)) {
+          record.messages = [];
+        }
+      }
+
+      // If alternative singular key used: message, reply, response, text, promptText
+      if (!record.messages && !isZeroMsgAction) {
+        const alt = record.message || record.reply || record.response || record.text || record.promptText;
         if (typeof alt === "string" && alt.trim().length > 0) {
           record.messages = [alt.trim()];
         } else if (Array.isArray(alt) && alt.length > 0) {
           record.messages = alt.map(String).map((s) => s.trim()).filter(Boolean);
         }
+      }
+
+      // If CLARIFY with empty messages, provide promptText or fallback
+      if (action === "CLARIFY" && (!record.messages || (Array.isArray(record.messages) && record.messages.length === 0))) {
+        const fallbackText =
+          typeof record.promptText === "string" && record.promptText.trim().length > 0
+            ? record.promptText.trim()
+            : "Dạ bạn đang quan tâm mẫu sản phẩm nào để shop hỗ trợ tư vấn chi tiết ạ?";
+        record.messages = [fallbackText];
       }
 
       // Default needsClarification if omitted
@@ -250,7 +273,22 @@ export function validateAiOutput(
     }
   }
 
-  if (parsedJson && typeof parsedJson === "object" && "messages" in parsedJson && Array.isArray(parsedJson.messages)) {
+  const isZeroMsgActionEarly =
+    parsedJson &&
+    typeof parsedJson === "object" &&
+    ("action" in parsedJson) &&
+    (parsedJson.action === "SKIP" ||
+      parsedJson.action === "NO_REPLY" ||
+      parsedJson.action === "HANDOFF" ||
+      parsedJson.action === "NEEDS_HUMAN");
+
+  if (
+    !isZeroMsgActionEarly &&
+    parsedJson &&
+    typeof parsedJson === "object" &&
+    "messages" in parsedJson &&
+    Array.isArray(parsedJson.messages)
+  ) {
     if (parsedJson.messages.length === 0 || parsedJson.messages.length > maxResponseCount) {
       return {
         valid: false,
@@ -267,6 +305,17 @@ export function validateAiOutput(
     };
   }
   const data = parseResult.data;
+
+  const isZeroMsgAction =
+    data.action === "SKIP" ||
+    data.action === "NO_REPLY" ||
+    data.action === "HANDOFF" ||
+    data.action === "NEEDS_HUMAN";
+
+  if (isZeroMsgAction) {
+    return { valid: true, data };
+  }
+
   data.messages = data.messages.map((msg) =>
     msg
       .replace(/<think>[\s\S]*?<\/think>/gi, "")

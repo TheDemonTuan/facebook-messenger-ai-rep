@@ -364,6 +364,7 @@ export class ConversationRepository {
           replyControlMode: conversations.replyControlMode,
           controlEpoch: conversations.controlEpoch,
           humanHoldUntil: conversations.humanHoldUntil,
+          lastInboundAt: conversations.lastInboundAt,
         })
         .from(conversations)
         .where(
@@ -532,13 +533,21 @@ export class ConversationRepository {
           });
       }
 
+      const eventKind = payload.eventKind ?? "MESSAGE_CREATED";
+      const isNonTurnEvent =
+        eventKind === "REACTION_CHANGED" ||
+        eventKind === "DELIVERY_UPDATED" ||
+        eventKind === "PRESENCE_CHANGED" ||
+        eventKind === "THREAD_UPDATED" ||
+        eventKind === "SYSTEM_NOTICE";
+
       let conversationId: string;
       let newInboundVersion: number;
       let isManual: boolean;
 
       if (existingConv.length > 0 && existingConv[0]) {
         conversationId = existingConv[0].id;
-        newInboundVersion = existingConv[0].inboundVersion + 1;
+        newInboundVersion = isNonTurnEvent ? existingConv[0].inboundVersion : existingConv[0].inboundVersion + 1;
         isManual = existingConv[0].manualMode;
 
         // Preserve current conversation status before eligibility check (never set DEBOUNCING prematurely)
@@ -550,9 +559,9 @@ export class ConversationRepository {
           .update(conversations)
           .set({
             inboundVersion: newInboundVersion,
-            lastInboundAt: payload.timestamp,
+            lastInboundAt: isNonTurnEvent ? existingConv[0].lastInboundAt : payload.timestamp,
             status: initialStatus,
-            unreadCount: sql`${conversations.unreadCount} + 1`,
+            unreadCount: isNonTurnEvent ? conversations.unreadCount : sql`${conversations.unreadCount} + 1`,
             externalThreadRef: payload.externalThreadRef,
             ...(threadKind !== "UNKNOWN" ? { threadKind } : {}),
             ...(threadTitle ? { title: threadTitle } : {}),
@@ -562,7 +571,7 @@ export class ConversationRepository {
           })
           .where(eq(conversations.id, conversationId));
       } else {
-        newInboundVersion = 1;
+        newInboundVersion = isNonTurnEvent ? 0 : 1;
         isManual = false;
         const [newConv] = await tx
           .insert(conversations)
@@ -577,7 +586,7 @@ export class ConversationRepository {
             reliability: threadReliability,
             inboundVersion: newInboundVersion,
             lastInboundAt: payload.timestamp,
-            unreadCount: 1,
+            unreadCount: isNonTurnEvent ? 0 : 1,
           })
           .returning({ id: conversations.id });
         if (!newConv) throw new Error("Failed to create conversation");
@@ -594,7 +603,6 @@ export class ConversationRepository {
 
       const normalizedContent = normalizeMessageContent(payload);
       const contentHash = createHash("sha256").update(JSON.stringify(normalizedContent.parts)).digest("hex");
-      const eventKind = payload.eventKind ?? "MESSAGE_CREATED";
       const contentStatus = normalizedContent.contentStatus ?? "READY";
       const contentRevision = normalizedContent.contentRevision ?? 1;
       const parserVersion = payload.parserVersion ?? (normalizedContent.normalization?.parserVersion || null);
@@ -708,78 +716,80 @@ export class ConversationRepository {
       }
       if (!newMsg) throw new Error("Failed to insert message");
 
-      // 6. Abort/cancel stale queued/typing/sending work
-      // Cancel older debounce jobs for this conversation
-      await tx
-        .update(jobs)
-        .set({ status: "CANCELLED", updatedAt: new Date() })
-        .where(
-          and(
-            eq(jobs.channelAccountId, payload.channelAccountId),
-            eq(jobs.queue, "debounce"),
-            inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
-            sql`payload->>'conversationId' = ${conversationId}`
-          )
-        );
+      // 6. Abort/cancel stale queued/typing/sending work (skip for non-turn events like reaction/delivery/presence)
+      if (!isNonTurnEvent) {
+        // Cancel older debounce jobs for this conversation
+        await tx
+          .update(jobs)
+          .set({ status: "CANCELLED", updatedAt: new Date() })
+          .where(
+            and(
+              eq(jobs.channelAccountId, payload.channelAccountId),
+              eq(jobs.queue, "debounce"),
+              inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
+              sql`payload->>'conversationId' = ${conversationId}`
+            )
+          );
 
-      // Cancel older AI jobs for this conversation
-      await tx
-        .update(jobs)
-        .set({ status: "CANCELLED", updatedAt: new Date() })
-        .where(
-          and(
-            eq(jobs.channelAccountId, payload.channelAccountId),
-            eq(jobs.queue, "ai"),
-            inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
-            sql`payload->>'conversationId' = ${conversationId}`
-          )
-        );
+        // Cancel older AI jobs for this conversation
+        await tx
+          .update(jobs)
+          .set({ status: "CANCELLED", updatedAt: new Date() })
+          .where(
+            and(
+              eq(jobs.channelAccountId, payload.channelAccountId),
+              eq(jobs.queue, "ai"),
+              inArray(jobs.status, ["READY", "RUNNING", "RETRY_WAIT"]),
+              sql`payload->>'conversationId' = ${conversationId}`
+            )
+          );
 
-      // Cancel older browser send jobs for this conversation
-      await tx
-        .update(jobs)
-        .set({ status: "CANCELLED", updatedAt: new Date() })
-        .where(
-          and(
-            eq(jobs.channelAccountId, payload.channelAccountId),
-            eq(jobs.queue, "browser"),
-            inArray(jobs.status, ["READY", "RETRY_WAIT"]),
-            sql`payload->>'conversationId' = ${conversationId}`
-          )
-        );
+        // Cancel older browser send jobs for this conversation
+        await tx
+          .update(jobs)
+          .set({ status: "CANCELLED", updatedAt: new Date() })
+          .where(
+            and(
+              eq(jobs.channelAccountId, payload.channelAccountId),
+              eq(jobs.queue, "browser"),
+              inArray(jobs.status, ["READY", "RETRY_WAIT"]),
+              sql`payload->>'conversationId' = ${conversationId}`
+            )
+          );
 
-      // Cancel active turns in turns table
-      await tx
-        .update(turns)
-        .set({
-          status: "CANCELLED",
-          errorMessage: `Superseded by newer inbound version (${newInboundVersion})`,
-          completedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(turns.channelAccountId, payload.channelAccountId),
-            eq(turns.conversationId, conversationId),
-            inArray(turns.status, ["PENDING", "THINKING", "DRAFT_READY"])
-          )
-        );
+        // Cancel active turns in turns table
+        await tx
+          .update(turns)
+          .set({
+            status: "CANCELLED",
+            errorMessage: `Superseded by newer inbound version (${newInboundVersion})`,
+            completedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(turns.channelAccountId, payload.channelAccountId),
+              eq(turns.conversationId, conversationId),
+              inArray(turns.status, ["PENDING", "THINKING", "DRAFT_READY"])
+            )
+          );
 
-      // Abort stale outbound actions for this conversation
-      await tx
-        .update(outboundActions)
-        .set({
-          status: "CANCELLED",
-          errorMessage: `Cancelled due to new inbound version (${newInboundVersion})`,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(outboundActions.conversationId, conversationId),
-            sql`${outboundActions.inboundVersion} < ${newInboundVersion}`,
-            notInArray(outboundActions.status, ["CONFIRMED", "CANCELLED", "FAILED", "SENT", "ABORTED"])
-          )
-        );
+        // Abort stale outbound actions for this conversation
+        await tx
+          .update(outboundActions)
+          .set({
+            status: "CANCELLED",
+            errorMessage: `Cancelled due to new inbound version (${newInboundVersion})`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(outboundActions.conversationId, conversationId),
+              sql`${outboundActions.inboundVersion} < ${newInboundVersion}`,
+              notInArray(outboundActions.status, ["CONFIRMED", "CANCELLED", "FAILED", "SENT", "ABORTED"])
+            )
+          );
+      }
 
       // Delete active conversation queue entry if present
       if (typeof tx.delete === "function") {
@@ -818,11 +828,18 @@ export class ConversationRepository {
       const isBlocked = Boolean(existingConv[0]?.isBlocked);
       const currentMode = (existingConv[0]?.replyControlMode || existingConvRow?.replyControlMode || "AUTO") as string;
       const isHumanSession = currentMode === "HUMAN_SESSION";
-      const isEligibleLive = evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked && currentMode === "AUTO";
+      const isEligibleLive = !isNonTurnEvent && evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked && currentMode === "AUTO";
 
       if (isEligibleLive) {
         const debounceMs = options?.debounceMs ?? 3000;
-        const availableAt = new Date(Date.now() + debounceMs);
+        const maxTurnDeadlineMs = (options as unknown as { maxTurnDeadlineMs?: number })?.maxTurnDeadlineMs ?? 10_000;
+        const lastInboundTime = existingConv[0]?.lastInboundAt ? existingConv[0].lastInboundAt.getTime() : Date.now();
+        const elapsedSinceTurnStart = Math.max(0, Date.now() - lastInboundTime);
+        const remainingTurnDeadline = Math.max(500, maxTurnDeadlineMs - elapsedSinceTurnStart);
+
+        const hasMediaOnly = !payload.text?.trim() && incomingParts && incomingParts.length > 0;
+        const targetWait = hasMediaOnly ? Math.min(4000, remainingTurnDeadline) : Math.min(debounceMs, remainingTurnDeadline);
+        const availableAt = new Date(Date.now() + targetWait);
 
         await tx
           .update(conversations)
@@ -842,7 +859,7 @@ export class ConversationRepository {
             target: conversationQueue.conversationId,
             set: {
               inboundVersion: newInboundVersion,
-              readyAt: availableAt, // Reset debounce timer on new message
+              readyAt: availableAt, // Reset debounce timer on new message with finite deadline cap
               claimToken: null,
               leaseExpiresAt: null,
               updatedAt: new Date(),
@@ -862,6 +879,7 @@ export class ConversationRepository {
               channelAccountId: payload.channelAccountId,
               conversationId,
               inboundVersion: newInboundVersion,
+              turnDeadlineAt: new Date(Date.now() + remainingTurnDeadline).toISOString(),
             },
             idempotencyKey: `debounce:${payload.channelAccountId}:${conversationId}:${newInboundVersion}`,
           })
@@ -873,6 +891,7 @@ export class ConversationRepository {
                 channelAccountId: payload.channelAccountId,
                 conversationId,
                 inboundVersion: newInboundVersion,
+                turnDeadlineAt: new Date(Date.now() + remainingTurnDeadline).toISOString(),
               },
               status: "READY",
               updatedAt: new Date(),
@@ -970,7 +989,7 @@ export class ConversationRepository {
         actor: "CUSTOMER",
         payload: {
           externalMessageId: payload.externalMessageId,
-          textLength: payload.text.length,
+          textLength: payload.text ? payload.text.length : 0,
           timestamp: payload.timestamp,
         },
       });
@@ -1165,6 +1184,25 @@ export class ConversationRepository {
       }
 
       await tx.update(messages).set(updateData).where(eq(messages.id, existing.id));
+
+      // Wake pending debounce job if media/content enrichment completed
+      if (contentStatus === "READY" && existing.conversationId) {
+        try {
+          await tx
+            .update(jobs)
+            .set({ availableAt: new Date(), updatedAt: new Date() })
+            .where(
+              and(
+                eq(jobs.channelAccountId, params.channelAccountId),
+                eq(jobs.queue, "debounce"),
+                eq(jobs.status, "READY"),
+                sql`payload->>'conversationId' = ${existing.conversationId}`
+              )
+            );
+        } catch {
+          // Ignore if mock/unsupported
+        }
+      }
 
       return {
         isUpdated: true,

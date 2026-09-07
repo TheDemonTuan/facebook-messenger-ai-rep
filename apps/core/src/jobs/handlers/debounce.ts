@@ -1,6 +1,22 @@
 import type { JobExecutionContext } from "@messenger/db";
-import type { Database, TurnRepository, JobRepository, OutboxRepository, EventRepository } from "@messenger/db";
-import { conversations, channelAccounts, ReplyPolicyService, ConversationControlService } from "@messenger/db";
+import type {
+  Database,
+  TurnRepository,
+  JobRepository,
+  OutboxRepository,
+  EventRepository,
+  ConversationRepository,
+  OutboundRepository,
+} from "@messenger/db";
+import {
+  conversations,
+  channelAccounts,
+  ReplyPolicyService,
+  ConversationControlService,
+  ConversationRepository as DbConversationRepository,
+  OutboundRepository as DbOutboundRepository,
+} from "@messenger/db";
+import { evaluateContentDisposition } from "@messenger/contracts";
 import { eq, and } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
@@ -18,12 +34,16 @@ export interface DebounceHandlerDeps {
   eventRepo: EventRepository;
   broadcaster: OutboxBroadcaster;
   replyPolicyService?: ReplyPolicyService;
+  convRepo?: ConversationRepository;
+  outboundRepo?: OutboundRepository;
 }
 
 export function createDebounceHandler(deps: DebounceHandlerDeps) {
   const { db, turnRepo, jobRepo, outboxRepo, eventRepo, broadcaster } = deps;
   const replyPolicyService = deps.replyPolicyService ?? new ReplyPolicyService(db);
   const controlService = new ConversationControlService(db);
+  const convRepo = deps.convRepo ?? new DbConversationRepository(db);
+  const outboundRepo = deps.outboundRepo ?? new DbOutboundRepository(db);
 
   return async function handleDebounce(context: JobExecutionContext): Promise<void> {
     const payload = context.job.payload as unknown as DebounceJobPayload;
@@ -182,6 +202,192 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
       return;
     }
 
+    // 4c. Evaluate content disposition under hard gates
+    let latestMessage: Record<string, unknown> | null = null;
+    let incomingParts: Array<{ type: string; [key: string]: unknown }> = [];
+    let hasMedia = false;
+    let contentStatus = "READY";
+    let contentRevision = 1;
+
+    if (typeof convRepo.getRecentMessages === "function") {
+      try {
+        const recentMessages = await convRepo.getRecentMessages(conversationId, 10);
+        if (recentMessages && recentMessages.length > 0) {
+          const turnMessages = recentMessages.filter((m) => m.inboundVersion === inboundVersion);
+          const rawLatest = turnMessages[0] ?? recentMessages[0];
+          latestMessage = (rawLatest ?? null) as Record<string, unknown> | null;
+          incomingParts = (latestMessage?.parts ?? []) as Array<{ type: string; [key: string]: unknown }>;
+          hasMedia = incomingParts.some((p) => p.type === "IMAGE" || p.type === "AUDIO" || p.type === "VIDEO" || p.type === "FILE");
+          contentStatus = (latestMessage?.contentStatus as string) ?? "READY";
+          contentRevision = (latestMessage?.contentRevision as number) ?? 1;
+        }
+      } catch {
+        // Mock fallback
+      }
+    }
+
+    let existingTurn = null;
+    try {
+      if (typeof turnRepo.getTurnByVersion === "function") {
+        existingTurn = await turnRepo.getTurnByVersion(conversationId, inboundVersion);
+      }
+    } catch {
+      // Mock fallback
+    }
+    const clarificationSent = Boolean(existingTurn?.metadata?.clarificationSent);
+
+    const disposition = latestMessage
+      ? evaluateContentDisposition({
+          eventKind: (latestMessage?.eventKind as string | undefined) ?? "MESSAGE_CREATED",
+          text: (latestMessage?.text as string | undefined) ?? "",
+          parts: incomingParts,
+          contentStatus,
+          hasMedia,
+          clarificationSent,
+          controlMode: control.mode,
+          isBlocked: conv.isBlocked,
+        })
+      : { action: "GENERATE" as const, reasonCode: "TEXT_READY" };
+
+    if (disposition.action === "SKIP") {
+      console.log(
+        `[DebounceHandler] Content disposition SKIP for conv ${conversationId} (${disposition.reasonCode}). Skipping AI generation.`
+      );
+      await db
+        .update(conversations)
+        .set({ status: "WAITING_CUSTOMER", updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_CANCELLED_STALE",
+        inboundVersion,
+        actor: "SCHEDULER",
+        payload: {
+          reason: "CONTENT_DISPOSITION_SKIP",
+          reasonCode: disposition.reasonCode,
+        },
+      });
+      return;
+    }
+
+    if (disposition.action === "DEFER") {
+      const deadlineTime = new Date(disposition.deadlineAt).getTime();
+      const now = Date.now();
+      if (now < deadlineTime) {
+        const nextWait = Math.min(deadlineTime, now + 1500);
+        console.log(
+          `[DebounceHandler] Content disposition DEFER for conv ${conversationId} until ${new Date(nextWait).toISOString()} (${disposition.reasonCode}).`
+        );
+        await jobRepo.enqueue({
+          channelAccountId,
+          queue: "debounce",
+          jobType: "debounce",
+          priority: 0,
+          availableAt: new Date(nextWait),
+          payload: {
+            channelAccountId,
+            conversationId,
+            inboundVersion,
+          },
+          idempotencyKey: `debounce:${channelAccountId}:${conversationId}:${inboundVersion}`,
+        });
+        return;
+      }
+      // Past deadline: proceed to GENERATE or fallback
+    }
+
+    if (disposition.action === "HANDOFF") {
+      console.log(
+        `[DebounceHandler] Content disposition HANDOFF for conv ${conversationId} (${disposition.reasonCode}).`
+      );
+      try {
+        await controlService.acquirePinned(conversationId, "CONTENT_HANDOFF");
+      } catch {
+        await db
+          .update(conversations)
+          .set({ status: "MANUAL", updatedAt: new Date() })
+          .where(eq(conversations.id, conversationId));
+      }
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "MANUAL_TAKEOVER",
+        inboundVersion,
+        actor: "SCHEDULER",
+        payload: { reasonCode: disposition.reasonCode },
+      });
+      return;
+    }
+
+    if (disposition.action === "CLARIFY") {
+      if (clarificationSent) {
+        console.log(`[DebounceHandler] Clarification already sent for turn v${inboundVersion}. Skipping.`);
+        await db
+          .update(conversations)
+          .set({ status: "WAITING_CUSTOMER", updatedAt: new Date() })
+          .where(eq(conversations.id, conversationId));
+        return;
+      }
+
+      console.log(`[DebounceHandler] Content disposition CLARIFY for conv ${conversationId}. Sending single idempotent question.`);
+      const turn = await turnRepo.createOrGetTurn({
+        channelAccountId,
+        conversationId,
+        inboundVersion,
+        fencingEpoch: control.epoch,
+        metadata: { clarificationSent: true, clarificationKey: disposition.clarificationKey },
+      });
+
+      const promptText = disposition.promptText || "Dạ bạn đang quan tâm mẫu sản phẩm nào để shop hỗ trợ tư vấn chi tiết ạ?";
+      const action = await outboundRepo.createAction({
+        channelAccountId,
+        conversationId,
+        turnId: turn.id,
+        inboundVersion,
+        responseIndex: 0,
+        text: promptText,
+        actor: "AI",
+        intentId: disposition.clarificationKey,
+        fencingToken: control.epoch,
+        controlEpoch: control.epoch,
+      });
+
+      if (action) {
+        await jobRepo.enqueue({
+          channelAccountId,
+          queue: "browser",
+          jobType: "BROWSER_SEND",
+          priority: 10,
+          maxAttempts: 1,
+          payload: {
+            actionId: action.actionId,
+            channelAccountId,
+            conversationId,
+            turnId: turn.id,
+            externalThreadRef: conv.externalThreadRef,
+            inboundVersion,
+            responseIndex: 0,
+            text: promptText,
+            textHash: action.textHash,
+            actor: "AI",
+            claimToken: action.claimToken,
+            ownerToken: action.ownerToken,
+            fencingToken: control.epoch,
+            controlEpoch: control.epoch,
+          },
+          idempotencyKey: `send:${action.actionId}`,
+        });
+      }
+
+      await db
+        .update(conversations)
+        .set({ status: "WAITING_CUSTOMER", updatedAt: new Date() })
+        .where(eq(conversations.id, conversationId));
+      return;
+    }
+
     // 5. Transition conversation to THINKING with CAS version check
     const updateBuilder = db
       .update(conversations)
@@ -211,6 +417,8 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
       channelAccountId,
       conversationId,
       inboundVersion,
+      fencingEpoch: control.epoch,
+      metadata: { contentRevision },
     });
 
     // 7. Enqueue AI job into jobs table
@@ -224,6 +432,7 @@ export function createDebounceHandler(deps: DebounceHandlerDeps) {
         conversationId,
         inboundVersion,
         controlEpoch: control.epoch,
+        contentRevision,
         turnId: turn.id,
       },
       idempotencyKey: `ai:${channelAccountId}:${conversationId}:${inboundVersion}`,

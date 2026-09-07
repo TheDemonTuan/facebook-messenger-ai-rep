@@ -1,10 +1,51 @@
 import { z } from "zod";
 
-export const AiStructuredOutputSchema = z.object({
+export const AiReplyDecisionSchema = z.object({
+  action: z.literal("REPLY").default("REPLY"),
   messages: z.array(z.string().min(1)).min(1).max(3),
   needsClarification: z.boolean().default(false),
   internalReasoning: z.string().optional(),
 });
+export type AiReplyDecision = z.infer<typeof AiReplyDecisionSchema>;
+
+export const AiSkipDecisionSchema = z.object({
+  action: z.enum(["SKIP", "NO_REPLY"]),
+  reasonCode: z.string().default("NO_RESPONSE_NEEDED"),
+  messages: z.array(z.string()).default([]),
+  needsClarification: z.boolean().default(false),
+  internalReasoning: z.string().optional(),
+});
+export type AiSkipDecision = z.infer<typeof AiSkipDecisionSchema>;
+
+export const AiHandoffDecisionSchema = z.object({
+  action: z.enum(["HANDOFF", "NEEDS_HUMAN"]),
+  reasonCode: z.string().default("HUMAN_TAKEOVER_REQUESTED"),
+  messages: z.array(z.string()).default([]),
+  needsClarification: z.boolean().default(false),
+  internalReasoning: z.string().optional(),
+});
+export type AiHandoffDecision = z.infer<typeof AiHandoffDecisionSchema>;
+
+export const AiClarifyDecisionSchema = z.object({
+  action: z.literal("CLARIFY"),
+  reasonCode: z.string().default("CONTENT_NOT_READY"),
+  clarificationKey: z.string().optional(),
+  promptText: z.string().optional(),
+  messages: z
+    .array(z.string().min(1))
+    .max(1)
+    .default(["Dạ bạn đang quan tâm mẫu sản phẩm nào để shop hỗ trợ tư vấn chi tiết ạ?"]),
+  needsClarification: z.boolean().default(true),
+  internalReasoning: z.string().optional(),
+});
+export type AiClarifyDecision = z.infer<typeof AiClarifyDecisionSchema>;
+
+export const AiStructuredOutputSchema = z.union([
+  AiReplyDecisionSchema,
+  AiSkipDecisionSchema,
+  AiHandoffDecisionSchema,
+  AiClarifyDecisionSchema,
+]);
 export type AiStructuredOutput = z.infer<typeof AiStructuredOutputSchema>;
 
 export const ProviderCapabilitiesSchema = z.object({

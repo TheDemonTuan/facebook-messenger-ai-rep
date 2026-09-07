@@ -123,7 +123,16 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private consecutiveEmptyInboxPolls = 0;
   private recentBotSentTexts: Array<{ text: string; sentAt: number }> = [];
   private seenOutgoingBubbleIds = new Set<string>();
-  private externalOutboundCallback: ((outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>) | null = null;
+  private threadBaselinesEstablished = new Set<string>();
+  private isDurableBotOutboundChecker: ((info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>) | null = null;
+  private externalOutboundCallback: ((outbound: {
+    threadId: string;
+    text: string;
+    timestamp: number;
+    hasMedia?: boolean;
+    parts?: unknown[];
+    bubbleId?: string;
+  }) => Promise<void>) | null = null;
 
   constructor(options: PlaywrightAdapterOptions) {
     this.channelAccountId = options.channelAccountId || "personal-messenger";
@@ -269,9 +278,22 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   onExternalOutbound(
-    callback: (outbound: { threadId: string; text: string; timestamp: number }) => Promise<void>
+    callback: (outbound: {
+      threadId: string;
+      text: string;
+      timestamp: number;
+      hasMedia?: boolean;
+      parts?: unknown[];
+      bubbleId?: string;
+    }) => Promise<void>
   ): void {
     this.externalOutboundCallback = callback;
+  }
+
+  setDurableBotOutboundChecker(
+    checker: (info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>
+  ): void {
+    this.isDurableBotOutboundChecker = checker;
   }
 
   rememberBotSentText(text: string): void {
@@ -292,6 +314,18 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (!lastBubble || !lastBubble.isOutgoing) return false;
 
       const outText = lastBubble.text.trim();
+      const hasMedia = Boolean(lastBubble.hasMedia || (lastBubble.parts && lastBubble.parts.length > 0));
+      if (!outText && !hasMedia) return false;
+
+      if (this.isDurableBotOutboundChecker) {
+        const isBot = await this.isDurableBotOutboundChecker({
+          threadId,
+          bubbleId: lastBubble.id,
+          text: outText,
+        });
+        if (isBot) return false;
+      }
+
       const isBotSent = this.recentBotSentTexts.some((botMsg) => {
         return (
           botMsg.text === outText ||
@@ -927,12 +961,24 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       }
     }
 
-    // 1.5 Detect external human outgoing bubbles
+    // 1.5 Detect external human outgoing bubbles (including media-only)
     if (lastOutgoingIdx >= 0 && this.externalOutboundCallback) {
       const lastOutBubble = bubbleResult.bubbles[lastOutgoingIdx];
       if (lastOutBubble) {
         const outBubbleId = lastOutBubble.id || `out:${threadInfo.threadId}:${lastOutBubble.text.trim()}`;
-        if (!this.seenOutgoingBubbleIds.has(outBubbleId)) {
+        const isThreadFirstBaseline = !this.threadBaselinesEstablished.has(threadInfo.threadId);
+
+        if (isThreadFirstBaseline) {
+          // Historical baseline: mark existing bubbles without triggering human takeover
+          this.threadBaselinesEstablished.add(threadInfo.threadId);
+          for (let i = 0; i <= lastOutgoingIdx; i++) {
+            const b = bubbleResult.bubbles[i];
+            if (b && b.isOutgoing) {
+              const bId = b.id || `out:${threadInfo.threadId}:${b.text.trim()}`;
+              this.seenOutgoingBubbleIds.add(bId);
+            }
+          }
+        } else if (!this.seenOutgoingBubbleIds.has(outBubbleId)) {
           this.seenOutgoingBubbleIds.add(outBubbleId);
           if (this.seenOutgoingBubbleIds.size > 1000) {
             const firstKey = this.seenOutgoingBubbleIds.values().next().value;
@@ -940,26 +986,49 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           }
 
           const outText = lastOutBubble.text.trim();
+          const hasMedia = Boolean(lastOutBubble.hasMedia || (lastOutBubble.parts && lastOutBubble.parts.length > 0));
           const now = Date.now();
+
+          // Check durable bot checker first (e.g. against DB outbound actions / bot messages across process restart)
+          let isDurableBot = false;
+          if (this.isDurableBotOutboundChecker) {
+            try {
+              isDurableBot = await this.isDurableBotOutboundChecker({
+                threadId: threadInfo.threadId,
+                bubbleId: lastOutBubble.id,
+                text: outText,
+              });
+            } catch {
+              // Ignore
+            }
+          }
+
           this.recentBotSentTexts = this.recentBotSentTexts.filter((item) => now - item.sentAt < 180000);
-          const isBotSent = this.recentBotSentTexts.some((botMsg) => {
+          const isRecentBotSent = this.recentBotSentTexts.some((botMsg) => {
             return (
               botMsg.text === outText ||
               (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
             );
           });
 
-          if (!isBotSent && outText.length > 0) {
+          const isBot = isDurableBot || isRecentBotSent;
+
+          if (!isBot && (outText.length > 0 || hasMedia)) {
             console.log(
-              `[BrowserAdapter] Detected external human outbound in thread ${threadInfo.threadId}: "${outText.slice(0, 40)}..."`
+              `[BrowserAdapter] Detected external human outbound in thread ${threadInfo.threadId} (text="${outText.slice(0, 40)}...", hasMedia=${hasMedia})`
             );
-            this.externalOutboundCallback({
-              threadId: threadInfo.threadId,
-              text: outText,
-              timestamp: now,
-            }).catch((err) => {
+            try {
+              await this.externalOutboundCallback({
+                threadId: threadInfo.threadId,
+                text: outText,
+                timestamp: now,
+                hasMedia,
+                parts: lastOutBubble.parts,
+                bubbleId: lastOutBubble.id,
+              });
+            } catch (err) {
               console.error("[BrowserAdapter] Error in externalOutboundCallback:", err);
-            });
+            }
           }
         }
       }

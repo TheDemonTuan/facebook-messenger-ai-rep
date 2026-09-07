@@ -65,8 +65,10 @@ export interface GenerationResult {
   requestSnapshot?: Record<string, unknown>;
   responseSnapshot?: Record<string, unknown>;
   usedResult?: {
+    action?: string;
     messages: string[];
     needsClarification: boolean;
+    reasonCode?: string;
   } | null;
 }
 
@@ -166,11 +168,13 @@ export function buildSanitizedRequestSnapshot(
 
 export function toUsedResult(
   data?: AiStructuredOutput
-): { messages: string[]; needsClarification: boolean } | null {
-  if (!data || !Array.isArray(data.messages)) return null;
+): { action?: string; messages: string[]; needsClarification: boolean; reasonCode?: string } | null {
+  if (!data) return null;
   return {
-    messages: [...data.messages],
+    action: data.action,
+    messages: Array.isArray(data.messages) ? [...data.messages] : [],
     needsClarification: Boolean(data.needsClarification),
+    reasonCode: "reasonCode" in data ? (data.reasonCode as string) : undefined,
   };
 }
 

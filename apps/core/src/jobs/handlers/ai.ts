@@ -11,7 +11,8 @@ import type {
   JobRepository,
   JobExecutionContext,
 } from "@messenger/db";
-import { aiRuns, aiDrafts, ReplyPolicyService, ConversationControlService } from "@messenger/db";
+import { aiRuns, aiDrafts, turns, ReplyPolicyService, ConversationControlService } from "@messenger/db";
+import { eq, sql } from "drizzle-orm";
 import type { AiReplyGenerator } from "@messenger/ai";
 import { buildLeanConversationContext } from "@messenger/ai";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
@@ -62,7 +63,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
     const payload = context.job.payload as unknown as AiJobPayload;
     const { channelAccountId, conversationId, inboundVersion, controlEpoch, turnId } = payload;
 
-    if (context.signal.aborted) {
+    if (context.signal?.aborted) {
       console.warn(`[AiHandler] Job ${context.job.id} aborted before execution`);
       return;
     }
@@ -115,6 +116,21 @@ export function createAiHandler(deps: AiHandlerDeps) {
       console.log(
         `[AiHandler] Skipping conversation ${conversationId}: manualMode=${conversation.manualMode}, blocked=${conversation.isBlocked}`
       );
+      return;
+    }
+
+    // Check if any message in turn was unsent
+    const preGenMessages =
+      typeof convRepo.getRecentMessages === "function"
+        ? await convRepo.getRecentMessages(conversationId, 10).catch(() => [])
+        : [];
+    const turnMsgs = preGenMessages.filter((m) => m.inboundVersion === inboundVersion);
+    if (turnMsgs.some((m) => m.eventKind === "MESSAGE_UNSENT")) {
+      console.warn(`[AiHandler] Inbound v${inboundVersion} message was unsent before AI generation. Cancelling.`);
+      if (turnId && typeof turnRepo.cancelTurn === "function") {
+        await turnRepo.cancelTurn(turnId, "Message was unsent before generation");
+      }
+      await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
       return;
     }
 
@@ -188,18 +204,26 @@ export function createAiHandler(deps: AiHandlerDeps) {
       }
     );
 
-    const result = await aiGenerator.generateReply({
-      customerName: customer.name,
-      customerSummary: conversation.summary,
-      recentMessages,
-      settings,
-    }, {
-      apiFormat: aiConfig.apiFormat,
-      baseUrl: aiConfig.baseUrl,
-      apiKey: aiConfig.apiKey,
-      model: aiConfig.model,
-      timeoutMs: settings.aiTimeoutMs,
-    }, context.signal);
+    const connection = aiConfig
+      ? {
+          apiFormat: aiConfig.apiFormat,
+          baseUrl: aiConfig.baseUrl,
+          apiKey: aiConfig.apiKey,
+          model: aiConfig.model,
+          timeoutMs: settings.aiTimeoutMs,
+        }
+      : undefined;
+
+    const result = await aiGenerator.generateReply(
+      {
+        customerName: customer.name,
+        customerSummary: conversation.summary,
+        recentMessages,
+        settings,
+      },
+      connection,
+      context.signal
+    );
 
     // 4. Save AI Run record
     const isGuardRejected = !result.success && Boolean(result.errorMessage?.includes("Guard rejection"));
@@ -300,10 +324,12 @@ export function createAiHandler(deps: AiHandlerDeps) {
       freshConversation.inboundVersion !== inboundVersion ||
       freshConversation.manualMode ||
       freshConversation.isBlocked ||
-      freshConversation.status === "MANUAL"
+      freshConversation.status === "MANUAL" ||
+      (freshConversation.controlEpoch ?? 0) > expectedControlEpoch ||
+      (freshConversation.replyControlMode && freshConversation.replyControlMode !== "AUTO")
     ) {
       console.log(
-        `[AiHandler] Discarding AI output for conv ${conversationId}: conversation changed during generation (manualMode=${freshConversation?.manualMode}, freshVer=${freshConversation?.inboundVersion}, jobVer=${inboundVersion})`
+        `[AiHandler] Discarding AI output for conv ${conversationId}: conversation changed during generation (manualMode=${freshConversation?.manualMode}, freshVer=${freshConversation?.inboundVersion}, jobVer=${inboundVersion}, controlEpoch=${freshConversation?.controlEpoch})`
       );
       await eventRepo.recordEvent({
         channelAccountId,
@@ -322,8 +348,177 @@ export function createAiHandler(deps: AiHandlerDeps) {
       return;
     }
 
+    // 5.6 Handle AI Decision Union (SKIP / NO_REPLY / HANDOFF / NEEDS_HUMAN / CLARIFY)
+    const aiDecision = result.data.action || "REPLY";
+
+    if (aiDecision === "SKIP" || aiDecision === "NO_REPLY") {
+      const reasonCode =
+        ("reasonCode" in result.data ? (result.data.reasonCode as string) : "NO_RESPONSE_NEEDED") ||
+        "NO_RESPONSE_NEEDED";
+      console.log(`[AiHandler] AI decided ${aiDecision} for conv ${conversationId} (${reasonCode}). Skipping outbound.`);
+      if (turnId) {
+        if (typeof turnRepo.completeTurn === "function") {
+          await turnRepo.completeTurn(turnId).catch(() => {});
+        } else {
+          await turnRepo.transitionStatus(
+            turnId,
+            "THINKING",
+            "COMPLETED",
+            context.ownerToken,
+            currentFencingEpoch
+          ).catch(() => {});
+        }
+      }
+      await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "AI_COMPLETED",
+        inboundVersion,
+        actor: "AI_WORKER",
+        payload: { action: "SKIP", reasonCode, runId: runRecord?.id },
+      });
+      await outboxRepo.enqueue({
+        channelAccountId,
+        conversationId,
+        eventType: "turn:completed",
+        payload: { conversationId, turnId, inboundVersion, action: "SKIP", reasonCode },
+      });
+      await broadcaster.broadcast("conversation:status", {
+        conversationId,
+        status: "WAITING_CUSTOMER",
+        inboundVersion,
+      });
+      return;
+    }
+
+    if (aiDecision === "HANDOFF" || aiDecision === "NEEDS_HUMAN") {
+      const reasonCode =
+        ("reasonCode" in result.data ? (result.data.reasonCode as string) : "HUMAN_TAKEOVER_REQUESTED") ||
+        "HUMAN_TAKEOVER_REQUESTED";
+      console.log(`[AiHandler] AI requested HANDOFF for conv ${conversationId} (${reasonCode}).`);
+      if (turnId) {
+        if (typeof turnRepo.completeTurn === "function") {
+          await turnRepo.completeTurn(turnId).catch(() => {});
+        } else {
+          await turnRepo.transitionStatus(
+            turnId,
+            "THINKING",
+            "COMPLETED",
+            context.ownerToken,
+            currentFencingEpoch
+          ).catch(() => {});
+        }
+      }
+      try {
+        await controlService.acquirePinned(conversationId, "AI_HANDOFF");
+      } catch {
+        await convRepo.updateStatus(conversationId, "MANUAL");
+      }
+      await eventRepo.recordEvent({
+        channelAccountId,
+        conversationId,
+        type: "MANUAL_TAKEOVER",
+        inboundVersion,
+        actor: "AI_WORKER",
+        payload: { action: "HANDOFF", reasonCode, runId: runRecord?.id },
+      });
+      await outboxRepo.enqueue({
+        channelAccountId,
+        conversationId,
+        eventType: "turn:completed",
+        payload: { conversationId, turnId, inboundVersion, action: "HANDOFF", reasonCode },
+      });
+      await broadcaster.broadcast("conversation:status", {
+        conversationId,
+        status: "MANUAL",
+        inboundVersion,
+      });
+      return;
+    }
+
+    if (aiDecision === "CLARIFY") {
+      let turnAlreadyClarified = false;
+      if (turnId && typeof turnRepo.getTurnById === "function") {
+        try {
+          const turnRow = await turnRepo.getTurnById(turnId);
+          turnAlreadyClarified = Boolean(turnRow?.metadata?.clarificationSent);
+        } catch {
+          // Fallback
+        }
+      }
+
+      if (turnAlreadyClarified) {
+        console.log(`[AiHandler] Clarification already sent for turn ${turnId}. Skipping additional clarification.`);
+        if (turnId) {
+          if (typeof turnRepo.completeTurn === "function") {
+            await turnRepo.completeTurn(turnId).catch(() => {});
+          } else {
+            await turnRepo.transitionStatus(
+              turnId,
+              "THINKING",
+              "COMPLETED",
+              context.ownerToken,
+              currentFencingEpoch
+            ).catch(() => {});
+          }
+        }
+        await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+        await broadcaster.broadcast("conversation:status", {
+          conversationId,
+          status: "WAITING_CUSTOMER",
+          inboundVersion,
+        });
+        return;
+      }
+
+      if (turnId) {
+        try {
+          await db
+            .update(turns)
+            .set({
+              metadata: sql`metadata || '{"clarificationSent": true}'::jsonb`,
+              updatedAt: new Date(),
+            })
+            .where(eq(turns.id, turnId));
+        } catch {
+          // Mock fallback
+        }
+      }
+    }
+
     // 6. Handle successful generation: save drafts and create outbound actions
-    const messagesToDraft = result.data.messages;
+    let messagesToDraft = result.data.messages;
+    if (aiDecision === "CLARIFY" && (!messagesToDraft || messagesToDraft.length === 0)) {
+      const promptText =
+        ("promptText" in result.data ? (result.data.promptText as string) : null) ||
+        "Dạ bạn đang quan tâm mẫu sản phẩm nào để shop hỗ trợ tư vấn chi tiết ạ?";
+      messagesToDraft = [promptText];
+    }
+
+    if (messagesToDraft.length === 0) {
+      console.warn(`[AiHandler] No messages to draft for conv ${conversationId}. Completing turn without send.`);
+      if (turnId) {
+        if (typeof turnRepo.completeTurn === "function") {
+          await turnRepo.completeTurn(turnId).catch(() => {});
+        } else {
+          await turnRepo.transitionStatus(
+            turnId,
+            "THINKING",
+            "COMPLETED",
+            context.ownerToken,
+            currentFencingEpoch
+          ).catch(() => {});
+        }
+      }
+      await convRepo.updateStatus(conversationId, "WAITING_CUSTOMER");
+      await broadcaster.broadcast("conversation:status", {
+        conversationId,
+        status: "WAITING_CUSTOMER",
+        inboundVersion,
+      });
+      return;
+    }
 
     if (runRecord && messagesToDraft.length > 0) {
       await db.insert(aiDrafts).values({

@@ -247,6 +247,40 @@ export const ReplyPrecedenceStepSchema = z.enum([
 ]);
 export type ReplyPrecedenceStep = z.infer<typeof ReplyPrecedenceStepSchema>;
 
+// --- PR-05 Content Disposition Enums ---
+
+export const ContentDispositionActionSchema = z.enum([
+  "SKIP",
+  "DEFER",
+  "GENERATE",
+  "CLARIFY",
+  "HANDOFF",
+]);
+export type ContentDispositionAction = z.infer<typeof ContentDispositionActionSchema>;
+
+export const ContentDispositionReasonCodeSchema = z.enum([
+  "NON_MESSAGE_EVENT",
+  "REACTION_ONLY",
+  "NO_RESPONSE_NEEDED",
+  "CONTENT_NOT_READY",
+  "CONTENT_UNAVAILABLE",
+  "CONTENT_UNSUPPORTED",
+  "PARSE_UNCERTAIN",
+  "DIRECTION_UNVERIFIED",
+  "SOURCE_ID_UNVERIFIED",
+  "DIRECTION_NOT_INBOUND",
+  "MEDIA_BUDGET_EXCEEDED",
+  "CLARIFICATION_ALREADY_SENT",
+  "NO_ACTIONABLE_CONTENT",
+  "MEDIA_PENDING",
+  "MEDIA_READY",
+  "TEXT_READY",
+  "HUMAN_TAKEOVER_REQUESTED",
+  "CONVERSATION_MANUAL_MODE",
+  "CONVERSATION_BLOCKED",
+]);
+export type ContentDispositionReasonCode = z.infer<typeof ContentDispositionReasonCodeSchema>;
+
 // --- PR-03 v2 Contract Enums ---
 
 export const ContentStatusSchema = z.enum([

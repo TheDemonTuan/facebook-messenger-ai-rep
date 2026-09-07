@@ -7,6 +7,7 @@ export interface CreateTurnParams {
   channelAccountId: string;
   conversationId: string;
   inboundVersion: number;
+  fencingEpoch?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -27,6 +28,7 @@ export class TurnRepository {
         conversationId: params.conversationId,
         inboundVersion: params.inboundVersion,
         status: "PENDING",
+        fencingEpoch: params.fencingEpoch ?? 0,
         metadata: params.metadata || {},
       })
       .onConflictDoNothing({
@@ -35,6 +37,27 @@ export class TurnRepository {
       .returning();
 
     if (created) return created;
+
+    if (params.metadata && Object.keys(params.metadata).length > 0) {
+      try {
+        const [updated] = await executor
+          .update(turns)
+          .set({
+            metadata: sql`metadata || ${JSON.stringify(params.metadata)}::jsonb`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(turns.conversationId, params.conversationId),
+              eq(turns.inboundVersion, params.inboundVersion)
+            )
+          )
+          .returning();
+        if (updated) return updated;
+      } catch {
+        // Fallback for mock/test doubles
+      }
+    }
 
     const [existing] = await executor
       .select()
@@ -265,6 +288,16 @@ export class TurnRepository {
 
   async getTurnById(turnId: string): Promise<typeof turns.$inferSelect | null> {
     const rows = await this.db.select().from(turns).where(eq(turns.id, turnId)).limit(1);
+    return rows[0] || null;
+  }
+
+  async getTurnByVersion(conversationId: string, inboundVersion: number, tx?: DatabaseOrTx): Promise<typeof turns.$inferSelect | null> {
+    const executor = tx || this.db;
+    const rows = await executor
+      .select()
+      .from(turns)
+      .where(and(eq(turns.conversationId, conversationId), eq(turns.inboundVersion, inboundVersion)))
+      .limit(1);
     return rows[0] || null;
   }
 

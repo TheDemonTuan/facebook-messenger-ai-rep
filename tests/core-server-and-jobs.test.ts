@@ -391,11 +391,13 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
         } as unknown as Job,
       });
 
-      expect(mockTurnRepo.createOrGetTurn).toHaveBeenCalledWith({
-        channelAccountId: "acc-1",
-        conversationId: "conv-101",
-        inboundVersion: 2,
-      });
+      expect(mockTurnRepo.createOrGetTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelAccountId: "acc-1",
+          conversationId: "conv-101",
+          inboundVersion: 2,
+        })
+      );
 
       expect(mockJobRepo.enqueue).toHaveBeenCalledWith(
         expect.objectContaining({

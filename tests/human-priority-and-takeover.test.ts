@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
 import { SystemSettingsDefaults } from "../packages/contracts/src/settings.js";
+import { evaluateContentDisposition } from "../packages/contracts/src/policy.js";
 import { buildChatMessages } from "../packages/ai/src/persona.js";
+import { validateAiOutput } from "../packages/ai/src/guards.js";
 import { createAiHandler } from "../apps/core/src/jobs/handlers/ai.js";
 import { createDebounceHandler } from "../apps/core/src/jobs/handlers/debounce.js";
 import { SenderWorkerService } from "../apps/browser-agent/src/sender-worker.js";
@@ -579,6 +581,653 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
             conversationId: "conv-hold-3",
             inboundVersion: 5,
           }),
+        })
+      );
+    });
+  });
+
+  describe("PR-05: Content Disposition under Hard Gates", () => {
+    it("respects hard gates (isBlocked, controlMode, direction) before evaluating content", () => {
+      // 1. Blocked
+      expect(
+        evaluateContentDisposition({
+          isBlocked: true,
+          text: "Shop có áo sơ mi trắng không?",
+        })
+      ).toEqual({ action: "SKIP", reasonCode: "CONVERSATION_BLOCKED" });
+
+      // 2. Manual mode
+      expect(
+        evaluateContentDisposition({
+          controlMode: "MANUAL",
+          text: "Shop có áo sơ mi trắng không?",
+        })
+      ).toEqual({ action: "SKIP", reasonCode: "CONVERSATION_MANUAL_MODE" });
+
+      // 3. Outbound direction
+      expect(
+        evaluateContentDisposition({
+          direction: "OUTBOUND",
+          text: "Chào bạn",
+        })
+      ).toEqual({ action: "SKIP", reasonCode: "DIRECTION_NOT_INBOUND" });
+    });
+
+    it("skips non-message events (reaction, delivery, presence, thread update, system notice)", () => {
+      expect(evaluateContentDisposition({ eventKind: "REACTION_CHANGED" })).toEqual({
+        action: "SKIP",
+        reasonCode: "REACTION_ONLY",
+      });
+
+      for (const eventKind of ["DELIVERY_UPDATED", "PRESENCE_CHANGED", "THREAD_UPDATED", "SYSTEM_NOTICE"]) {
+        expect(evaluateContentDisposition({ eventKind })).toEqual({
+          action: "SKIP",
+          reasonCode: "NON_MESSAGE_EVENT",
+        });
+      }
+
+      expect(evaluateContentDisposition({ eventKind: "MESSAGE_UNSENT" })).toEqual({
+        action: "SKIP",
+        reasonCode: "CONTENT_UNAVAILABLE",
+      });
+    });
+
+    it("evaluates content readiness and status transitions (pending, unsupported, quarantined, unavailable)", () => {
+      const now = new Date("2026-09-07T12:00:00.000Z");
+
+      // Pending media: DEFER with bounded deadline
+      const deferRes = evaluateContentDisposition({
+        contentStatus: "PENDING",
+        hasMedia: true,
+        now,
+        deadlineMs: 3000,
+      });
+      expect(deferRes.action).toBe("DEFER");
+      expect(deferRes.reasonCode).toBe("CONTENT_NOT_READY");
+      if (deferRes.action === "DEFER") {
+        expect(deferRes.deadlineAt).toBe(new Date("2026-09-07T12:00:03.000Z").toISOString());
+      }
+
+      // Unsupported format -> HANDOFF
+      expect(evaluateContentDisposition({ contentStatus: "UNSUPPORTED" })).toEqual({
+        action: "HANDOFF",
+        reasonCode: "CONTENT_UNSUPPORTED",
+      });
+
+      // Quarantined -> HANDOFF with PARSE_UNCERTAIN
+      expect(evaluateContentDisposition({ contentStatus: "QUARANTINED" })).toEqual({
+        action: "HANDOFF",
+        reasonCode: "PARSE_UNCERTAIN",
+      });
+
+      // Unavailable -> SKIP
+      expect(evaluateContentDisposition({ contentStatus: "UNAVAILABLE" })).toEqual({
+        action: "SKIP",
+        reasonCode: "CONTENT_UNAVAILABLE",
+      });
+    });
+
+    it("filters trivial acknowledgments without media (ok, cảm ơn, vâng) as NO_RESPONSE_NEEDED", () => {
+      const acks = ["ok", "oki", "dạ ok", "cảm ơn ạ", "thanks", "vâng ạ", "dạ!"];
+      for (const text of acks) {
+        expect(evaluateContentDisposition({ text, hasMedia: false })).toEqual({
+          action: "SKIP",
+          reasonCode: "NO_RESPONSE_NEEDED",
+        });
+      }
+
+      // If media is present with "ok", it should NOT be skipped as trivial
+      expect(evaluateContentDisposition({ text: "ok", hasMedia: true })).toEqual({
+        action: "GENERATE",
+        reasonCode: "MEDIA_READY",
+      });
+    });
+
+    it("clarification idempotency: media-only triggers CLARIFY once, then SKIPs subsequent calls", () => {
+      const first = evaluateContentDisposition({
+        hasMedia: true,
+        text: "",
+        clarificationSent: false,
+      });
+      expect(first.action).toBe("CLARIFY");
+      expect(first.reasonCode).toBe("CONTENT_NOT_READY");
+
+      const second = evaluateContentDisposition({
+        hasMedia: true,
+        text: "",
+        clarificationSent: true,
+      });
+      expect(second.action).toBe("SKIP");
+      expect(second.reasonCode).toBe("CLARIFICATION_ALREADY_SENT");
+    });
+  });
+
+  describe("PR-05: AI Decision Union & Anti-Hang Behavior", () => {
+    it("normalizes action-based decisions (SKIP, NO_REPLY, HANDOFF, CLARIFY) in validateAiOutput", () => {
+      // 1. SKIP / NO_REPLY
+      const skipRes = validateAiOutput(JSON.stringify({ action: "SKIP", reasonCode: "NO_RESPONSE_NEEDED" }));
+      expect(skipRes.valid).toBe(true);
+      expect(skipRes.data?.action).toBe("SKIP");
+      expect(skipRes.data?.messages).toEqual([]);
+
+      // 2. Case insensitive action normalization (e.g. "handoff")
+      const handoffRes = validateAiOutput(JSON.stringify({ action: "handoff", reasonCode: "COMPLEX_QUERY" }));
+      expect(handoffRes.valid).toBe(true);
+      expect(handoffRes.data?.action).toBe("HANDOFF");
+      expect(handoffRes.data?.messages).toEqual([]);
+
+      // 3. CLARIFY with promptText
+      const clarifyRes = validateAiOutput(
+        JSON.stringify({
+          action: "CLARIFY",
+          promptText: "Bạn cần hỗ trợ sản phẩm nào ạ?",
+        })
+      );
+      expect(clarifyRes.valid).toBe(true);
+      expect(clarifyRes.data?.action).toBe("CLARIFY");
+      expect(clarifyRes.data?.messages).toEqual(["Bạn cần hỗ trợ sản phẩm nào ạ?"]);
+    });
+
+    it("AI Handler handles SKIP decision without hanging: completes turn CAS and transitions to WAITING_CUSTOMER", async () => {
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-ai-skip",
+            inboundVersion: 2,
+            manualMode: false,
+            isBlocked: false,
+          },
+          customer: { id: "cust-1", name: "Khách test" },
+        }),
+        getRecentMessages: vi.fn().mockResolvedValue([]),
+        updateStatus: vi.fn().mockResolvedValue({}),
+      } as unknown as ConversationRepository;
+
+      const mockTurnRepo = {
+        claimTurn: vi.fn().mockResolvedValue({ id: "turn-ai-skip", fencingEpoch: 2 }),
+        completeTurn: vi.fn().mockResolvedValue({ id: "turn-ai-skip" }),
+        transitionStatus: vi.fn().mockResolvedValue({ id: "turn-ai-skip" }),
+      } as unknown as TurnRepository;
+
+      const mockEventRepo = { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository;
+      const mockOutboxRepo = { enqueue: vi.fn().mockResolvedValue({}) } as unknown as OutboxRepository;
+      const mockBroadcaster = { broadcast: vi.fn().mockResolvedValue({}) } as unknown as OutboxBroadcaster;
+
+      const mockGenerator: Partial<AiReplyGenerator> = {
+        generateReply: vi.fn().mockResolvedValue({
+          success: true,
+          data: { action: "SKIP", reasonCode: "NO_RESPONSE_NEEDED", messages: [] },
+          model: "mock-model",
+        }),
+      };
+
+      const mockDb = {
+        insert: vi.fn(() => ({
+          values: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: "run-uuid-1" }]),
+          })),
+        })),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ id: "acc-1", status: "RUNNING" }]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const aiHandler = createAiHandler({
+        db: mockDb,
+        convRepo: mockConvRepo,
+        turnRepo: mockTurnRepo,
+        outboundRepo: {} as unknown as OutboundRepoType,
+        settingsRepo: { getSettings: vi.fn().mockResolvedValue({ settings: SystemSettingsDefaults }) } as unknown as SettingsRepository,
+        aiConfigRepo: { getConfig: vi.fn().mockResolvedValue(null) } as unknown as AiConfigRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: mockEventRepo,
+        outboxRepo: mockOutboxRepo,
+        jobRepo: {} as unknown as JobRepository,
+        aiGenerator: mockGenerator as AiReplyGenerator,
+        broadcaster: mockBroadcaster,
+        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
+      });
+
+      await aiHandler({
+        job: {
+          payload: {
+            channelAccountId: "acc-1",
+            conversationId: "conv-ai-skip",
+            inboundVersion: 2,
+            turnId: "turn-ai-skip",
+          },
+        },
+        ownerToken: "token-ai",
+        fencingEpoch: 1,
+        signal: new AbortController().signal,
+      } as unknown as JobExecutionContext);
+
+      expect(mockTurnRepo.completeTurn).toHaveBeenCalledWith("turn-ai-skip");
+      expect(mockConvRepo.updateStatus).toHaveBeenCalledWith("conv-ai-skip", "WAITING_CUSTOMER");
+      expect(mockBroadcaster.broadcast).toHaveBeenCalledWith("conversation:status", expect.objectContaining({
+        conversationId: "conv-ai-skip",
+        status: "WAITING_CUSTOMER",
+      }));
+    });
+
+    it("AI Handler handles zero-message output without hanging in DRAFT_READY", async () => {
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-ai-empty",
+            inboundVersion: 2,
+            manualMode: false,
+            isBlocked: false,
+          },
+          customer: { id: "cust-1", name: "Khách test" },
+        }),
+        getRecentMessages: vi.fn().mockResolvedValue([]),
+        updateStatus: vi.fn().mockResolvedValue({}),
+      } as unknown as ConversationRepository;
+
+      const mockTurnRepo = {
+        claimTurn: vi.fn().mockResolvedValue({ id: "turn-ai-empty", fencingEpoch: 2 }),
+        completeTurn: vi.fn().mockResolvedValue({ id: "turn-ai-empty" }),
+      } as unknown as TurnRepository;
+
+      const mockEventRepo = { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository;
+      const mockOutboxRepo = { enqueue: vi.fn().mockResolvedValue({}) } as unknown as OutboxRepository;
+      const mockBroadcaster = { broadcast: vi.fn().mockResolvedValue({}) } as unknown as OutboxBroadcaster;
+
+      const mockGenerator: Partial<AiReplyGenerator> = {
+        generateReply: vi.fn().mockResolvedValue({
+          success: true,
+          data: { action: "REPLY", messages: [] },
+          model: "mock-model",
+        }),
+      };
+
+      const mockDb = {
+        insert: vi.fn(() => ({
+          values: vi.fn(() => ({
+            returning: vi.fn().mockResolvedValue([{ id: "run-uuid-1" }]),
+          })),
+        })),
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ id: "acc-1", status: "RUNNING" }]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const aiHandler = createAiHandler({
+        db: mockDb,
+        convRepo: mockConvRepo,
+        turnRepo: mockTurnRepo,
+        outboundRepo: {} as unknown as OutboundRepoType,
+        settingsRepo: { getSettings: vi.fn().mockResolvedValue({ settings: SystemSettingsDefaults }) } as unknown as SettingsRepository,
+        aiConfigRepo: { getConfig: vi.fn().mockResolvedValue(null) } as unknown as AiConfigRepository,
+        incidentRepo: {} as unknown as IncidentRepository,
+        eventRepo: mockEventRepo,
+        outboxRepo: mockOutboxRepo,
+        jobRepo: {} as unknown as JobRepository,
+        aiGenerator: mockGenerator as AiReplyGenerator,
+        broadcaster: mockBroadcaster,
+        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
+      });
+
+      await aiHandler({
+        job: {
+          payload: {
+            channelAccountId: "acc-1",
+            conversationId: "conv-ai-empty",
+            inboundVersion: 2,
+            turnId: "turn-ai-empty",
+          },
+        },
+        ownerToken: "token-ai",
+        fencingEpoch: 1,
+        signal: new AbortController().signal,
+      } as unknown as JobExecutionContext);
+
+      expect(mockTurnRepo.completeTurn).toHaveBeenCalledWith("turn-ai-empty");
+      expect(mockConvRepo.updateStatus).toHaveBeenCalledWith("conv-ai-empty", "WAITING_CUSTOMER");
+    });
+  });
+
+  describe("PR-05: Durable Outbound Identity & Baseline Takeover", () => {
+    it("isBotOutbound returns true when externalMessageRef matches bot outbound action", async () => {
+      const mockDb = {
+        select: vi.fn((_sel) => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ id: "action-123" }]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const outboundRepo = new OutboundRepository(mockDb);
+      const isBot = await outboundRepo.isBotOutbound({
+        channelAccountId: "acc-1",
+        externalMessageRef: "mid.bot.123",
+      });
+      expect(isBot).toBe(true);
+    });
+
+    it("isBotOutbound returns false when no match exists (confirms external human response)", async () => {
+      const mockDb = {
+        select: vi.fn((_sel) => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const outboundRepo = new OutboundRepository(mockDb);
+      const isBot = await outboundRepo.isBotOutbound({
+        channelAccountId: "acc-1",
+        externalMessageRef: "mid.human.999",
+        text: "Nhân viên đang trả lời nè",
+      });
+      expect(isBot).toBe(false);
+    });
+  });
+
+  describe("PR-05: Debounce Clarification Idempotency", () => {
+    it("sends clarification once for media-only inbound, sets clarificationSent: true", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-clarify-1",
+                  inboundVersion: 3,
+                  status: "RUNNING",
+                  isPaused: false,
+                  isSuspended: false,
+                  isBlocked: false,
+                  replyControlMode: "AUTO",
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([]),
+          })),
+        })),
+      } as unknown as Database;
+
+      const mockTurnRepo = {
+        getTurnByVersion: vi.fn().mockResolvedValue(null),
+        createOrGetTurn: vi.fn().mockResolvedValue({ id: "turn-clarify-1" }),
+      } as unknown as TurnRepository;
+
+      const mockOutboundRepo = {
+        createAction: vi.fn().mockResolvedValue({ actionId: "action-clarify-1", textHash: "h1" }),
+      } as unknown as OutboundRepoType;
+
+      const mockJobRepo = { enqueue: vi.fn().mockResolvedValue({}) } as unknown as JobRepository;
+      const mockEventRepo = { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository;
+      const mockBroadcaster = { broadcast: vi.fn().mockResolvedValue({}) } as unknown as OutboxBroadcaster;
+
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-clarify-1",
+            inboundVersion: 3,
+            manualMode: false,
+            isBlocked: false,
+            externalThreadRef: "thread-c1",
+          },
+        }),
+        getRecentMessages: vi.fn().mockResolvedValue([
+          {
+            inboundVersion: 3,
+            text: "",
+            parts: [{ type: "IMAGE", media: { mediaId: "img-1" } }],
+            contentStatus: "READY",
+            contentRevision: 1,
+          },
+        ]),
+      } as unknown as ConversationRepository;
+
+      const debounceHandler = createDebounceHandler({
+        db: mockDb,
+        turnRepo: mockTurnRepo,
+        jobRepo: mockJobRepo,
+        outboxRepo: {} as unknown as OutboxRepository,
+        eventRepo: mockEventRepo,
+        broadcaster: mockBroadcaster,
+        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
+        convRepo: mockConvRepo,
+        outboundRepo: mockOutboundRepo,
+      });
+
+      await debounceHandler({
+        job: {
+          payload: {
+            channelAccountId: "acc-1",
+            conversationId: "conv-clarify-1",
+            inboundVersion: 3,
+          },
+        },
+      } as unknown as JobExecutionContext);
+
+      expect(mockTurnRepo.createOrGetTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ clarificationSent: true }),
+        })
+      );
+      expect(mockOutboundRepo.createAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: "AI",
+          turnId: "turn-clarify-1",
+        })
+      );
+      expect(mockJobRepo.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          jobType: "BROWSER_SEND",
+        })
+      );
+    });
+
+    it("skips duplicate clarification if clarification was already sent for the turn", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-clarify-2",
+                  inboundVersion: 3,
+                  status: "RUNNING",
+                  isPaused: false,
+                  isSuspended: false,
+                  isBlocked: false,
+                  replyControlMode: "AUTO",
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([]),
+          })),
+        })),
+      } as unknown as Database;
+
+      const mockTurnRepo = {
+        getTurnByVersion: vi.fn().mockResolvedValue({
+          id: "turn-clarify-2",
+          metadata: { clarificationSent: true },
+        }),
+        createOrGetTurn: vi.fn(),
+      } as unknown as TurnRepository;
+
+      const mockOutboundRepo = {
+        createAction: vi.fn(),
+      } as unknown as OutboundRepoType;
+
+      const mockJobRepo = { enqueue: vi.fn() } as unknown as JobRepository;
+
+      const mockConvRepo = {
+        getConversationById: vi.fn().mockResolvedValue({
+          conversation: {
+            id: "conv-clarify-2",
+            inboundVersion: 3,
+            manualMode: false,
+            isBlocked: false,
+          },
+        }),
+        getRecentMessages: vi.fn().mockResolvedValue([
+          {
+            inboundVersion: 3,
+            text: "",
+            parts: [{ type: "IMAGE" }],
+            contentStatus: "READY",
+          },
+        ]),
+      } as unknown as ConversationRepository;
+
+      const debounceHandler = createDebounceHandler({
+        db: mockDb,
+        turnRepo: mockTurnRepo,
+        jobRepo: mockJobRepo,
+        outboxRepo: {} as unknown as OutboxRepository,
+        eventRepo: { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository,
+        broadcaster: {} as unknown as OutboxBroadcaster,
+        replyPolicyService: { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
+        convRepo: mockConvRepo,
+        outboundRepo: mockOutboundRepo,
+      });
+
+      await debounceHandler({
+        job: {
+          payload: {
+            channelAccountId: "acc-1",
+            conversationId: "conv-clarify-2",
+            inboundVersion: 3,
+          },
+        },
+      } as unknown as JobExecutionContext);
+
+      expect(mockTurnRepo.createOrGetTurn).not.toHaveBeenCalled();
+      expect(mockOutboundRepo.createAction).not.toHaveBeenCalled();
+      expect(mockJobRepo.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("PR-05: Fencing Xuyên Chuỗi — Control Epoch Pre-Enter Verification", () => {
+    it("aborts send action and cancels turn if controlEpoch moved or mode became non-AUTO right before Enter", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ id: "acc-1", status: "RUNNING" }]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const mockConvRepo = {
+        getConversationById: vi.fn()
+          // Initial check before typing: AUTO, epoch 1
+          .mockResolvedValueOnce({
+            conversation: {
+              id: "conv-fencing-1",
+              inboundVersion: 2,
+              manualMode: false,
+              controlEpoch: 1,
+              replyControlMode: "AUTO",
+              externalThreadRef: "thread-fence",
+            },
+          })
+          // Pre-send check right before Enter: human took over -> epoch moved to 2, mode to HUMAN_SESSION
+          .mockResolvedValueOnce({
+            conversation: {
+              id: "conv-fencing-1",
+              inboundVersion: 2,
+              manualMode: false,
+              controlEpoch: 2,
+              replyControlMode: "HUMAN_SESSION",
+              externalThreadRef: "thread-fence",
+            },
+          }),
+      } as unknown as ConversationRepository;
+
+      const mockTurnRepo = {
+        cancelTurn: vi.fn().mockResolvedValue(undefined),
+      } as unknown as TurnRepository;
+
+      const mockOutboundRepo = {
+        transitionStatus: vi.fn().mockResolvedValue({ id: "action-fence-1", status: "TYPING" }),
+        updateStatus: vi.fn().mockResolvedValue({}),
+      } as unknown as OutboundRepoType;
+
+      const mockEventRepo = { recordEvent: vi.fn().mockResolvedValue({}) } as unknown as EventRepository;
+
+      const mockAdapter = {
+        openConversation: vi.fn().mockResolvedValue(true),
+        typeDraft: vi.fn().mockResolvedValue({ completed: true }),
+        clearComposer: vi.fn().mockResolvedValue(undefined),
+        sendDraft: vi.fn(),
+        capturePreSendMarker: vi.fn().mockResolvedValue("m1"),
+        checkLastBubbleIsExternalOutbound: vi.fn().mockResolvedValue(false),
+      } as unknown as ChannelAdapter;
+
+      const senderService = new SenderWorkerService(
+        mockDb,
+        null,
+        mockAdapter,
+        null,
+        mockConvRepo,
+        null,
+        mockOutboundRepo,
+        mockEventRepo,
+        { getSettings: vi.fn().mockResolvedValue({ settings: SystemSettingsDefaults }) } as unknown as SettingsRepository,
+        {} as unknown as IncidentRepository,
+        {} as unknown as JobRepository,
+        undefined,
+        { recheckEligibility: vi.fn().mockResolvedValue({ eligible: true }) } as unknown as ReplyPolicyService,
+        mockTurnRepo
+      );
+
+      await senderService.processAction({
+        actionId: "action-fence-1",
+        channelAccountId: "acc-1",
+        conversationId: "conv-fencing-1",
+        externalThreadRef: "thread-fence",
+        inboundVersion: 2,
+        responseIndex: 0,
+        text: "AI reply should be aborted",
+        textHash: "h-fence",
+        actor: "AI",
+        claimToken: "tok-1",
+        ownerToken: "tok-1",
+        fencingToken: 1,
+        controlEpoch: 1,
+        turnId: "turn-fence-1",
+      });
+
+      expect(mockAdapter.clearComposer).toHaveBeenCalled();
+      expect(mockAdapter.sendDraft).not.toHaveBeenCalled();
+      expect(mockTurnRepo.cancelTurn).toHaveBeenCalledWith(
+        "turn-fence-1",
+        expect.stringContaining("Control epoch moved or human takeover pre-enter")
+      );
+      expect(mockOutboundRepo.updateStatus).toHaveBeenCalledWith(
+        "action-fence-1",
+        "ABORTED",
+        expect.objectContaining({
+          errorMessage: expect.stringContaining("Control epoch moved or human takeover pre-enter"),
         })
       );
     });

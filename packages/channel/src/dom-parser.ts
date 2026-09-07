@@ -38,6 +38,8 @@ export interface ParsedBubble {
   timestampPrecision?: TimestampPrecision;
   threadEvidence?: ClassificationEvidence[];
   senderEvidence?: ClassificationEvidence[];
+  hasMedia?: boolean;
+  parts?: unknown[];
 }
 
 export interface ThreadClassificationResult {
@@ -1248,7 +1250,31 @@ export function parseMessengerBubblesFromHtml(
     const bubbleText = extractNestedBubbleText(cleanBody);
     const cleanText = bubbleText || ariaMessageText || cleanHtmlText(cleanBody);
 
-    if (!cleanText) {
+    const hasMedia =
+      /<img\b[^>]*src=["'](?:blob:|https:\/\/[^"']*(?:cdninstagram|fbcdn|fna\.fbcdn))[^"']*["']/i.test(body) ||
+      /<audio\b/i.test(body) ||
+      /<video\b/i.test(body) ||
+      /data-testid=["'](?:image_message|video_message|audio_message|voice_message)["']/i.test(body) ||
+      /aria-label=["'][^"']*(?:hình ảnh|ảnh|image|photo|video|voice|ghi âm)[^"']*["']/i.test(openingTag + body);
+
+    const mediaParts: Array<{ type: string }> = [];
+    if (
+      /<audio\b/i.test(body) ||
+      /data-testid=["'](?:audio_message|voice_message)["']/i.test(body) ||
+      /aria-label=["'][^"']*(?:voice|ghi âm)[^"']*["']/i.test(openingTag + body)
+    ) {
+      mediaParts.push({ type: "AUDIO" });
+    } else if (
+      /<video\b/i.test(body) ||
+      /data-testid=["']video_message["']/i.test(body) ||
+      /aria-label=["'][^"']*(?:video)[^"']*["']/i.test(openingTag + body)
+    ) {
+      mediaParts.push({ type: "VIDEO" });
+    } else if (hasMedia) {
+      mediaParts.push({ type: "IMAGE" });
+    }
+
+    if (!cleanText && !hasMedia) {
       continue;
     }
 
@@ -1257,9 +1283,9 @@ export function parseMessengerBubblesFromHtml(
 
     if (!stableId) {
       // Degraded only for ACTUAL message rows (Finding 4)
-      if (isActualMessageRow(openingTag, body, cleanText)) {
+      if (isActualMessageRow(openingTag, body, cleanText || "media")) {
         isDegraded = true;
-        degradedReason = `Message row with text "${cleanText.slice(0, 30)}" missing stable mid identifier`;
+        degradedReason = `Message row with text "${(cleanText || "media").slice(0, 30)}" missing stable mid identifier`;
       }
       continue;
     }
@@ -1299,6 +1325,8 @@ export function parseMessengerBubblesFromHtml(
       id: stableId,
       text: cleanText,
       isOutgoing,
+      hasMedia: hasMedia || undefined,
+      parts: mediaParts.length > 0 ? mediaParts : undefined,
       senderName: isOutgoing ? undefined : senderResult.senderName,
       senderId: isOutgoing ? (options?.botParticipantId ?? options?.botChannelAccountId ?? null) : senderResult.senderId,
       senderProfileUrl: isOutgoing ? (options?.botProfileUrl ?? null) : senderResult.senderProfileUrl,
