@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   extractMessengerThreadId,
@@ -967,6 +969,145 @@ describe("Messenger session hardening", () => {
     expect(result.bubbles).toHaveLength(1);
     expect(result.bubbles[0].isOutgoing).toBe(true);
     expect(result.bubbles[0].text).toContain("Ôi, buồn thế à?");
+  });
+
+  describe("Messenger Adapter Evaluator & Real DOM Boundary Tests", () => {
+    it("evaluates direct and group thread boundaries against live fixtures", async () => {
+      const adapter = new PlaywrightMessengerAdapter({
+        profileDir: "./test-profile",
+        channelAccountId: "account-1",
+        botParticipantId: "9999999999",
+      });
+
+      const liveDirectHtml = fs.readFileSync(
+        path.resolve(__dirname, "fixtures/messenger-dom-e2ee-direct-live.html"),
+        "utf-8"
+      );
+      const liveGroupHtml = fs.readFileSync(
+        path.resolve(__dirname, "fixtures/messenger-dom-e2ee-group-live.html"),
+        "utf-8"
+      );
+
+      // Direct page mock
+      const directPage = {
+        url: () => "https://www.facebook.com/messages/e2ee/t/888888888888888",
+        evaluate: vi.fn().mockImplementation((fn: () => unknown) => {
+          const fnStr = fn.toString();
+          if (fnStr.includes("cloneNode") || (fnStr.includes("div[role=") && fnStr.includes("return clone"))) {
+            return Promise.resolve(liveDirectHtml);
+          }
+          if (fnStr.includes("Conversation titled") || fnStr.includes("groupSelector")) {
+            return Promise.resolve(false);
+          }
+          if (fnStr.includes("directProfileId") || fnStr.includes("profile.php?id=")) {
+            return Promise.resolve("888888888888888");
+          }
+          if (fnStr.includes("mainHeaderInfo") || fnStr.includes("avatarImg") || fnStr.includes("avatarUrl")) {
+            return Promise.resolve({ title: "Sanitized Customer", avatarUrl: "https://example.com/avatar.jpg" });
+          }
+          return Promise.resolve(null);
+        }),
+      };
+
+      const directResult = await internals(adapter).readBubblesFromPage(directPage, {
+        threadId: "888888888888888",
+        participantId: "888888888888888",
+        threadTitle: "Sanitized Customer",
+      });
+
+      expect(directResult.ok).toBe(true);
+      expect(directResult.threadClassification?.kind).toBe("DIRECT");
+      expect(directResult.threadClassification?.reliability).toBe("VERIFIED");
+      expect(directResult.headerTitle).toBe("Sanitized Customer");
+
+      const inDirect = directResult.bubbles.filter((b: { isOutgoing: boolean }) => !b.isOutgoing);
+      expect(inDirect.length).toBeGreaterThan(0);
+      for (const b of inDirect) {
+        expect(b.senderId).toBe("888888888888888");
+        expect(b.senderId).not.toBe("9999999999");
+      }
+
+      // Group page mock
+      const groupPage = {
+        url: () => "https://www.facebook.com/messages/e2ee/t/777777777777777",
+        evaluate: vi.fn().mockImplementation((fn: () => unknown) => {
+          const fnStr = fn.toString();
+          if (fnStr.includes("cloneNode") || (fnStr.includes("div[role=") && fnStr.includes("return clone"))) {
+            return Promise.resolve(liveGroupHtml);
+          }
+          if (fnStr.includes("Conversation titled") || fnStr.includes("groupSelector")) {
+            return Promise.resolve(true);
+          }
+          if (fnStr.includes("directProfileId") || fnStr.includes("profile.php?id=")) {
+            return Promise.resolve(null);
+          }
+          if (fnStr.includes("mainHeaderInfo") || fnStr.includes("avatarImg") || fnStr.includes("avatarUrl")) {
+            return Promise.resolve({ title: "Test Group Room", avatarUrl: null });
+          }
+          return Promise.resolve(null);
+        }),
+      };
+
+      const groupResult = await internals(adapter).readBubblesFromPage(groupPage, {
+        threadId: "777777777777777",
+        participantId: null,
+        threadTitle: "Test Group Room",
+      });
+
+      expect(groupResult.ok).toBe(true);
+      expect(groupResult.threadClassification?.kind).toBe("GROUP");
+      expect(groupResult.threadClassification?.reliability).toBe("VERIFIED");
+      expect(groupResult.headerTitle).toBe("Test Group Room");
+
+      const inGroup = groupResult.bubbles.filter((b: { isOutgoing: boolean }) => !b.isOutgoing);
+      expect(inGroup.length).toBeGreaterThan(0);
+      for (const b of inGroup) {
+        expect(b.threadKind).toBe("GROUP");
+        expect(b.senderId).not.toBe("9999999999");
+        expect(b.senderId).not.toBe("777777777777777");
+        expect(b.senderReliability).toBe("UNVERIFIED");
+      }
+    });
+
+    it("rejects hints overriding route mismatch in readBubblesFromPage", async () => {
+      const adapter = new PlaywrightMessengerAdapter({
+        profileDir: "./test-profile",
+        channelAccountId: "account-1",
+        botParticipantId: "9999999999",
+      });
+
+      const page = {
+        url: () => "https://www.facebook.com/messages/e2ee/t/thread-actual",
+        evaluate: vi.fn().mockImplementation((fn: () => unknown) => {
+          const fnStr = fn.toString();
+          if (fnStr.includes("cloneNode")) {
+            return Promise.resolve(`
+              <div role="main">
+                <div role="row" id="mid.actual-msg">
+                  <div dir="auto">hello</div>
+                </div>
+              </div>
+            `);
+          }
+          if (fnStr.includes("isGroup")) return Promise.resolve(false);
+          if (fnStr.includes("directProfileId")) return Promise.resolve(null);
+          if (fnStr.includes("mainHeaderInfo")) return Promise.resolve({ title: null, avatarUrl: null });
+          return Promise.resolve(null);
+        }),
+      };
+
+      // Pass mismatched hint: hint says thread-wrong and participant-wrong
+      const result = await internals(adapter).readBubblesFromPage(page, {
+        threadId: "thread-wrong",
+        participantId: "participant-wrong",
+        threadTitle: "Wrong Name",
+      });
+
+      expect(result.ok).toBe(true);
+      // Because hints were for thread-wrong, effectiveHints was ignored and participant-wrong was not applied!
+      const bubble = result.bubbles[0]!;
+      expect(bubble.senderId).toBeNull();
+    });
   });
 
   it("completeTurn and cancelTurn clear channel active_turn_id lease", async () => {

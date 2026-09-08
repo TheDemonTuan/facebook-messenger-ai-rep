@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { apiFetch } from "../api";
 import type { ChannelOverview } from "../types";
+import { getDerivedChannelStatus } from "../helpers/channel-helpers";
 import { useAuth } from "../context/AuthContext";
 import { useSse, useSseWakeup } from "../context/SseContext";
 import { useBusinessTimeZone } from "../context/TimezoneContext";
@@ -64,7 +65,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     if (!overview || pausing) return;
     setPausing(true);
     try {
-      if (overview.channelIsPaused) {
+      const isCurrentlyPaused = Boolean(overview.channelIsPaused || overview.channelStatus === "PAUSED");
+      if (isCurrentlyPaused) {
         await apiFetch("/api/channel/resume", { method: "POST" });
       } else {
         if (confirm("Tạm dừng xử lý tin nhắn? (Tin nhắn mới vẫn được tiếp nhận an toàn nhưng AI sẽ không tự động phản hồi)")) {
@@ -98,23 +100,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { label: "Nhật ký hoạt động", path: "/audit", icon: Shield },
   ];
 
-  const formatChannelStatus = (status?: string) => {
-    switch (status) {
-      case "RUNNING":
-        return "Đang hoạt động";
-      case "PAUSED":
-        return "Tạm dừng";
-      case "SUSPENDED":
-        return "Tạm khóa";
-      case "DEGRADED":
-        return "Chập chờn";
-      case "ERROR":
-        return "Gặp sự cố";
-      default:
-        return status || "Chưa xác định";
-    }
-  };
-
   const getRoleLabel = (role?: string) => {
     switch (role) {
       case "OWNER":
@@ -125,21 +110,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         return "Người xem";
       default:
         return role || "Người vận hành";
-    }
-  };
-
-  const getStatusColor = (status?: string) => {
-    switch (status) {
-      case "RUNNING":
-        return "#10b981";
-      case "PAUSED":
-        return "#f59e0b";
-      case "SUSPENDED":
-      case "DEGRADED":
-      case "ERROR":
-        return "#ef4444";
-      default:
-        return "#64748b";
     }
   };
 
@@ -350,57 +320,62 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
           {/* Right Header Controls: Channel Status & Pause */}
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            {overview && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  fontSize: "0.8rem",
-                  fontWeight: "600",
-                  color: "#334155",
-                }}
-              >
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: getStatusColor(overview.channelStatus),
-                  }}
-                />
-                <span>Kênh: {formatChannelStatus(overview.channelStatus)}</span>
-              </div>
-            )}
+            {overview && (() => {
+              const channelDisplay = getDerivedChannelStatus(overview);
+              const isPaused = channelDisplay.isPaused;
+              return (
+                <>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "0.8rem",
+                      fontWeight: "600",
+                      color: "#334155",
+                    }}
+                    title={channelDisplay.healthNote ? `${channelDisplay.label} (${channelDisplay.healthNote})` : channelDisplay.label}
+                  >
+                    <span
+                      style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        backgroundColor: channelDisplay.color,
+                      }}
+                    />
+                    <span>Kênh: {channelDisplay.label}</span>
+                  </div>
 
-            {overview && (
-              <button
-                onClick={handlePauseToggle}
-                disabled={pausing}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                  padding: "5px 10px",
-                  borderRadius: "6px",
-                  border: "1px solid #cbd5e1",
-                  backgroundColor: overview.channelIsPaused ? "#10b981" : "#ffffff",
-                  color: overview.channelIsPaused ? "#ffffff" : "#334155",
-                  fontSize: "0.8rem",
-                  fontWeight: "600",
-                  cursor: pausing ? "not-allowed" : "pointer",
-                }}
-              >
-                {pausing ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : overview.channelIsPaused ? (
-                  <Play size={13} />
-                ) : (
-                  <Pause size={13} />
-                )}
-                <span>{overview.channelIsPaused ? "Tiếp tục" : "Tạm dừng"}</span>
-              </button>
-            )}
+                  <button
+                    onClick={handlePauseToggle}
+                    disabled={pausing}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      padding: "5px 10px",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      backgroundColor: isPaused ? "#10b981" : "#ffffff",
+                      color: isPaused ? "#ffffff" : "#334155",
+                      fontSize: "0.8rem",
+                      fontWeight: "600",
+                      cursor: pausing ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {pausing ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : isPaused ? (
+                      <Play size={13} />
+                    ) : (
+                      <Pause size={13} />
+                    )}
+                    <span>{isPaused ? "Tiếp tục" : "Tạm dừng"}</span>
+                  </button>
+                </>
+              );
+            })()}
           </div>
         </header>
 

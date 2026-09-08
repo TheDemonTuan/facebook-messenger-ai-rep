@@ -31,6 +31,7 @@ import {
   shouldRefetchIncidents,
   shouldRefetchOverview,
 } from "../apps/dashboard/src/helpers/sse-helpers";
+import { getDerivedChannelStatus } from "../apps/dashboard/src/helpers/channel-helpers";
 import type { ConversationItem, MessageItem, OutboundActionItem, IncidentItem } from "../apps/dashboard/src/types";
 
 describe("Dashboard PostgreSQL Architecture State Helpers", () => {
@@ -440,6 +441,111 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
       expect(shouldRefetchIncidents("outbound:uncertain")).toBe(true);
       expect(shouldRefetchOverview("channel:status")).toBe(true);
       expect(shouldRefetchOverview("incident:created")).toBe(true);
+    });
+  });
+
+  describe("6. Channel Status & Operational Health vs Pause Separation", () => {
+    it("returns RUNNING for healthy, active, unpaused channel", () => {
+      const derived = getDerivedChannelStatus({
+        channelStatus: "RUNNING",
+        channelIsPaused: false,
+        channelIsSuspended: false,
+      });
+
+      expect(derived.status).toBe("RUNNING");
+      expect(derived.label).toBe("Đang hoạt động");
+      expect(derived.color).toBe("#10b981");
+      expect(derived.isPaused).toBe(false);
+      expect(derived.isOperationalHealthy).toBe(true);
+    });
+
+    it("returns PAUSED when explicitly marked PAUSED via dashboard pause action", () => {
+      const derived = getDerivedChannelStatus({
+        channelStatus: "PAUSED",
+        channelIsPaused: true,
+        channelIsSuspended: false,
+      });
+
+      expect(derived.status).toBe("PAUSED");
+      expect(derived.label).toBe("Tạm dừng");
+      expect(derived.color).toBe("#f59e0b");
+      expect(derived.isPaused).toBe(true);
+      expect(derived.isOperationalHealthy).toBe(true);
+    });
+
+    it("crucial regression: preserves PAUSED display even when operational health is RUNNING after restart/reload", () => {
+      // Root cause under test: container restart or session recovery reports operational health
+      // as RUNNING, but channelIsPaused remains true. Must derive PAUSED, not RUNNING!
+      const derived = getDerivedChannelStatus({
+        channelStatus: "RUNNING",
+        channelIsPaused: true,
+        channelIsSuspended: false,
+      });
+
+      expect(derived.status).toBe("PAUSED");
+      expect(derived.label).toBe("Tạm dừng");
+      expect(derived.color).toBe("#f59e0b");
+      expect(derived.isPaused).toBe(true);
+      expect(derived.isOperationalHealthy).toBe(true);
+      expect(derived.healthNote).toBe("Kết nối Messenger ổn định");
+    });
+
+    it("prioritizes SUSPENDED over paused when channel is suspended due to incident", () => {
+      const derived = getDerivedChannelStatus({
+        channelStatus: "RUNNING",
+        channelIsPaused: true,
+        channelIsSuspended: true,
+        channelStatusReason: "Outbound verification timeout post-Enter",
+      });
+
+      expect(derived.status).toBe("SUSPENDED");
+      expect(derived.label).toBe("Tạm khóa");
+      expect(derived.color).toBe("#ef4444");
+      expect(derived.isPaused).toBe(true);
+      expect(derived.isOperationalHealthy).toBe(false);
+      expect(derived.healthNote).toContain("Outbound verification timeout");
+    });
+
+    it("prioritizes DEGRADED over paused when Messenger session is degraded", () => {
+      const derived = getDerivedChannelStatus({
+        channelStatus: "DEGRADED",
+        channelIsPaused: true,
+        channelIsSuspended: false,
+        channelStatusReason: "LOGIN_REQUIRED: Phiên Facebook đã hết hạn",
+      });
+
+      expect(derived.status).toBe("DEGRADED");
+      expect(derived.label).toBe("Chập chờn");
+      expect(derived.color).toBe("#ef4444");
+      expect(derived.isPaused).toBe(true);
+      expect(derived.isOperationalHealthy).toBe(false);
+      expect(derived.healthNote).toContain("LOGIN_REQUIRED");
+    });
+
+    it("prioritizes ERROR over paused when channel is in ERROR state", () => {
+      const derived = getDerivedChannelStatus({
+        channelStatus: "ERROR",
+        channelIsPaused: true,
+        channelIsSuspended: false,
+      });
+
+      expect(derived.status).toBe("ERROR");
+      expect(derived.label).toBe("Gặp sự cố");
+      expect(derived.color).toBe("#ef4444");
+      expect(derived.isPaused).toBe(true);
+      expect(derived.isOperationalHealthy).toBe(false);
+    });
+
+    it("gracefully falls back when overview is null or undefined", () => {
+      const derivedNull = getDerivedChannelStatus(null);
+      expect(derivedNull.label).toBe("Chưa xác định");
+      expect(derivedNull.color).toBe("#64748b");
+      expect(derivedNull.isPaused).toBe(false);
+
+      const derivedUndef = getDerivedChannelStatus(undefined);
+      expect(derivedUndef.label).toBe("Chưa xác định");
+      expect(derivedUndef.color).toBe("#64748b");
+      expect(derivedUndef.isPaused).toBe(false);
     });
   });
 });

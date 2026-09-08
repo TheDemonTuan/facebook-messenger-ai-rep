@@ -44,7 +44,8 @@ export function getObserverPollDelay(): number {
   return OBSERVER_POLL_INTERVAL_MS + Math.floor(Math.random() * 1500);
 }
 
-export function extractMessengerThreadId(value: string): string | null {
+export function extractMessengerThreadId(value: string | null | undefined): string | null {
+  if (!value || typeof value !== "string") return null;
   return value.match(MESSENGER_THREAD_PATH)?.[1] ?? null;
 }
 
@@ -622,9 +623,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         const participantId =
           href.match(/[?&](?:id|participant_id)=([0-9]+)/i)?.[1] ||
           a.querySelector('img[src*="fbid="]')?.getAttribute("src")?.match(/[?&]fbid=([0-9]+)/i)?.[1] ||
-          (/^[0-9]+$/.test(threadId) && !/\b(?:\d+\s*(?:members|thành viên)|chat members|group options)\b/i.test(rawText)
-            ? threadId
-            : null);
+          null;
 
         let snippet = "";
         const autoSpans = Array.from((a as HTMLElement).querySelectorAll('span[dir="auto"]'));
@@ -829,7 +828,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           }
 
           const currentThreadId = extractMessengerThreadId(observerPage.url());
-          if (currentThreadId) {
+          const currentIsBaselineCandidate = baselineCandidates.some((c) => c.thread.threadId === currentThreadId);
+          if (currentThreadId && !currentIsBaselineCandidate) {
             const currentBubbles = await this.readBubblesFromPage(observerPage, { threadId: currentThreadId });
             for (const bubble of currentBubbles.bubbles) {
               this.lastSeenMessageIds.add(bubble.id);
@@ -1106,7 +1106,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
         const isVerifiedSender = Boolean(bubble.senderId && bubble.senderReliability === "VERIFIED");
 
-        const resolvedName = threadInfo.customerName || bubble.senderName || bubbleResult.headerTitle || null;
+        const resolvedName =
+          (threadInfo.customerName && threadInfo.customerName !== "Customer" ? threadInfo.customerName : null) ||
+          bubbleResult.headerTitle ||
+          bubble.senderName ||
+          threadInfo.customerName ||
+          null;
 
         const resolvedAvatar = bubbleResult.avatarUrl || threadInfo.avatarUrl || null;
 
@@ -1283,51 +1288,125 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
           return clone.outerHTML;
         });
-        const currentThreadId = hints?.threadId || extractMessengerThreadId(page.url()) || "";
+        const urlThreadId = extractMessengerThreadId(page.url()) || "";
+        if (!urlThreadId) {
+          return { ok: false, bubbles: [], isDegraded: false };
+        }
+        // Avoid hints overriding route mismatch
+        const hintsMatchRoute = !hints?.threadId || hints.threadId === urlThreadId;
+        const currentThreadId = urlThreadId;
+        const effectiveHints = hintsMatchRoute ? hints : undefined;
 
         const isGroup = await page.evaluate(() => {
-          const header =
-            document.querySelector('header, [role="banner"], [data-testid*="header"], [data-testid="conversation_header"]') ||
-            document.querySelector('div[role="main"]')?.querySelector('header, [role="banner"], [data-testid*="header"]');
-          if (!header) return false;
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return false;
+
+          // 1. Group heading or aria-label in main
+          const headings = Array.from(main.querySelectorAll('h1, h2, h3, [role="heading"], [aria-label]'));
+          for (const el of headings) {
+            const text = el.textContent || "";
+            const aria = el.getAttribute("aria-label") || "";
+            if (
+              /^(?:Conversation titled|Đoạn chat được đặt tên là)\b/i.test(text) ||
+              /^(?:Conversation titled|Đoạn chat được đặt tên là)\b/i.test(aria)
+            ) {
+              return true;
+            }
+          }
+
+          // 2. Group controls / options in main or side panel
           const groupSelector = `
-            [aria-label*="Chat members" i],
-            [aria-label*="Thành viên" i],
             [aria-label*="Group options" i],
             [aria-label*="Tùy chọn nhóm" i],
-            [aria-label*="Group info" i],
-            [aria-label*="Thông tin nhóm" i],
+            [aria-label*="Chat members" i],
+            [aria-label*="Thành viên trong đoạn chat" i],
+            [aria-label*="Thành viên" i],
             [aria-label*="Add people" i],
             [aria-label*="Thêm người" i],
             [aria-label*="Change group" i],
             [aria-label*="Đổi tên nhóm" i],
-            [aria-label*="Đổi tên đoạn chat" i]
+            [aria-label*="Đổi tên đoạn chat" i],
+            [data-testid*="group_chat_header"],
+            [data-thread-type="GROUP"]
           `;
-          if (header.querySelector(groupSelector) !== null) return true;
-          const headerAria = header.getAttribute("aria-label") || "";
-          if (/thông tin nhóm|group info|group options|tùy chọn nhóm/i.test(headerAria)) return true;
-          const text = (header as HTMLElement).innerText || header.textContent || "";
-          return /\b(\d+)\s*(?:thành viên|members)\b/i.test(text);
+          if (main.querySelector(groupSelector) !== null) return true;
+
+          // 3. Member count in main (exclude active ago)
+          const text = (main as HTMLElement).innerText || main.textContent || "";
+          return /\b(\d+)\s*(?:thành viên|members)\b/i.test(text) && !/active\s*\d+\s*(?:m|min|h|d)\s*ago/i.test(text);
         }).catch(() => false);
 
-        const directProfileId = await page.evaluate(() => {
-          const header =
-            document.querySelector('header, [role="banner"], [data-testid*="header"], [data-testid="conversation_header"]') ||
-            document.querySelector('div[role="main"]')?.querySelector('header, [role="banner"], [data-testid*="header"]');
-          if (!header) return null;
-          const links = Array.from(header.querySelectorAll('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i], a[href*="facebook.com/"], a[href^="/"]'));
-          for (const a of links) {
-            const href = a.getAttribute("href") || "";
-            if (href.includes("/messages/")) continue;
-            const match = href.match(/(?:profile\.php\?id=|facebook\.com\/|^\/)([0-9]{5,})/i);
-            if (match?.[1]) return match[1];
-          }
-          return null;
-        }).catch(() => null);
+        const directProfileId = isGroup
+          ? null
+          : await page.evaluate(() => {
+              const main = document.querySelector('div[role="main"]');
+              if (!main) return null;
+              // Look strictly inside main header or side panel links
+              const links = Array.from(main.querySelectorAll('a[href*="facebook.com/"], a[href^="/"]'));
+              for (const a of links) {
+                const href = a.getAttribute("href") || "";
+                if (href.includes("/messages/") || href.includes("/messenger_media/")) continue;
+                const match = href.match(/(?:profile\.php\?id=|facebook\.com\/|^\/)([0-9]{5,})/i);
+                if (match?.[1]) return match[1];
+              }
+              return null;
+            }).catch(() => null);
 
         const directParticipantId = isGroup
           ? null
-          : (directProfileId || hints?.participantId || (/^[0-9]+$/.test(currentThreadId) ? currentThreadId : null));
+          : (directProfileId || (effectiveHints?.participantId && effectiveHints.participantId !== this.botParticipantId ? effectiveHints.participantId : null));
+
+        const mainHeaderInfo = await page.evaluate(() => {
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return { title: null, avatarUrl: null };
+          const avatarImg = main.querySelector('img[src*="scontent"], img[src*="fbcdn"], img[src*="avatar"]');
+          const avatarUrl = avatarImg?.getAttribute("src") || null;
+
+          // 1. Conversation titled / Conversation with
+          const convEl = Array.from(main.querySelectorAll('h1, h2, h3, [role="heading"], [aria-label]')).find((el) => {
+            const text = el.textContent?.trim() || "";
+            const aria = el.getAttribute("aria-label")?.trim() || "";
+            return /^(?:Conversation (?:with|titled)|Cuộc trò chuyện với|Đoạn chat được đặt tên là)\s+(.+)$/i.test(text) ||
+                   /^(?:Conversation (?:with|titled)|Cuộc trò chuyện với|Đoạn chat được đặt tên là)\s+(.+)$/i.test(aria);
+          });
+          if (convEl) {
+            const raw = convEl.textContent?.trim() || convEl.getAttribute("aria-label")?.trim() || "";
+            const m = raw ? raw.match(/^(?:Conversation (?:with|titled)|Cuộc trò chuyện với|Đoạn chat được đặt tên là)\s+(.+)$/i) : null;
+            if (m?.[1]?.trim()) return { title: m[1].trim(), avatarUrl };
+          }
+
+          // 2. Header pagelet
+          const headerPagelet = main.querySelector('[data-pagelet="MWInboxDetail_MessageList_Header"]');
+          if (headerPagelet) {
+            const heading = headerPagelet.querySelector('h1, h2, h3, [role="heading"]');
+            if (heading?.textContent?.trim()) return { title: heading.textContent.trim(), avatarUrl };
+            const link = headerPagelet.querySelector('a[href*="/"]');
+            if (link?.textContent?.trim()) {
+              const cleaned = link.textContent.trim().replace(/\s*(?:Active|Đang hoạt động).*$/i, "").trim();
+              if (cleaned) return { title: cleaned, avatarUrl };
+            }
+          }
+
+          // 3. Side detail pagelet
+          const sidePagelet = main.querySelector('[data-pagelet="MWInboxDetail_ThreadDetail"]');
+          if (sidePagelet) {
+            const heading = sidePagelet.querySelector('h1, h2, h3, [role="heading"]');
+            if (heading?.textContent?.trim()) return { title: heading.textContent.trim(), avatarUrl };
+          }
+
+          // 4. Any heading in main
+          const headings = Array.from(main.querySelectorAll('h1, h2, h3, [role="heading"]'));
+          for (const h of headings) {
+            const text = h.textContent?.trim() || "";
+            if (!text || /^(?:Messages|Tin nhắn|Compose|Soạn tin nhắn)$/i.test(text)) continue;
+            if (text.length <= 100) return { title: text, avatarUrl };
+          }
+
+          return { title: null, avatarUrl };
+        }).catch(() => ({ title: null, avatarUrl: null }));
+
+        const mainHeaderTitle = mainHeaderInfo?.title ?? null;
+        const mainHeaderAvatar = mainHeaderInfo?.avatarUrl ?? null;
 
         const parsed = parseMessengerBubblesFromHtml(html, {
           threadKindHint: isGroup ? "GROUP" : "DIRECT",
@@ -1337,11 +1416,35 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           botChannelAccountId: this.channelAccountId,
           botParticipantId: this.botParticipantId,
           botProfileUrl: this.botProfileUrl,
-          threadTitleHint: hints?.threadTitle,
+          threadTitleHint: effectiveHints?.threadTitle || mainHeaderTitle || undefined,
           senderParticipantIdHint: directParticipantId || undefined,
         });
 
-        if (!isGroup) {
+        parsed.headerTitle = mainHeaderTitle || parsed.headerTitle || effectiveHints?.threadTitle || null;
+        parsed.avatarUrl = mainHeaderAvatar || parsed.avatarUrl || null;
+
+        if (isGroup) {
+          parsed.threadClassification = {
+            kind: "GROUP",
+            reliability: "VERIFIED",
+            evidence: [{
+              source: "DOM_SELECTOR",
+              signal: "verified_group_conversation",
+              confidence: 1,
+              details: { threadId: currentThreadId },
+            }],
+          };
+          for (const bubble of parsed.bubbles) {
+            bubble.threadKind = "GROUP";
+            bubble.threadReliability = "VERIFIED";
+            if (bubble.isOutgoing) continue;
+            // Group: never gets global self UID or direct participant ID
+            if (bubble.senderId === this.botParticipantId) {
+              bubble.senderId = null;
+              bubble.senderReliability = "UNVERIFIED";
+            }
+          }
+        } else {
           parsed.threadClassification = {
             kind: "DIRECT",
             reliability: "VERIFIED",
@@ -1352,12 +1455,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               details: { threadId: currentThreadId, directParticipantId },
             }],
           };
-          const senderId = directParticipantId || currentThreadId;
+          const senderId = directParticipantId;
           for (const bubble of parsed.bubbles) {
             bubble.threadKind = "DIRECT";
             bubble.threadReliability = "VERIFIED";
             if (bubble.isOutgoing || bubble.senderReliability === "VERIFIED") continue;
-            if (senderId) {
+            if (senderId && senderId !== this.botParticipantId) {
               bubble.senderId = senderId;
               bubble.senderKind = "PERSON";
               bubble.senderReliability = "VERIFIED";
@@ -1371,27 +1474,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           }
         }
 
-        const mainHeaderInfo = await page.evaluate(() => {
-          const main = document.querySelector('div[role="main"]');
-          if (!main) return { title: null, avatarUrl: null };
-          const avatarImg = main.querySelector('img[src*="scontent"], img[src*="fbcdn"]');
-          const avatarUrl = avatarImg?.getAttribute("src") || null;
-          const profileLink = main.querySelector('a[aria-label*="profile" i], a[aria-label*="trang cá nhân" i]');
-          const heading = Array.from(main.querySelectorAll('h1, h2, [role="heading"]')).find((element) => {
-            const rect = element.getBoundingClientRect();
-            const text = element.textContent?.trim() || "";
-            return rect.height > 0 && text.length > 0 && text.length <= 100;
-          });
-          const title = profileLink?.textContent?.trim() || heading?.textContent?.trim() || null;
-          return { title, avatarUrl };
-        }).catch(() => ({ title: null, avatarUrl: null }));
-
-        parsed.headerTitle = mainHeaderInfo.title;
-        parsed.avatarUrl = mainHeaderInfo.avatarUrl;
-
         return parsed;
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = err instanceof Error ? err.stack || err.message : String(err);
         const isNav =
           message.includes("Execution context was destroyed") ||
           message.includes("navigation") ||
@@ -1500,8 +1585,10 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     const afterDomUrl = page.url();
     if (!afterDomUrl.includes(threadId)) {
       const targetUrl = threadRef.startsWith("http")
-        ? new URL(threadRef, "https://www.facebook.com").toString()
-        : `https://www.facebook.com/messages/t/${threadId}`;
+        ? threadRef
+        : threadRef.startsWith("/")
+          ? new URL(threadRef, "https://www.facebook.com").toString()
+          : `https://www.facebook.com/messages/t/${threadId}`;
 
       console.log(`[BrowserAdapter] Opening conversation via URL: ${targetUrl}`);
       try {
@@ -1518,6 +1605,22 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     if (finalThreadId !== threadId && !page.url().includes(threadId)) {
       console.warn(`[BrowserAdapter] Thread navigation URL mismatch: expected ${threadId}, got ${page.url()}`);
       return false;
+    }
+
+    // Wait for conversation DOM to update for the new conversation
+    if (typeof page.waitForFunction === "function") {
+      await page.waitForFunction(
+        (_tid) => {
+          const main = document.querySelector('div[role="main"]');
+          if (!main) return false;
+          const hasComposer = !!main.querySelector('div[role="textbox"][contenteditable="true"]');
+          const hasHeader = !!main.querySelector('[data-pagelet="MWInboxDetail_MessageList_Header"], h3');
+          const hasRows = !!main.querySelector('[aria-roledescription="message"], [role="row"], [data-pagelet="MWMessageRow"]');
+          return hasHeader || hasComposer || hasRows;
+        },
+        threadId,
+        { timeout: 5000 }
+      ).catch(() => undefined);
     }
 
     if (!requireComposer) {

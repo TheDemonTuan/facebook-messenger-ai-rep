@@ -36,6 +36,8 @@ async function mockApi(page: Page): Promise<void> {
     pauseIntakeProcessing: false,
   };
   let revision = 2;
+  let channelPaused = false;
+  await page.route("**/events", async (route) => route.abort());
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -47,6 +49,24 @@ async function mockApi(page: Page): Promise<void> {
     if (path === "/api/auth/logout") return json({ ok: true });
     if (path === "/api/events") return route.abort();
     if (path === "/api/overview") {
+      if (channelPaused) {
+        return json({
+          channelStatus: "RUNNING",
+          channelStatusReason: null,
+          channelIsPaused: true,
+          channelIsSuspended: false,
+          channelLastHealthCheckAt: now,
+          channelLastSeenActiveAt: now,
+          queueLength: 1,
+          openIncidentsCount: 0,
+          todayConversationsCount: 3,
+          todayMessagesCount: 5,
+          messagesToday: 3,
+          aiRepliesToday: 2,
+          averageLatencyMs: 420,
+          activeConversation: null,
+        });
+      }
       return json({
         channelStatus: "DEGRADED",
         channelStatusReason: "LOGIN_REQUIRED: Phiên Facebook đã hết hạn",
@@ -56,6 +76,8 @@ async function mockApi(page: Page): Promise<void> {
         channelLastSeenActiveAt: now,
         queueLength: 1,
         openIncidentsCount: 1,
+        todayConversationsCount: 3,
+        todayMessagesCount: 5,
         messagesToday: 3,
         aiRepliesToday: 2,
         averageLatencyMs: 420,
@@ -160,25 +182,55 @@ async function mockApi(page: Page): Promise<void> {
       });
     }
     if (path === "/api/audit") return json({ items: [], hasMore: false, nextCursor: null });
-    if (path === "/api/channel/pause" || path === "/api/channel/resume") {
+    if (path === "/api/people") {
+      const q = new URL(request.url()).searchParams.get("q") || "";
+      if (q.includes("notfound")) {
+        return json({ people: [] });
+      }
+      return json({
+        people: [
+          {
+            id: "ppl_test123",
+            name: "Nguyễn Văn A",
+            type: "USER",
+            avatarUrl: null,
+            conversationContext: "Hội thoại thử nghiệm",
+          },
+        ],
+      });
+    }
+    if (path === "/api/channel/pause") {
       const headers = request.headers();
       if (headers["content-type"] && headers["content-type"].includes("application/json")) {
         return json({ error: "FST_ERR_CTP_EMPTY_JSON_BODY: Body cannot be empty when content-type is set to 'application/json'" }, 400);
       }
+      channelPaused = true;
+      return json({ success: true });
+    }
+    if (path === "/api/channel/resume") {
+      const headers = request.headers();
+      if (headers["content-type"] && headers["content-type"].includes("application/json")) {
+        return json({ error: "FST_ERR_CTP_EMPTY_JSON_BODY: Body cannot be empty when content-type is set to 'application/json'" }, 400);
+      }
+      channelPaused = false;
       return json({ success: true });
     }
     return json({});
   });
 }
 
-async function waitForRoute(page: Page, route: string): Promise<void> {
+async function waitForRoute(page: Page, route: string, isPaused = false): Promise<void> {
   await page.locator("main").waitFor();
   switch (route) {
     case "overview":
       await page.getByRole("heading", { name: "Tổng quan hệ thống" }).waitFor();
       await page.getByText("Hội thoại hôm nay").waitFor();
-      await page.getByRole("alert").getByText("Messenger đang không nhận tin nhắn").waitFor();
-      await page.getByRole("link", { name: "Xem cách xử lý" }).waitFor();
+      if (isPaused) {
+        await page.locator('[data-testid="channel-paused-banner"]').waitFor();
+      } else {
+        await page.getByRole("alert").getByText("Messenger đang không nhận tin nhắn").waitFor();
+        await page.getByRole("link", { name: "Xem cách xử lý" }).waitFor();
+      }
       break;
     case "inbox":
       await page.getByRole("heading", { name: "Hộp thư khách hàng" }).waitFor();
@@ -235,8 +287,45 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.getByRole("button", { name: "Tạm dừng" }).click();
   const pauseResponse = await pauseResponsePromise;
   assert(pauseResponse.status() === 200, `${name}: pause action returned ${pauseResponse.status()} instead of 200`);
+
+  // Verify derived channel status consistency in Layout header while paused
+  await page.getByRole("button", { name: "Tiếp tục" }).waitFor();
+  await page.getByText("Kênh: Tạm dừng").waitFor();
+
+  // Reload/navigate to overview to test reload / container restart persistence
+  await page.goto(`${baseURL}/overview`);
+  await waitForRoute(page, "overview", true);
+  assert(await page.getByRole("button", { name: "Tiếp tục" }).isVisible(), `${name}: resume button not visible after reload`);
+  assert(await page.getByText("Kênh: Tạm dừng").isVisible(), `${name}: derived paused status not visible after reload`);
+
   await page.goto(`${baseURL}/settings`);
   await waitForRoute(page, "settings");
+
+  // Verify people search waiting feedback & empty state UX
+  const searchInput = page.locator('input[placeholder*="Tìm kiếm người dùng"]');
+  assert(await searchInput.isVisible(), `${name}: people search input not visible in settings`);
+  await searchInput.fill("notfound");
+  await page.getByRole("button", { name: "Tìm" }).click();
+  await page.locator('[data-testid="people-search-empty"]').waitFor();
+  assert(
+    (await page.locator('[data-testid="people-search-empty"]').innerText()).includes('Không tìm thấy người dùng phù hợp với "notfound"'),
+    `${name}: missing empty search feedback`
+  );
+
+  await searchInput.fill("Nguyễn");
+  await page.getByRole("button", { name: "Tìm" }).click();
+  await page.locator('[data-testid="people-search-results"]').waitFor();
+  assert(
+    (await page.locator('[data-testid="people-search-results"]').innerText()).includes("Nguyễn Văn A"),
+    `${name}: missing search results list`
+  );
+
+  // Resume channel and verify consistent active state
+  const resumeResponsePromise = page.waitForResponse((res) => res.url().includes("/api/channel/resume"));
+  await page.getByRole("button", { name: "Tiếp tục" }).click();
+  const resumeResponse = await resumeResponsePromise;
+  assert(resumeResponse.status() === 200, `${name}: resume action returned ${resumeResponse.status()} instead of 200`);
+  await page.getByRole("button", { name: "Tạm dừng" }).waitFor();
   const settingsText = await page.locator("main").innerText();
   assert(settingsText.includes("Loại dịch vụ AI"), `${name}: missing customer-friendly AI provider format label`);
   assert(settingsText.includes("Địa chỉ dịch vụ"), `${name}: missing customer-friendly address label`);
@@ -314,7 +403,7 @@ async function main(): Promise<void> {
   const preview = spawn(
     process.execPath,
     ["run", "--filter=@messenger/dashboard", "preview", "--", "--host", "127.0.0.1", "--port", "4173"],
-    { stdio: "ignore", shell: process.platform === "win32" }
+    { stdio: "inherit", shell: process.platform === "win32" }
   );
 
   let browser: Browser | undefined;

@@ -68,6 +68,8 @@ export const SettingsPage: React.FC = () => {
   // People Search and Membership state
   const [personSearchQuery, setPersonSearchQuery] = useState("");
   const [isSearchingPeople, setIsSearchingPeople] = useState(false);
+  const [hasSearchedPeople, setHasSearchedPeople] = useState(false);
+  const [lastSearchedQuery, setLastSearchedQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SafePersonItem[]>([]);
   const [memberActionLoading, setMemberActionLoading] = useState<string | null>(null);
 
@@ -161,14 +163,19 @@ export const SettingsPage: React.FC = () => {
 
   const handleSearchPeople = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!personSearchQuery.trim()) {
+    const query = personSearchQuery.trim();
+    if (!query) {
       setSearchResults([]);
+      setHasSearchedPeople(false);
+      setLastSearchedQuery("");
       return;
     }
     setIsSearchingPeople(true);
+    setHasSearchedPeople(true);
+    setLastSearchedQuery(query);
     try {
       const res = await apiFetch<{ people: SafePersonItem[] }>(
-        `/api/people?q=${encodeURIComponent(personSearchQuery.trim())}&limit=20`
+        `/api/people?q=${encodeURIComponent(query)}&limit=20`
       );
       setSearchResults(res.people || []);
     } catch (err: unknown) {
@@ -193,6 +200,8 @@ export const SettingsPage: React.FC = () => {
       });
       setPersonSearchQuery("");
       setSearchResults([]);
+      setHasSearchedPeople(false);
+      setLastSearchedQuery("");
       await loadSettings();
       setSaveSuccess(`Đã thêm "${person.name}" vào danh sách ${mode === "EXCLUDE" ? "loại trừ" : "chỉ định"}.`);
       setTimeout(() => setSaveSuccess(null), 3500);
@@ -592,7 +601,15 @@ export const SettingsPage: React.FC = () => {
                   type="text"
                   placeholder="Tìm kiếm người dùng đã xác minh qua tên hoặc ngữ cảnh..."
                   value={personSearchQuery}
-                  onChange={(e) => setPersonSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPersonSearchQuery(val);
+                    if (!val.trim()) {
+                      setSearchResults([]);
+                      setHasSearchedPeople(false);
+                      setLastSearchedQuery("");
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
                       e.preventDefault();
@@ -601,7 +618,11 @@ export const SettingsPage: React.FC = () => {
                   }}
                   style={{ ...inputStyle, paddingLeft: "34px", backgroundColor: "#ffffff" }}
                 />
-                <Search size={16} color="#94a3b8" style={{ position: "absolute", left: "10px", top: "11px" }} />
+                {isSearchingPeople ? (
+                  <Loader2 size={16} color="#2563eb" className="animate-spin" style={{ position: "absolute", left: "10px", top: "11px" }} />
+                ) : (
+                  <Search size={16} color="#94a3b8" style={{ position: "absolute", left: "10px", top: "11px" }} />
+                )}
               </div>
               <button
                 type="button"
@@ -622,13 +643,60 @@ export const SettingsPage: React.FC = () => {
                 }}
               >
                 {isSearchingPeople ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                Tìm
+                {isSearchingPeople ? "Đang tìm..." : "Tìm"}
               </button>
             </div>
 
+            {/* Search Loading Indicator */}
+            {isSearchingPeople && (
+              <div
+                data-testid="people-search-loading"
+                role="status"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "10px",
+                  padding: "16px",
+                  marginBottom: "16px",
+                  backgroundColor: "#f8fafc",
+                  borderRadius: "8px",
+                  border: "1px solid #e2e8f0",
+                  color: "#334155",
+                  fontSize: "0.85rem",
+                  fontWeight: "500",
+                }}
+              >
+                <Loader2 size={16} className="animate-spin" color="#2563eb" />
+                <span>Đang tìm kiếm người dùng...</span>
+              </div>
+            )}
+
+            {/* Search Empty Results Feedback */}
+            {!isSearchingPeople && hasSearchedPeople && searchResults.length === 0 && (
+              <div
+                data-testid="people-search-empty"
+                role="status"
+                style={{
+                  padding: "14px 16px",
+                  marginBottom: "16px",
+                  backgroundColor: "#f8fafc",
+                  borderRadius: "8px",
+                  border: "1px dashed #cbd5e1",
+                  color: "#64748b",
+                  fontSize: "0.85rem",
+                  textAlign: "center",
+                }}
+              >
+                Không tìm thấy người dùng phù hợp với "{lastSearchedQuery}".
+              </div>
+            )}
+
             {/* Search Results Dropdown / Panel */}
-            {searchResults.length > 0 && (
-              <div style={{ marginBottom: "16px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", overflow: "hidden", maxHeight: "280px", overflowY: "auto", boxShadow: "0 2px 4px rgba(0,0,0,0.05)" }}>
+            {!isSearchingPeople && searchResults.length > 0 && (
+              <div
+                data-testid="people-search-results"
+                style={{ marginBottom: "16px", backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #cbd5e1", overflow: "hidden", maxHeight: "280px", overflowY: "auto", boxShadow: "0 2px 4px rgba(0,0,0,0.05)" }}>
                 <div style={{ padding: "8px 12px", backgroundColor: "#f1f5f9", fontSize: "0.78rem", fontWeight: "700", color: "#475569" }}>
                   Kết quả tìm kiếm ({searchResults.length})
                 </div>

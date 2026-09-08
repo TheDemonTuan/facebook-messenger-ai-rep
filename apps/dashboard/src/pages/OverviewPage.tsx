@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { apiFetch } from "../api";
 import type { ChannelOverview } from "../types";
 import { shouldRefetchOverview } from "../helpers/sse-helpers";
+import { getDerivedChannelStatus } from "../helpers/channel-helpers";
 import { useSseWakeup } from "../context/SseContext";
 import { useBusinessTimeZone } from "../context/TimezoneContext";
 import {
@@ -14,6 +15,7 @@ import {
   RefreshCw,
   AlertCircle,
   Bot,
+  Pause,
 } from "lucide-react";
 
 export const OverviewPage: React.FC = () => {
@@ -72,8 +74,10 @@ export const OverviewPage: React.FC = () => {
 
   if (!data) return null;
 
+  const channelDisplay = getDerivedChannelStatus(data);
   const channelNeedsAttention =
     data.channelIsSuspended || data.channelStatus === "DEGRADED" || data.channelStatus === "ERROR";
+  const channelIsPaused = channelDisplay.isPaused;
   const channelWarning = (() => {
     const reason = data.channelStatusReason || "";
     if (reason.startsWith("LOGIN_REQUIRED:")) {
@@ -147,6 +151,7 @@ export const OverviewPage: React.FC = () => {
         </button>
       </div>
 
+      {/* Channel Warning Alert */}
       {channelNeedsAttention && (
         <div
           role="alert"
@@ -189,6 +194,36 @@ export const OverviewPage: React.FC = () => {
           >
             Xem cách xử lý
           </Link>
+        </div>
+      )}
+
+      {/* Paused Channel Notice */}
+      {channelIsPaused && !channelNeedsAttention && (
+        <div
+          role="status"
+          data-testid="channel-paused-banner"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: "12px",
+            padding: "14px 18px",
+            borderRadius: "10px",
+            border: "1px solid #fcd34d",
+            backgroundColor: "#fffbeb",
+            color: "#92400e",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <Pause size={20} style={{ flexShrink: 0, color: "#d97706" }} />
+            <div>
+              <div style={{ fontWeight: "700", marginBottom: "2px" }}>Kênh Messenger đang tạm dừng</div>
+              <div style={{ fontSize: "0.85rem", color: "#b45309" }}>
+                Hệ thống đang tạm dừng tiếp nhận và xử lý tin nhắn tự động. Bấm nút "Tiếp tục" ở thanh điều hướng để kích hoạt lại.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -238,7 +273,9 @@ export const OverviewPage: React.FC = () => {
               </div>
             ) : (
               <div style={{ marginTop: "2px", fontSize: "0.9rem", color: "#64748b" }}>
-                Hiện không có hội thoại nào cần xử lý gấp. Hệ thống sẵn sàng tiếp nhận tin nhắn mới.
+                {channelIsPaused
+                  ? "Kênh đang tạm dừng. Hệ thống sẽ không tự động phản hồi tin nhắn mới cho đến khi được kích hoạt lại."
+                  : "Hiện không có hội thoại nào cần xử lý gấp. Hệ thống sẵn sàng tiếp nhận tin nhắn mới."}
               </div>
             )}
           </div>

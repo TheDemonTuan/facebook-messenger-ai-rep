@@ -21,13 +21,13 @@ import {
   replyEligibilityDecisions,
   sanitizeApiOutput,
   ConversationControlService,
-  replyPolicyMembers,
   SettingsRepository,
 } from "@messenger/db";
-import { eq, and, desc, sql, ne, inArray, or, notInArray, isNull } from "drizzle-orm";
+import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
-import { requireRole } from "../auth/roles.js";
+import { requireRole, hasRolePermission } from "../auth/roles.js";
+import { getPolicyAudienceConditions } from "./policy-audience.js";
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -77,82 +77,32 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const cursor = request.query.cursor;
         const scope = request.query.scope;
 
-        const conditions = [eq(conversations.channelAccountId, channelAccountId)];
+        let conditions = [eq(conversations.channelAccountId, channelAccountId)];
 
-        if (scope !== "all") {
+        if (scope === "all") {
+          const user = (request as unknown as { user?: SessionUser }).user;
+          if (!user || !hasRolePermission(user.role, "OWNER")) {
+            return reply.status(403).send({
+              error: "Forbidden: Only OWNER role can access all conversation history",
+              requiredRole: "OWNER",
+              currentRole: user?.role,
+            });
+          }
+        } else {
           try {
-            const settingsData = await settingsRepoInstance.getSettings(channelAccountId);
-            const s = settingsData?.settings;
-            if (s) {
-              if (s.replyMode === "ONLY_SELECTED") {
-                const policyRows = await db
-                  .select({ participantId: replyPolicyMembers.participantId })
-                  .from(replyPolicyMembers)
-                  .where(
-                    and(
-                      eq(replyPolicyMembers.channelAccountId, channelAccountId),
-                      eq(replyPolicyMembers.policyMode, "INCLUDE")
-                    )
-                  );
-                const selectedIds = Array.from(
-                  new Set([
-                    ...(s.selectedParticipantIds || []),
-                    ...policyRows.map((r) => r.participantId?.trim()).filter(Boolean),
-                  ])
-                ).filter(Boolean);
+            const { isPolicyEmpty, conditions: audienceConditions } =
+              await getPolicyAudienceConditions(db, settingsRepoInstance, channelAccountId);
 
-                if (selectedIds.length === 0) {
-                  return reply.send({
-                    conversations: [],
-                    total: 0,
-                    nextCursor: null,
-                    hasMore: false,
-                  });
-                }
-
-                conditions.push(
-                  or(
-                    inArray(customers.externalCustomerId, selectedIds),
-                    inArray(conversations.externalThreadId, selectedIds)
-                  )!
-                );
-              } else if (s.replyMode === "EVERYONE_EXCEPT") {
-                const policyRows = await db
-                  .select({ participantId: replyPolicyMembers.participantId })
-                  .from(replyPolicyMembers)
-                  .where(
-                    and(
-                      eq(replyPolicyMembers.channelAccountId, channelAccountId),
-                      eq(replyPolicyMembers.policyMode, "EXCLUDE")
-                    )
-                  );
-                const excludedIds = Array.from(
-                  new Set([
-                    ...(s.excludedParticipantIds || []),
-                    ...policyRows.map((r) => r.participantId?.trim()).filter(Boolean),
-                  ])
-                ).filter(Boolean);
-
-                if (excludedIds.length > 0) {
-                  conditions.push(
-                    and(
-                      or(
-                        isNull(customers.externalCustomerId),
-                        notInArray(customers.externalCustomerId, excludedIds)
-                      )!,
-                      notInArray(conversations.externalThreadId, excludedIds)
-                    )!
-                  );
-                }
-              }
-
-              if (s.groupRepliesEnabled === false) {
-                conditions.push(ne(conversations.threadKind, "GROUP"));
-              }
-              if (s.pageRepliesEnabled === false) {
-                conditions.push(ne(conversations.threadKind, "PAGE"));
-              }
+            if (isPolicyEmpty) {
+              return reply.send({
+                conversations: [],
+                total: 0,
+                nextCursor: null,
+                hasMore: false,
+              });
             }
+
+            conditions = audienceConditions;
           } catch (err) {
             console.error("[Inbox API] Error applying reply policy filter to inbox:", err);
             return reply.status(503).send({ error: "Unable to apply reply policy to inbox" });

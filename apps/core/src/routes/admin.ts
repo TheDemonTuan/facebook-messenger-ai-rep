@@ -43,6 +43,7 @@ import {
 } from "@messenger/contracts";
 import { checkAiHealth, AiReplyGenerator } from "@messenger/ai";
 import { requireRole } from "../auth/roles.js";
+import { getPolicyAudienceConditions } from "./policy-audience.js";
 
 export interface AdminRoutesOptions {
   db: Database;
@@ -87,7 +88,12 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     // 1. Overview metrics
     fastify.get("/api/overview", async (_request, reply) => {
       const now = new Date();
-      const settingsData = await settingsRepo.getSettings(channelAccountId);
+      let settingsData = null;
+      try {
+        settingsData = await settingsRepo.getSettings(channelAccountId);
+      } catch (err) {
+        console.error("[Admin API] Failed to fetch settings in overview:", err);
+      }
       const businessTimeZone = settingsData?.settings?.businessTimeZone || "Asia/Ho_Chi_Minh";
       const { startOfDay, endOfDay } = getBusinessDayRange(now, businessTimeZone);
 
@@ -119,29 +125,47 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       // Queue items
       const queueList = await queueRepo.getQueueList(channelAccountId);
 
-      // Today conversations count
-      const todayConvRes = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.channelAccountId, channelAccountId),
-            gte(conversations.createdAt, startOfDay),
-            lt(conversations.createdAt, endOfDay)
-          )
-        );
+      // Today conversations & messages count aligned with active reply policy
+      let todayConversationsCount = 0;
+      let todayMessagesCount = 0;
 
-      // Today messages count
-      const todayMsgRes = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(messages)
-        .where(
-          and(
-            eq(messages.channelAccountId, channelAccountId),
-            gte(messages.createdAt, startOfDay),
-            lt(messages.createdAt, endOfDay)
-          )
-        );
+      try {
+        const { isPolicyEmpty, conditions: audienceConditions } =
+          await getPolicyAudienceConditions(db, settingsRepo, channelAccountId);
+
+        if (!isPolicyEmpty) {
+          const [todayConvRes, todayMsgRes] = await Promise.all([
+            db
+              .select({ count: sql<number>`count(distinct ${conversations.id})::int` })
+              .from(conversations)
+              .leftJoin(customers, eq(conversations.customerId, customers.id))
+              .where(
+                and(
+                  ...audienceConditions,
+                  gte(conversations.lastInboundAt, startOfDay),
+                  lt(conversations.lastInboundAt, endOfDay)
+                )
+              ),
+            db
+              .select({ count: sql<number>`count(*)::int` })
+              .from(messages)
+              .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+              .leftJoin(customers, eq(conversations.customerId, customers.id))
+              .where(
+                and(
+                  eq(messages.channelAccountId, channelAccountId),
+                  gte(messages.createdAt, startOfDay),
+                  lt(messages.createdAt, endOfDay),
+                  ...audienceConditions
+                )
+              ),
+          ]);
+          todayConversationsCount = todayConvRes[0]?.count || 0;
+          todayMessagesCount = todayMsgRes[0]?.count || 0;
+        }
+      } catch (err) {
+        console.error("[Admin API] Error calculating policy audience overview metrics:", err);
+      }
 
       // Open incidents
       const openIncidentsRes = await db
@@ -191,8 +215,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           queueLength: queueList.length,
           oldestWaitSeconds,
           estimatedWaitSeconds,
-          todayConversationsCount: todayConvRes[0]?.count || 0,
-          todayMessagesCount: todayMsgRes[0]?.count || 0,
+          todayConversationsCount,
+          todayMessagesCount,
           openIncidentsCount: openIncidentsRes[0]?.count || 0,
           businessTimeZone,
         })

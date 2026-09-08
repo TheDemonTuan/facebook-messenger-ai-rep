@@ -895,4 +895,74 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(result.bubbles[0]!.text).toBe("Nội dung thực sự của tin nhắn");
     });
   });
+
+  describe("9. Live E2EE DOM Captures: Group vs Direct Identity & Boundary Isolation", () => {
+    const liveDirectHtml = fs.readFileSync(
+      path.resolve(__dirname, "fixtures/messenger-dom-e2ee-direct-live.html"),
+      "utf-8"
+    );
+    const liveGroupHtml = fs.readFileSync(
+      path.resolve(__dirname, "fixtures/messenger-dom-e2ee-group-live.html"),
+      "utf-8"
+    );
+
+    it("evaluates live sanitized Direct conversation correctly with isolated profile ID and headerTitle", () => {
+      const result = parseMessengerBubblesFromHtml(liveDirectHtml, {
+        ...mockBotOptions,
+        senderParticipantIdHint: "888888888888888",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.isDegraded).toBe(false);
+      expect(result.threadClassification?.kind).toBe("DIRECT");
+      expect(result.threadClassification?.reliability).toBe("VERIFIED");
+      expect(result.headerTitle).toBe("Sanitized Customer");
+
+      // Verify incoming customer bubbles received verified sender ID from hint, not self logged-in ID
+      const customerBubbles = result.bubbles.filter((b) => !b.isOutgoing);
+      expect(customerBubbles.length).toBeGreaterThan(0);
+      for (const b of customerBubbles) {
+        expect(b.senderId).toBe("888888888888888");
+        expect(b.senderId).not.toBe("9999999999");
+        expect(b.senderName).toBe("Sanitized Customer");
+      }
+
+      // Outgoing bubble has bot identity
+      const outgoingBubbles = result.bubbles.filter((b) => b.isOutgoing);
+      expect(outgoingBubbles.length).toBeGreaterThan(0);
+      for (const b of outgoingBubbles) {
+        expect(b.senderId).toBe("1000888000");
+      }
+    });
+
+    it("evaluates live sanitized Group conversation correctly without leaking global self UID or treating group as direct", () => {
+      const result = parseMessengerBubblesFromHtml(liveGroupHtml, {
+        ...mockBotOptions,
+        threadTitleHint: "Test Group Room",
+      });
+
+      expect(result.ok).toBe(true);
+      expect(result.isDegraded).toBe(false);
+      expect(result.threadClassification?.kind).toBe("GROUP");
+      expect(result.threadClassification?.reliability).toBe("VERIFIED");
+      expect(result.headerTitle).toBe("Test Group Room");
+
+      // Verify bubbles never get global self UID or direct participant fallback
+      const customerBubbles = result.bubbles.filter((b) => !b.isOutgoing);
+      expect(customerBubbles.length).toBeGreaterThan(0);
+      for (const b of customerBubbles) {
+        expect(b.threadKind).toBe("GROUP");
+        expect(b.senderId).not.toBe("9999999999");
+        expect(b.senderId).not.toBe("777777777777777");
+        expect(b.senderReliability).toBe("UNVERIFIED");
+        expect(["Member Alpha", "Member Beta"]).toContain(b.senderName);
+      }
+
+      // Check stripping of author headings and accessibility noise from message body
+      const b0 = customerBubbles[0]!;
+      expect(b0.text).toBe("Sanitized group message text 1");
+      expect(b0.text).not.toContain("Member Alpha");
+      expect(b0.text).not.toContain("Enter, Message sent");
+    });
+  });
 });
