@@ -44,6 +44,10 @@ export function getObserverPollDelay(): number {
   return OBSERVER_POLL_INTERVAL_MS + Math.floor(Math.random() * 1500);
 }
 
+function normalizeMediaUrl(value: string | null | undefined): string | null {
+  return value?.replace(/&amp;/g, "&").trim() || null;
+}
+
 export function extractMessengerThreadId(value: string | null | undefined): string | null {
   if (!value || typeof value !== "string") return null;
   return value.match(MESSENGER_THREAD_PATH)?.[1] ?? null;
@@ -1116,8 +1120,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           null;
 
         const resolvedAvatar = bubbleResult.avatarUrl || threadInfo.avatarUrl || null;
-        const normalizeMediaUrl = (value: string | null | undefined) =>
-          value?.replace(/&amp;/g, "&").trim() || null;
         const avatarUrl = normalizeMediaUrl(resolvedAvatar);
         const parts = (bubble.parts || []).filter((part) => {
           if (part.type !== "IMAGE" && part.type !== "STICKER" && part.type !== "GIF") {
