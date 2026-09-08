@@ -114,7 +114,8 @@ async function mockApi(page: Page): Promise<void> {
             text: "Xin chào shop, mình muốn hỏi sản phẩm này",
             parts: [
               { type: "TEXT", text: "Xin chào shop, mình muốn hỏi sản phẩm này" },
-              { type: "IMAGE", media: { mediaId: "img-1", sourceUrl: "https://example.com/test.jpg" } },
+              { type: "IMAGE", altText: "Sin Sin", media: { mediaId: "img-1" } },
+              { type: "IMAGE", media: { mediaId: "img-2", sourceUrl: "https://example.com/test.jpg" } },
               { type: "VOICE", media: { mediaId: "v-1", durationMs: 12000 }, transcriptRef: "tr-1" },
             ],
             contentStatus: "READY",
@@ -135,7 +136,9 @@ async function mockApi(page: Page): Promise<void> {
         ],
         aiRuns: [],
         outboundActions: [],
-        events: [],
+        events: [
+          { id: "event-takeover", type: "MANUAL_TAKEOVER", actor: "agent@example.com", createdAt: new Date(Date.parse(now) - 1000).toISOString() },
+        ],
         hasMoreMessages: false,
         nextMessageCursor: null,
       });
@@ -370,6 +373,9 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   assert(!convDetailText.includes("Inbound Version:"), `${name}: raw 'Inbound Version:' exposed in default detail view`);
   assert(convDetailText.includes("Tin nhắn thoại"), `${name}: missing rich voice component in conversation detail`);
   assert(convDetailText.includes("AI tạo phản hồi"), `${name}: missing decision badge in conversation detail`);
+  assert(convDetailText.includes("agent@example.com bắt đầu hỗ trợ — bot tạm dừng"), `${name}: missing manual-support state marker`);
+  assert(convDetailText.includes("Không thể tải hình ảnh"), `${name}: missing explicit unavailable-image state`);
+  assert(!convDetailText.includes("Quyết định: Bỏ qua (Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.)"), `${name}: repeated manual-support skip is still visible`);
 
   await page.getByRole("button", { name: /tiếp quản thủ công/i }).click();
   const composer = page.locator('input[placeholder*="Nhập tin nhắn"]').first();

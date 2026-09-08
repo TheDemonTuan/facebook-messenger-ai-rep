@@ -14,6 +14,7 @@ import {
   Loader2,
   FileWarning,
 } from "lucide-react";
+import { isManualSupportSkip } from "./ConversationStateMarker";
 
 export interface MessageStatusBadgesProps {
   actor?: string;
@@ -46,7 +47,7 @@ export const MessageStatusBadges: React.FC<MessageStatusBadgesProps> = ({
   const showWaiting = contentStatus === "PENDING" || isWaiting;
 
   // 3. Decision info
-  const hasSkipReason = skipReason && !skipReason.eligible;
+  const hasSkipReason = skipReason && !skipReason.eligible && !isManualSupportSkip(skipReason.reasonCode);
   const hasReplyDecision = Boolean(replyDecision);
 
   return (

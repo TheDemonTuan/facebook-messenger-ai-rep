@@ -5,6 +5,7 @@ import {
   MessageContentRenderer,
   MessageTimeBadge,
   MessageStatusBadges,
+  conversationStateMarkersBeforeMessages,
   getMessagePreviewSummary,
 } from "../apps/dashboard/src/components/messages";
 import type { MessagePart } from "../apps/dashboard/src/types";
@@ -123,6 +124,17 @@ describe("PR-04 Rich Message Renderer & Timeline Components", () => {
       expect(html).toContain("Dòng 2");
       expect(html).toContain("pre-wrap");
       expect(html).not.toContain("dangerouslySetInnerHTML");
+    });
+
+    it("does not present the sender alt text as a failed image label", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(MessageContentRenderer, {
+          parts: [{ type: "IMAGE", altText: "Sin Sin", media: { mediaId: "image-no-url" } }],
+        })
+      );
+
+      expect(html).toContain("Không thể tải hình ảnh");
+      expect(html).not.toContain(">Sin Sin<");
     });
 
     it("renders voice/audio with controls and never autoplays", () => {
@@ -295,7 +307,25 @@ describe("PR-04 Rich Message Renderer & Timeline Components", () => {
     });
   });
 
-  describe("4. MessageStatusBadges (Distinct badges for decision, manual, waiting, parse error)", () => {
+  describe("4. Conversation support milestones", () => {
+    it("places each support transition once before the following message", () => {
+      const markers = conversationStateMarkersBeforeMessages(
+        [
+          { id: "takeover", type: "MANUAL_TAKEOVER", actor: "agent@example.com", createdAt: "2026-09-08T10:01:00.000Z" },
+          { id: "resume", type: "AI_RESUMED_AFTER_HUMAN", actor: "SYSTEM", createdAt: "2026-09-08T10:03:00.000Z" },
+        ],
+        [
+          { id: "first", timestamp: "2026-09-08T10:02:00.000Z" },
+          { id: "second", timestamp: "2026-09-08T10:04:00.000Z" },
+        ]
+      );
+
+      expect(markers.get("first")?.map((event) => event.id)).toEqual(["takeover"]);
+      expect(markers.get("second")?.map((event) => event.id)).toEqual(["resume"]);
+    });
+  });
+
+  describe("5. MessageStatusBadges (Distinct badges for decision, manual, waiting, parse error)", () => {
     it("renders distinct decision badge for AI reply decisions", () => {
       const htmlGenerate = renderToStaticMarkup(
         React.createElement(MessageStatusBadges, {
@@ -332,6 +362,23 @@ describe("PR-04 Rich Message Renderer & Timeline Components", () => {
         })
       );
       expect(htmlSkip).toContain("Quyết định: Bỏ qua (Khách thuộc danh sách loại trừ)");
+    });
+
+    it("does not repeat the manual-support skip under every message", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(MessageStatusBadges, {
+          skipReason: {
+            decision: "INELIGIBLE",
+            eligible: false,
+            reasonCode: "CONVERSATION_MANUAL_MODE",
+            reason: "Manual mode",
+            humanReadableReason: "Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.",
+            precedenceStep: "MANUAL_MODE",
+          },
+        })
+      );
+
+      expect(html).not.toContain("Quyết định: Bỏ qua");
     });
 
     it("renders distinct manual badge when sent by human operator", () => {

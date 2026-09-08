@@ -106,6 +106,7 @@ describe("Review Blockers P0/P1 Regressions", () => {
       expect(imageParts).toHaveLength(0);
     });
 
+
     it("extracts group share card as SHARE with previewMedia and NOT standalone attachment", () => {
       const rowWithShareCardHtml = `
         <div role="main">

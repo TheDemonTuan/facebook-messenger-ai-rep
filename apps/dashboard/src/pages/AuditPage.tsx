@@ -5,6 +5,15 @@ import { Search, Loader2, AlertCircle, Shield } from "lucide-react";
 import { formatDateTime } from "../helpers/date-helpers";
 import { eventLabel } from "../helpers/event-helpers";
 
+function enrichmentSummary(payload?: Record<string, unknown> | null): string | null {
+  if (!payload) return null;
+  const status = payload.contentStatus;
+  if (status === "READY") return "Ảnh và tệp đính kèm đã sẵn sàng.";
+  if (status === "PARTIAL") return "Một phần ảnh hoặc tệp đính kèm chưa tải được.";
+  if (status === "UNAVAILABLE") return "Ảnh hoặc tệp đính kèm không còn khả dụng.";
+  return null;
+}
+
 interface AuditEventItem {
   id: string;
   type: string;
@@ -190,18 +199,24 @@ export const AuditPage: React.FC = () => {
                   </td>
                   <td style={{ padding: "10px 14px" }}>{ev.inboundVersion !== null ? `v${ev.inboundVersion}` : "—"}</td>
                   <td style={{ padding: "10px 14px" }}>
-                    {ev.payload && Object.keys(ev.payload).length > 0 ? (
-                      <details>
-                        <summary style={{ cursor: "pointer", fontSize: "0.75rem", color: "#2563eb", fontWeight: "500" }}>
-                          Chi tiết kỹ thuật
-                        </summary>
-                        <pre style={{ margin: "4px 0 0 0", fontSize: "0.72rem", backgroundColor: "#0f172a", color: "#e2e8f0", padding: "6px 8px", borderRadius: "4px", maxWidth: "350px", overflowX: "auto" }}>
-                          {JSON.stringify(ev.payload, null, 2)}
-                        </pre>
-                      </details>
-                    ) : (
-                      <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>—</span>
-                    )}
+                    {(() => {
+                      const summary = ev.type === "MEDIA_ENRICHED" ? enrichmentSummary(ev.payload) : null;
+                      return ev.payload && Object.keys(ev.payload).length > 0 ? (
+                        <>
+                          {summary && <div style={{ marginBottom: "4px", color: "#475569", fontSize: "0.78rem" }}>{summary}</div>}
+                          <details>
+                            <summary style={{ cursor: "pointer", fontSize: "0.75rem", color: "#2563eb", fontWeight: "500" }}>
+                              Chi tiết kỹ thuật
+                            </summary>
+                            <pre style={{ margin: "4px 0 0 0", fontSize: "0.72rem", backgroundColor: "#0f172a", color: "#e2e8f0", padding: "6px 8px", borderRadius: "4px", maxWidth: "350px", overflowX: "auto" }}>
+                              {JSON.stringify(ev.payload, null, 2)}
+                            </pre>
+                          </details>
+                        </>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontSize: "0.75rem" }}>—</span>
+                      );
+                    })()}
                   </td>
                 </tr>
               ))}

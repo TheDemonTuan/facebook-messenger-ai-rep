@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { MessagePart, ContentStatus, MediaRef } from "../../types";
 import {
   getSafeHref,
@@ -51,7 +51,13 @@ const ImageCard: React.FC<{
   compact?: boolean;
 }> = ({ media, altText, compact }) => {
   const [loadFailed, setLoadFailed] = useState(false);
+  const rawImageUrl = media.sourceUrl || media.thumbnailRef;
+  const imageUrl = getSafeMediaSrc(rawImageUrl);
   const status = media.status || "READY";
+
+  useEffect(() => {
+    setLoadFailed(false);
+  }, [imageUrl]);
 
   if (status === "PENDING") {
     return (
@@ -116,8 +122,6 @@ const ImageCard: React.FC<{
     );
   }
 
-  const rawImageUrl = media.sourceUrl || media.thumbnailRef;
-  const imageUrl = getSafeMediaSrc(rawImageUrl);
   const safeSourceUrl = getSafeExternalHref(media.sourceUrl);
 
   if (loadFailed || !imageUrl) {
@@ -136,7 +140,7 @@ const ImageCard: React.FC<{
         }}
       >
         <ImageIcon size={16} />
-        <span>{media.fileName || altText || "Hình ảnh không thể tải hoặc URL đã hết hạn"}</span>
+        <span>Không thể tải hình ảnh{media.fileName ? `: ${media.fileName}` : ""}</span>
       </div>
     );
   }

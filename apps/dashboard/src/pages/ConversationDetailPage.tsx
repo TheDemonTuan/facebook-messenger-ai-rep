@@ -21,6 +21,8 @@ import { useSseWakeup } from "../context/SseContext";
 import { formatTime } from "../helpers/date-helpers";
 import { eventLabel } from "../helpers/event-helpers";
 import {
+  ConversationStateMarker,
+  conversationStateMarkersBeforeMessages,
   MessageContentRenderer,
   MessageTimeBadge,
   MessageStatusBadges,
@@ -274,6 +276,7 @@ export const ConversationDetailPage: React.FC = () => {
   const customer = data.customer;
   const actions: OutboundActionItem[] = data.outboundActions || [];
   const events = data.events || [];
+  const stateMarkersBeforeMessage = conversationStateMarkersBeforeMessages(events, messages);
 
   // Check if any action is SEND_UNCERTAIN or UNCONFIRMED
   const uncertainActions = actions.filter(
@@ -655,9 +658,11 @@ export const ConversationDetailPage: React.FC = () => {
             ) : (
               messages.map((msg) => {
                 const isInbound = msg.direction === "INBOUND";
+                const markers = stateMarkersBeforeMessage.get(msg.id) || [];
                 return (
+                  <React.Fragment key={msg.id}>
+                    {markers.map((event) => <ConversationStateMarker key={event.id} event={event} />)}
                   <div
-                    key={msg.id}
                     style={{
                       display: "flex",
                       flexDirection: "column",
@@ -725,6 +730,7 @@ export const ConversationDetailPage: React.FC = () => {
                       normalization={msg.normalization}
                     />
                   </div>
+                  </React.Fragment>
                 );
               })
             )}

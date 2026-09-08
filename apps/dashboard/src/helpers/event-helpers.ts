@@ -30,6 +30,8 @@ export const eventLabels: Record<string, string> = {
   TAKEOVER_CANCEL_ACK: "Đã xác nhận dừng AI",
   MANUAL_TAKEOVER: "Nhân viên bắt đầu hỗ trợ",
   MANUAL_RELEASED: "Nhân viên chuyển lại cho trợ lý AI",
+  AI_RESUMED_AFTER_HUMAN: "Trợ lý AI tiếp tục sau thời gian chờ nhân viên",
+  MEDIA_ENRICHED: "Đã cập nhật dữ liệu đính kèm",
   SETTING_CHANGED: "Đã cập nhật cài đặt",
 };
 
