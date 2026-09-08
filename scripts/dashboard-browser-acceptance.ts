@@ -10,8 +10,9 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
-async function mockApi(page: Page): Promise<void> {
+async function mockApi(page: Page): Promise<{ finishAiCancellation: () => void }> {
   let manualMode = false;
+  let takeoverHasActiveAiAction = false;
   let currentProvider = {
     apiFormat: "OPENAI_COMPATIBLE",
     baseUrl: "https://gateway.example/v1",
@@ -107,6 +108,13 @@ async function mockApi(page: Page): Promise<void> {
       return json({
         conversation: { id: conversationId, status: "WAITING", manualMode, inboundVersion: 1 },
         customer: { name: "Khách thử nghiệm" },
+        outboundActions: takeoverHasActiveAiAction
+          ? [{
+              id: "ai-action-1", actionId: "ai-action-1", inboundVersion: 1,
+              responseIndex: 0, text: "Reply in progress", actor: "AI", status: "TYPING",
+              unconfirmedReason: null, errorMessage: null, createdAt: now,
+            }]
+          : [],
         messages: [
           {
             id: "message-1",
@@ -135,7 +143,6 @@ async function mockApi(page: Page): Promise<void> {
           },
         ],
         aiRuns: [],
-        outboundActions: [],
         events: [
           { id: "event-takeover", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: new Date(Date.parse(now) - 2000).toISOString() },
           { id: "event-human-activity", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: new Date(Date.parse(now) - 1000).toISOString() },
@@ -146,10 +153,12 @@ async function mockApi(page: Page): Promise<void> {
     }
     if (path.endsWith("/takeover")) {
       manualMode = true;
-      return json({ success: true, cancelAck: true, manualMode: true });
+      takeoverHasActiveAiAction = true;
+      return json({ success: true, manualMode: true, control: { mode: "HUMAN_PINNED", epoch: 2 } });
     }
     if (path.endsWith("/release")) {
       manualMode = false;
+      takeoverHasActiveAiAction = false;
       return json({ success: true });
     }
     if (path.endsWith("/send")) return json({ success: true, outboundActionId: "action-1" });
@@ -221,6 +230,12 @@ async function mockApi(page: Page): Promise<void> {
     }
     return json({});
   });
+
+  return {
+    finishAiCancellation: () => {
+      takeoverHasActiveAiAction = false;
+    },
+  };
 }
 
 async function waitForRoute(page: Page, route: string, isPaused = false): Promise<void> {
@@ -270,7 +285,7 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("dialog", (dialog) => dialog.accept());
-  await mockApi(page);
+  const controls = await mockApi(page);
 
   for (const route of ["overview", "inbox", "queue", "incidents", "ai-logs", "settings", "audit"]) {
     const response = await page.goto(`${baseURL}/${route}`);
@@ -381,7 +396,16 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   assert(!convDetailText.includes("Quyết định: Bỏ qua (Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.)"), `${name}: repeated manual-support skip is still visible`);
 
   await page.getByRole("button", { name: /tiếp quản thủ công/i }).click();
-  const composer = page.locator('input[placeholder*="Nhập tin nhắn"]').first();
+  const composer = page.locator('form input[type="text"]').first();
+  await page.getByText("Đang tạm dừng phản hồi tự động").waitFor();
+  assert(await composer.isDisabled(), `${name}: manual composer enabled before AI cancellation completed`);
+
+  controls.finishAiCancellation();
+  await page.getByRole("button", { name: "Làm mới" }).click();
+  await page.waitForFunction(() => {
+    const input = document.querySelector('form input[type="text"]') as HTMLInputElement | null;
+    return Boolean(input && !input.disabled);
+  });
   await composer.fill("Phản hồi thủ công đã kiểm tra");
   await page.getByRole("button", { name: /^Gửi$/i }).click();
 

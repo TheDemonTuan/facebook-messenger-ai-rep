@@ -10,6 +10,7 @@ import {
   IncidentRepository,
   JobRepository,
   TurnRepository,
+  OutboxRepository,
   ConversationControlService,
   channelAccounts,
 } from "@messenger/db";
@@ -31,6 +32,7 @@ async function main() {
   const incidentRepo = new IncidentRepository(db);
   const jobRepo = new JobRepository(db);
   const turnRepo = new TurnRepository(db);
+  const outboxRepo = new OutboxRepository(db);
 
   let initialTimeZone = "Asia/Ho_Chi_Minh";
   try {
@@ -291,6 +293,17 @@ async function main() {
         } catch (notifyErr) {
           console.warn("[Browser Agent] Failed to emit cancel typing for external outbound:", notifyErr);
         }
+
+        await outboxRepo.enqueue({
+          channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+          conversationId: convId,
+          eventType: "conversation:takeover",
+          payload: {
+            conversationId: convId,
+            manualMode: true,
+            controlEpoch: control.epoch,
+          },
+        });
 
         // 3. Record event
         await eventRepo.recordEvent({

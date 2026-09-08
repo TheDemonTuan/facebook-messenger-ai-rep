@@ -55,7 +55,7 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
       expect(canInitiateTakeover(ctx)).toBe(false);
     });
 
-    it("prevents transition to MANUAL_ACTIVE if any action is still TYPING or SENDING without forceAck", () => {
+    it("prevents transition to MANUAL_ACTIVE if any AI action is still active", () => {
       let ctx = createTakeoverContext(false);
       ctx = transitionToWaitingCancelAck(ctx);
 
@@ -75,12 +75,34 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
       ];
 
       // With active typing, stays in WAITING_CANCEL_ACK
-      const updated = transitionToManualActive(ctx, { actions: mockActions, forceAck: false });
+      const updated = transitionToManualActive(ctx, { actions: mockActions });
       expect(updated.state).toBe("WAITING_CANCEL_ACK");
       expect(canSendManualMessage(updated)).toBe(false);
     });
 
-    it("transitions to MANUAL_ACTIVE once cancel ack is confirmed and enables manual composer/send", () => {
+    it("keeps the manual composer locked while an AI action is pending cancellation", () => {
+      let ctx = createTakeoverContext(false);
+      ctx = transitionToWaitingCancelAck(ctx);
+
+      const pendingAiAction: OutboundActionItem[] = [{
+        id: "act-pending-1",
+        actionId: "act-pending-1",
+        inboundVersion: 1,
+        responseIndex: 0,
+        text: "Reply in progress",
+        actor: "AI",
+        status: "PENDING",
+        unconfirmedReason: null,
+        errorMessage: null,
+        createdAt: new Date().toISOString(),
+      }];
+
+      const updated = transitionToManualActive(ctx, { actions: pendingAiAction });
+      expect(updated.state).toBe("WAITING_CANCEL_ACK");
+      expect(canSendManualMessage(updated)).toBe(false);
+    });
+
+    it("transitions to MANUAL_ACTIVE once cancellation is confirmed and enables manual composer/send", () => {
       let ctx = createTakeoverContext(false);
       ctx = transitionToWaitingCancelAck(ctx);
 
@@ -105,6 +127,13 @@ describe("Dashboard PostgreSQL Architecture State Helpers", () => {
       expect(manualActive.manualMode).toBe(true);
       expect(manualActive.cancelAckReceived).toBe(true);
       expect(canSendManualMessage(manualActive)).toBe(true);
+    });
+
+    it("does not let a stale AUTO response erase a pending takeover", () => {
+      let ctx = createTakeoverContext(false);
+      ctx = transitionToWaitingCancelAck(ctx);
+
+      expect(transitionToAuto(ctx)).toBe(ctx);
     });
 
     it("transitions to RESUMING and back to AUTO when operator releases takeover", () => {

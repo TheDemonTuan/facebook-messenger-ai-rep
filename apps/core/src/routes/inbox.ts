@@ -482,9 +482,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         await broadcaster.broadcast("conversation:takeover", {
           conversationId,
           manualMode: true,
-          cancelAck: true,
+          controlEpoch: control.epoch,
         });
-        return reply.send({ success: true, conversationId, manualMode: true, cancelAck: true });
+        return reply.send({ success: true, conversationId, manualMode: true, control });
       }
     );
 
@@ -526,6 +526,8 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           actor: user.email,
         });
 
+        // Returning to AUTO must not reprocess an inbound already suppressed
+        // during human support. A later customer message starts a new turn.
         await broadcaster.broadcast("conversation:takeover", { conversationId, manualMode: false, controlEpoch: control.epoch });
         return reply.send({ success: true, conversationId, manualMode: false, control });
       }

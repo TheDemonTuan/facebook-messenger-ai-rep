@@ -109,13 +109,11 @@ export const ConversationDetailPage: React.FC = () => {
       setNextMessageCursor(res.nextMessageCursor || null);
       setHasMoreMessages(Boolean(res.hasMoreMessages && res.nextMessageCursor));
 
-      // Update takeover machine context based on live manualMode and active actions
+      // A completed HTTP takeover only establishes human ownership. Keep the
+      // composer locked while an AI action is still being cancelled.
       setTakeoverCtx((prev) => {
         if (res.conversation.manualMode) {
-          return transitionToManualActive(prev, {
-            actions: res.outboundActions,
-            forceAck: true,
-          });
+          return transitionToManualActive(prev, { actions: res.outboundActions });
         }
         return transitionToAuto(prev);
       });
@@ -159,10 +157,8 @@ export const ConversationDetailPage: React.FC = () => {
         { method: "POST" }
       );
 
-      // Transition to MANUAL_ACTIVE once cancel acknowledgement is received
-      setTakeoverCtx((prev) =>
-        transitionToManualActive(prev, { forceAck: Boolean(res.cancelAck) })
-      );
+      // The takeover endpoint confirms ownership only. Reload the authoritative
+      // action states before enabling the manual composer.
       await loadDetails();
     } catch (err: unknown) {
       alert((err as Error).message);
@@ -284,6 +280,8 @@ export const ConversationDetailPage: React.FC = () => {
   );
 
   const formatConversationStatus = (status: string, manualMode?: boolean) => {
+    if (takeoverCtx.state === "WAITING_CANCEL_ACK") return "Đang dừng AI để tiếp quản";
+    if (takeoverCtx.state === "RESUMING") return "Đang bật lại phản hồi tự động";
     if (manualMode) return "Hỗ trợ trực tiếp";
     switch (status) {
       case "WAITING":

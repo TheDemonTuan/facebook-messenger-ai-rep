@@ -47,18 +47,21 @@ export function transitionToWaitingCancelAck(context: TakeoverMachineContext): T
  */
 export function transitionToManualActive(
   context: TakeoverMachineContext,
-  options?: { actions?: OutboundActionItem[]; forceAck?: boolean }
+  options?: { actions?: OutboundActionItem[] }
 ): TakeoverMachineContext {
   if (context.state !== "WAITING_CANCEL_ACK" && context.state !== "AUTO") {
     return context;
   }
 
-  // If actions are provided and any is still TYPING, cancel ack is NOT ready unless forceAck is set
-  if (options?.actions && !options.forceAck) {
-    const hasActiveTyping = options.actions.some(
-      (a) => a.status === "TYPING" || a.status === "SENDING"
+  // The API confirms the ownership change, not that an in-flight browser send stopped.
+  // Keep the composer locked until no non-terminal AI action remains.
+  if (options?.actions) {
+    const hasActiveAiAction = options.actions.some(
+      (action) =>
+        action.actor === "AI" &&
+        ["PENDING", "TYPING", "SENDING", "SEND_INTENT", "RETRY_APPROVED"].includes(action.status)
     );
-    if (hasActiveTyping) {
+    if (hasActiveAiAction) {
       return {
         ...context,
         state: "WAITING_CANCEL_ACK",
@@ -99,6 +102,11 @@ export function transitionToResuming(context: TakeoverMachineContext): TakeoverM
  * Complete resume back to AUTO mode.
  */
 export function transitionToAuto(context: TakeoverMachineContext): TakeoverMachineContext {
+  // A refetch started before takeover can return AUTO after the operator has
+  // already clicked. Only an explicit resume may leave the pending state.
+  if (context.state === "WAITING_CANCEL_ACK") {
+    return context;
+  }
   return {
     ...context,
     state: "AUTO",

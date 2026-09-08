@@ -136,8 +136,11 @@ export class SenderWorkerService {
     this.jobRunner.registerHandler("DISCOVERY_SEARCH", async (ctx) => {
       const payload = ctx.job.payload as { query?: string };
       const query = payload?.query || "";
-      if (typeof this.adapter.searchRecipients === "function") {
-        const candidates = await this.adapter.searchRecipients(query);
+      const searchableAdapter = this.adapter as ChannelAdapter & {
+        searchRecipients?: (query: string) => Promise<unknown[]>;
+      };
+      if (typeof searchableAdapter.searchRecipients === "function") {
+        const candidates = await searchableAdapter.searchRecipients(query);
         return { candidates };
       }
       return { candidates: [] };

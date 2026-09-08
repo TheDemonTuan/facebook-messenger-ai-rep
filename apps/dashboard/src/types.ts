@@ -248,6 +248,8 @@ export interface MessageItem {
 export type OutboundActionStatus =
   | "PENDING"
   | "TYPING"
+  | "SEND_INTENT"
+  | "RETRY_APPROVED"
   | "SENDING"
   | "SENT"
   | "ABORTED"
