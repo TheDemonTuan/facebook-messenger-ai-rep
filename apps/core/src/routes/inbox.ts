@@ -21,8 +21,10 @@ import {
   replyEligibilityDecisions,
   sanitizeApiOutput,
   ConversationControlService,
+  replyPolicyMembers,
+  SettingsRepository,
 } from "@messenger/db";
-import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
+import { eq, and, desc, sql, ne, inArray, or, notInArray, isNull } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
 import { requireRole } from "../auth/roles.js";
@@ -40,6 +42,7 @@ export interface InboxRoutesOptions {
   broadcaster: OutboxBroadcaster;
   requireAuth: (request: FastifyRequest, reply: FastifyReply) => Promise<SessionUser | null>;
   channelAccountId: string;
+  settingsRepo?: SettingsRepository;
 }
 
 export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsync {
@@ -55,6 +58,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
     channelAccountId,
   } = options;
   const controlService = new ConversationControlService(db);
+  const settingsRepoInstance = options.settingsRepo || new SettingsRepository(db);
 
   return async function (fastify) {
     fastify.addHook("preHandler", async (request, reply) => {
@@ -64,15 +68,96 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
     });
 
     // 1. List conversations with Pagination (supports limit/offset and cursor)
-    fastify.get<{ Querystring: { filter?: string; limit?: string; offset?: string; cursor?: string } }>(
+    fastify.get<{ Querystring: { filter?: string; limit?: string; offset?: string; cursor?: string; scope?: string } }>(
       "/api/inbox",
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
         const offset = Math.max(0, parseInt(request.query.offset || "0", 10));
         const filter = request.query.filter || "all";
         const cursor = request.query.cursor;
+        const scope = request.query.scope;
 
         const conditions = [eq(conversations.channelAccountId, channelAccountId)];
+
+        if (scope !== "all") {
+          try {
+            const settingsData = await settingsRepoInstance.getSettings(channelAccountId);
+            const s = settingsData?.settings;
+            if (s) {
+              if (s.replyMode === "ONLY_SELECTED") {
+                const policyRows = await db
+                  .select({ participantId: replyPolicyMembers.participantId })
+                  .from(replyPolicyMembers)
+                  .where(
+                    and(
+                      eq(replyPolicyMembers.channelAccountId, channelAccountId),
+                      eq(replyPolicyMembers.policyMode, "INCLUDE")
+                    )
+                  );
+                const selectedIds = Array.from(
+                  new Set([
+                    ...(s.selectedParticipantIds || []),
+                    ...policyRows.map((r) => r.participantId?.trim()).filter(Boolean),
+                  ])
+                ).filter(Boolean);
+
+                if (selectedIds.length === 0) {
+                  return reply.send({
+                    conversations: [],
+                    total: 0,
+                    nextCursor: null,
+                    hasMore: false,
+                  });
+                }
+
+                conditions.push(
+                  or(
+                    inArray(customers.externalCustomerId, selectedIds),
+                    inArray(conversations.externalThreadId, selectedIds)
+                  )!
+                );
+              } else if (s.replyMode === "EVERYONE_EXCEPT") {
+                const policyRows = await db
+                  .select({ participantId: replyPolicyMembers.participantId })
+                  .from(replyPolicyMembers)
+                  .where(
+                    and(
+                      eq(replyPolicyMembers.channelAccountId, channelAccountId),
+                      eq(replyPolicyMembers.policyMode, "EXCLUDE")
+                    )
+                  );
+                const excludedIds = Array.from(
+                  new Set([
+                    ...(s.excludedParticipantIds || []),
+                    ...policyRows.map((r) => r.participantId?.trim()).filter(Boolean),
+                  ])
+                ).filter(Boolean);
+
+                if (excludedIds.length > 0) {
+                  conditions.push(
+                    and(
+                      or(
+                        isNull(customers.externalCustomerId),
+                        notInArray(customers.externalCustomerId, excludedIds)
+                      )!,
+                      notInArray(conversations.externalThreadId, excludedIds)
+                    )!
+                  );
+                }
+              }
+
+              if (s.groupRepliesEnabled === false) {
+                conditions.push(ne(conversations.threadKind, "GROUP"));
+              }
+              if (s.pageRepliesEnabled === false) {
+                conditions.push(ne(conversations.threadKind, "PAGE"));
+              }
+            }
+          } catch (err) {
+            console.error("[Inbox API] Error applying reply policy filter to inbox:", err);
+            return reply.status(503).send({ error: "Unable to apply reply policy to inbox" });
+          }
+        }
 
         if (filter === "manual") {
           conditions.push(eq(conversations.manualMode, true));
@@ -105,6 +190,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           db
             .select({ count: sql<number>`count(*)::int` })
             .from(conversations)
+            .leftJoin(customers, eq(conversations.customerId, customers.id))
             .where(and(...conditions)),
         ]);
 

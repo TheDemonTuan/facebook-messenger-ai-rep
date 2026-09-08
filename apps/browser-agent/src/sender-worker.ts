@@ -133,6 +133,16 @@ export class SenderWorkerService {
     this.jobRunner.registerHandler("BROWSER_SEND", handler);
     this.jobRunner.registerHandler("send-action", handler);
 
+    this.jobRunner.registerHandler("DISCOVERY_SEARCH", async (ctx) => {
+      const payload = ctx.job.payload as { query?: string };
+      const query = payload?.query || "";
+      if (typeof this.adapter.searchRecipients === "function") {
+        const candidates = await this.adapter.searchRecipients(query);
+        return { candidates };
+      }
+      return { candidates: [] };
+    });
+
     this.jobRunner.start();
 
     // Listen on PostgreSQL NOTIFY for cancel typing across processes

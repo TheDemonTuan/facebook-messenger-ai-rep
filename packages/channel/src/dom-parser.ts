@@ -477,6 +477,9 @@ export function parseSenderIdentity(
     body.includes('data-testid="system_message"') ||
     openingTag.includes('data-sender-type="SYSTEM"') ||
     openingTag.includes('data-entity-type="NON_PERSON"') ||
+    openingTag.includes('@msgrDUALCUTOVER') ||
+    body.includes('@msgrDUALCUTOVER') ||
+    /was archived|đã được lưu trữ/i.test(chunk) ||
     body.includes('data-testid="meta_ai_message"') ||
     Boolean(senderName && /^(?:tin nhắn hệ thống|system message|meta ai)$/i.test(senderName));
 
@@ -1161,7 +1164,11 @@ export function extractNestedBubbleText(html: string): string {
     if (closing) {
       const innerHtml = html.slice(startIdx, closing.contentEndIdx);
       const clean = cleanHtmlText(innerHtml);
-      if (clean) {
+      if (
+        clean &&
+        !/^(?:seen by|đã xem bởi|đã xem lúc|seen at)\b/i.test(clean) &&
+        !/^(?:hôm nay|hôm qua|yesterday|today|\d{1,2}:\d{2}(?:\s*(?:am|pm))?)$/i.test(clean)
+      ) {
         textSegments.push(clean);
       }
       lastIndex = closing.fullEndIdx;
@@ -1191,6 +1198,12 @@ function isActualMessageRow(openingTag: string, body: string, text: string): boo
   }
 
   const cleanTrimmed = text.trim();
+  if (
+    /^(?:your other chat with|cuộc trò chuyện khác của bạn với|đã lưu trữ cuộc trò chuyện|end-to-end encrypted|được mã hóa đầu cuối|messages and calls are secured)/i.test(cleanTrimmed)
+  ) {
+    return false;
+  }
+
   if (
     /^(?:hôm nay|hôm qua|yesterday|today|\d{1,2}:\d{2}(?:\s*(?:am|pm))?)$/i.test(cleanTrimmed) &&
     !body.includes('data-testid="author_link"') &&
@@ -1256,13 +1269,13 @@ function stripContainers(html: string, containerRegex: RegExp): string {
 }
 
 const AVATAR_CONTAINER_REGEX =
-  /<(div|span|section|header|a)\b(?=[^>]*\b(?:data-testid=["'](?:message_sender_avatar|avatar|author_link)["']|class=["'][^"']*\bavatar\b[^"']*|aria-label=["'][^"']*(?:ảnh đại diện|avatar|profile picture)[^"']*))/gi;
+  /<(div|span|section|header|a)\b(?=[^>]*\b(?:data-testid=["'](?:message_sender_avatar|avatar|author_link|seen_heads)["']|class=["'][^"']*\b(?:avatar|seen_heads)\b[^"']*|aria-label=["'][^"']*(?:ảnh đại diện|avatar|profile picture|seen by|đã xem)[^"']*))/gi;
 
 const QUOTE_CONTAINER_REGEX =
   /<(div|span|blockquote|section)\b(?=[^>]*\b(?:data-testid=["'](?:quoted_message|reply_to_message|message_quote|reply_preview)["']|class=["'][^"']*\b(?:quoted_message|reply_preview|message_quote)\b[^"']*))/gi;
 
 const ACTION_RECEIPT_CONTAINER_REGEX =
-  /<(div|span|ul|ol|li|section)\b(?=[^>]*\b(?:role=["']toolbar["']|data-testid=["'](?:reaction_picker|message_actions|action_button|delivery_status|seen_receipt|seen_heads|quick_replies)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|receipt|delivery-status)\b[^"']*))/gi;
+  /<(div|span|ul|ol|li|section)\b(?=[^>]*\b(?:role=["']toolbar["']|data-testid=["'](?:reaction_picker|message_actions|action_button|delivery_status|seen_receipt|seen_heads|quick_replies)["']|class=["'][^"']*\b(?:message-actions|reaction-picker|receipt|delivery-status|seen-receipt|seen_heads)\b[^"']*|aria-label=["'][^"']*(?:seen by|đã xem|seen_heads|delivered|đã gửi|đã chuyển|đã nhận)[^"']*))/gi;
 
 const SHARE_CONTAINER_REGEX =
   /<(div|span|section|a)\b(?=[^>]*\b(?:data-testid=["'](?:share_card|shared_post|link_preview|group_share)["']|class=["'][^"']*\b(?:shared_card|share_card|group_share)\b[^"']*|aria-label=["'][^"']*(?:thông tin nhóm|chia sẻ liên kết|shared link|shared post)[^"']*))/gi;
@@ -1511,6 +1524,15 @@ export function extractRowMediaParts(
 
     const altMatch = fullImgTag.match(/\balt=["']([^"']+)["']/i);
     const altText = altMatch ? altMatch[1] : undefined;
+
+    // Ignore seen receipts, avatars, and presence icons
+    if (
+      /seen by|đã xem|seen_heads|delivered|đã gửi|đã nhận|avatar|ảnh đại diện|profile picture|user presence/i.test(
+        fullImgTag + " " + (altText || "")
+      )
+    ) {
+      continue;
+    }
 
     const widthMatch = fullImgTag.match(/\bwidth=["']?(\d+)["']?/i);
     const heightMatch = fullImgTag.match(/\bheight=["']?(\d+)["']?/i);

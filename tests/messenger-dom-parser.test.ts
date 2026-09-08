@@ -39,6 +39,11 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
     "utf-8"
   );
 
+  const e2eeReceiptHtml = fs.readFileSync(
+    path.resolve(__dirname, "fixtures/messenger-dom-e2ee-receipt.html"),
+    "utf-8"
+  );
+
   const mockBotOptions = {
     botParticipantId: "1000888000",
     botProfileUrl: "https://www.facebook.com/profile.php?id=1000888000",
@@ -149,6 +154,17 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(threads[2]?.threadId).toBe("333");
       expect(threads[2]?.customerName).toBe("Đã Đọc");
       expect(threads[2]?.isUnread).toBe(false);
+    });
+  });
+
+  describe("E2EE receipt and cutover regressions", () => {
+    it("does not turn Seen by receipt avatars or archived cutover notices into messages", () => {
+      const result = parseMessengerBubblesFromHtml(e2eeReceiptHtml, mockBotOptions);
+
+      expect(result.bubbles).toHaveLength(1);
+      expect(result.bubbles[0]!.text).toBe("phải fanpage hay bussiness gì mới có api hook riêng");
+      expect(result.bubbles[0]!.parts?.some((part) => part.type === "IMAGE")).toBe(false);
+      expect(result.isDegraded).toBe(false);
     });
   });
 

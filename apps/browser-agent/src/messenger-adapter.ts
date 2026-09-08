@@ -838,6 +838,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
               }
             }
             this.rememberActiveBubbleSequence(currentThreadId, currentBubbles);
+            this.threadBaselinesEstablished.add(currentThreadId);
           }
 
           this.isInitializedBaseline = true;
@@ -961,24 +962,24 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       }
     }
 
+    const isThreadFirstBaseline = !this.threadBaselinesEstablished.has(threadInfo.threadId);
+    if (isThreadFirstBaseline) {
+      this.threadBaselinesEstablished.add(threadInfo.threadId);
+      for (let i = 0; i <= lastOutgoingIdx; i++) {
+        const b = bubbleResult.bubbles[i];
+        if (b && b.isOutgoing) {
+          const bId = b.id || `out:${threadInfo.threadId}:${b.text.trim()}`;
+          this.seenOutgoingBubbleIds.add(bId);
+        }
+      }
+    }
+
     // 1.5 Detect external human outgoing bubbles (including media-only)
     if (lastOutgoingIdx >= 0 && this.externalOutboundCallback) {
       const lastOutBubble = bubbleResult.bubbles[lastOutgoingIdx];
       if (lastOutBubble) {
         const outBubbleId = lastOutBubble.id || `out:${threadInfo.threadId}:${lastOutBubble.text.trim()}`;
-        const isThreadFirstBaseline = !this.threadBaselinesEstablished.has(threadInfo.threadId);
-
-        if (isThreadFirstBaseline) {
-          // Historical baseline: mark existing bubbles without triggering human takeover
-          this.threadBaselinesEstablished.add(threadInfo.threadId);
-          for (let i = 0; i <= lastOutgoingIdx; i++) {
-            const b = bubbleResult.bubbles[i];
-            if (b && b.isOutgoing) {
-              const bId = b.id || `out:${threadInfo.threadId}:${b.text.trim()}`;
-              this.seenOutgoingBubbleIds.add(bId);
-            }
-          }
-        } else if (!this.seenOutgoingBubbleIds.has(outBubbleId)) {
+        if (!isThreadFirstBaseline && !this.seenOutgoingBubbleIds.has(outBubbleId)) {
           this.seenOutgoingBubbleIds.add(outBubbleId);
           if (this.seenOutgoingBubbleIds.size > 1000) {
             const firstKey = this.seenOutgoingBubbleIds.values().next().value;
@@ -1799,6 +1800,92 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       return { verified: false };
     } finally {
       this.sendLock = false;
+    }
+  }
+
+  async searchRecipients(
+    query: string
+  ): Promise<Array<{ id: string; name: string; avatarUrl?: string; kind: "PERSON" | "GROUP" }>> {
+    if (!query || !query.trim()) return [];
+    await this.acquireSendLock();
+    try {
+      if (!this.page || this.page.isClosed()) {
+        await this.init();
+      }
+      const page = this.page;
+      if (!page) return [];
+
+      const priorUrl = page.url();
+      const composeLink = page.getByRole("link", { name: /tin nhắn mới|new message/i }).first();
+      const composeBtn = page.getByRole("button", { name: /tin nhắn mới|new message/i }).first();
+
+      if (await composeLink.count()) {
+        await composeLink.click({ timeout: 5000 }).catch(() => undefined);
+      } else if (await composeBtn.count()) {
+        await composeBtn.click({ timeout: 5000 }).catch(() => undefined);
+      } else if (!page.url().includes("/messages/new")) {
+        await page.goto("https://www.facebook.com/messages/new", { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => undefined);
+      }
+
+      await page.waitForTimeout(500);
+
+      const input = page.getByRole("combobox", { name: /send message to|tìm kiếm trên messenger|search messenger/i }).first();
+      if (!(await input.count())) {
+        return [];
+      }
+
+      await input.fill(query.trim());
+      await page.waitForTimeout(1200);
+
+      const results = await page.evaluate(() => {
+        const options = Array.from(document.querySelectorAll('[role="option"]'));
+        const candidates: Array<{ id: string; name: string; avatarUrl?: string; kind: "PERSON" | "GROUP" }> = [];
+        const seenIds = new Set<string>();
+
+        for (const opt of options) {
+          const ariaLabel = opt.getAttribute("aria-label")?.trim();
+          const id = opt.getAttribute("id")?.trim();
+          const text = (opt as HTMLElement).innerText || "";
+          const img = opt.querySelector("img[src]");
+          const avatarUrl = img?.getAttribute("src") || undefined;
+
+          if (!id || /suggested|gợi ý/i.test(ariaLabel || text)) {
+            continue;
+          }
+
+          if (!/^\d+$/.test(id)) {
+            continue;
+          }
+
+          if (seenIds.has(id)) continue;
+          seenIds.add(id);
+
+          const name = ariaLabel || text.split("\n")[0]?.trim() || id;
+          const isGroup = /others|thành viên|nhóm|and \d+/i.test(text);
+
+          candidates.push({
+            id,
+            name,
+            avatarUrl,
+            kind: isGroup ? "GROUP" : "PERSON",
+          });
+        }
+        return candidates;
+      });
+
+      await input.fill("").catch(() => undefined);
+      await page.keyboard.press("Escape").catch(() => undefined);
+
+      if (priorUrl && priorUrl !== page.url() && !priorUrl.includes("/messages/new")) {
+        await page.goto(priorUrl, { waitUntil: "domcontentloaded", timeout: 10000 }).catch(() => undefined);
+      }
+
+      return results;
+    } catch (err) {
+      console.error("[BrowserAdapter] Error in searchRecipients:", err);
+      return [];
+    } finally {
+      this.releaseSendLock();
     }
   }
 

@@ -181,6 +181,7 @@ export async function buildCoreServer(options: CoreServerOptions = {}): Promise<
       broadcaster,
       requireAuth,
       channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+      settingsRepo,
     })
   );
 

@@ -143,6 +143,13 @@ export interface ChannelAdapter {
   acquireSendLock?: () => Promise<void>;
 
   /**
+   * Search Facebook recipients via Messenger composer/search.
+   */
+  searchRecipients?: (
+    query: string
+  ) => Promise<Array<{ id: string; name: string; avatarUrl?: string; kind: "PERSON" | "GROUP" }>>;
+
+  /**
    * Release send lock to resume observer.
    */
   releaseSendLock?: () => void;

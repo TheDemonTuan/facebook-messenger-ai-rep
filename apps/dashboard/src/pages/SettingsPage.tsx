@@ -636,6 +636,7 @@ export const SettingsPage: React.FC = () => {
                   const targetMode = currentReplyMode === "EVERYONE_EXCEPT" ? "EXCLUDE" : "INCLUDE";
                   const isAlreadyAdded = policyMembers.some((m) => m.id === person.id || m.personId === person.id);
                   const isActionLoading = memberActionLoading === person.id;
+                  const isGroup = person.type === "GROUP";
 
                   return (
                     <div
@@ -669,7 +670,7 @@ export const SettingsPage: React.FC = () => {
 
                       <button
                         type="button"
-                        disabled={isAlreadyAdded || isActionLoading}
+                        disabled={isAlreadyAdded || isActionLoading || isGroup}
                         onClick={() => handleAddPolicyMember(person, targetMode)}
                         style={{
                           display: "inline-flex",
@@ -677,17 +678,19 @@ export const SettingsPage: React.FC = () => {
                           gap: "5px",
                           padding: "6px 12px",
                           borderRadius: "6px",
-                          backgroundColor: isAlreadyAdded ? "#e2e8f0" : targetMode === "EXCLUDE" ? "#fee2e2" : "#dcfce7",
-                          color: isAlreadyAdded ? "#94a3b8" : targetMode === "EXCLUDE" ? "#991b1b" : "#166534",
+                          backgroundColor: isAlreadyAdded || isGroup ? "#e2e8f0" : targetMode === "EXCLUDE" ? "#fee2e2" : "#dcfce7",
+                          color: isAlreadyAdded || isGroup ? "#94a3b8" : targetMode === "EXCLUDE" ? "#991b1b" : "#166534",
                           border: "none",
                           fontSize: "0.78rem",
                           fontWeight: "700",
-                          cursor: isAlreadyAdded || isActionLoading ? "not-allowed" : "pointer",
+                          cursor: isAlreadyAdded || isActionLoading || isGroup ? "not-allowed" : "pointer",
                           flexShrink: 0,
                         }}
                       >
                         {isActionLoading ? (
                           <Loader2 size={12} className="animate-spin" />
+                        ) : isGroup ? (
+                          "Nhóm (Không hỗ trợ)"
                         ) : isAlreadyAdded ? (
                           "Đã có trong danh sách"
                         ) : targetMode === "EXCLUDE" ? (

@@ -5,6 +5,7 @@ export interface CursorQueryParams {
   limit?: number;
   cursor?: string | null;
   offset?: number;
+  scope?: string;
 }
 
 /**
@@ -14,6 +15,9 @@ export function buildInboxQuery(params: CursorQueryParams): string {
   const q = new URLSearchParams();
   if (params.filter && params.filter !== "all") {
     q.append("filter", params.filter);
+  }
+  if (params.scope) {
+    q.append("scope", params.scope);
   }
   if (params.limit) {
     q.append("limit", params.limit.toString());

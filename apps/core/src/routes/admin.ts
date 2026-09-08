@@ -67,6 +67,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     aiConfigRepo,
     incidentRepo,
     eventRepo,
+    jobRepo,
     broadcaster,
     requireAuth,
     channelAccountId,
@@ -74,6 +75,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
 
   const participantRepo = options.participantRepo ?? new ParticipantRepository(db);
   const policyMemberRepo = options.policyMemberRepo ?? new PolicyMemberRepository(db);
+  const discoveryCandidates = new Map<string, { participantId: string; name: string; avatarUrl?: string; expiresAt: number }>();
 
   return async function (fastify) {
     fastify.addHook("preHandler", async (request, reply) => {
@@ -923,6 +925,64 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         };
       });
 
+      // Optional Facebook discovery candidates if query provided and jobRepo is available
+      if (q && q.length >= 1 && jobRepo) {
+        try {
+          const job = await jobRepo.enqueue({
+            channelAccountId,
+            queue: "browser",
+            jobType: "DISCOVERY_SEARCH",
+            payload: { query: q },
+            priority: 10,
+            maxAttempts: 1,
+          });
+
+          // Search includes navigation and Messenger's suggestion debounce.
+          const deadline = Date.now() + 8000;
+          while (Date.now() < deadline) {
+            await new Promise((r) => setTimeout(r, 200));
+            const fresh = await jobRepo.getJobById(job.id);
+            if (fresh?.status === "SUCCEEDED") {
+              const resPayload = fresh.payload as {
+                candidates?: Array<{ id: string; name: string; avatarUrl?: string; kind: "PERSON" | "GROUP" }>;
+              };
+              if (Array.isArray(resPayload?.candidates)) {
+                const localPIds = new Set(filtered.map((p) => p.participantId));
+                for (const fb of resPayload.candidates) {
+                  if (!localPIds.has(fb.id)) {
+                    const safeId = toSafePersonId(channelAccountId, fb.id);
+                    if (fb.kind === "PERSON") {
+                      discoveryCandidates.set(safeId, {
+                        participantId: fb.id,
+                        name: fb.name,
+                        avatarUrl: fb.avatarUrl,
+                        expiresAt: Date.now() + 5 * 60 * 1000,
+                      });
+                    }
+                    result.push({
+                      id: safeId,
+                      name: fb.name,
+                      rawName: fb.name,
+                      avatarUrl: fb.avatarUrl || null,
+                      type: fb.kind,
+                      isVerified: false,
+                      conversationContext: fb.kind === "GROUP" ? "Gợi ý nhóm từ Facebook" : "Gợi ý từ Facebook",
+                      duplicateContext: undefined,
+                      policyMode: policyMap.get(fb.id) || null,
+                    });
+                  }
+                }
+              }
+              break;
+            } else if (fresh?.status === "FAILED") {
+              break;
+            }
+          }
+        } catch (err) {
+          console.warn("[Admin API] Facebook discovery search error or timeout:", err);
+        }
+      }
+
       return reply.send({ people: result });
     };
 
@@ -1003,8 +1063,25 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       }
 
       // Verify channel-scoped VERIFIED PERSON selection
-      const participant = await participantRepo.getParticipant(channelAccountId, participantId);
-      if (!participant || !participant.isVerified || participant.senderKind !== "PERSON") {
+      let participant = await participantRepo.getParticipant(channelAccountId, participantId);
+      if (!participant) {
+        const candidate = discoveryCandidates.get(personId);
+        if (!candidate || candidate.expiresAt < Date.now() || candidate.participantId !== participantId) {
+          return reply.status(400).send({ error: "Facebook search result has expired. Search again before adding this person." });
+        }
+        discoveryCandidates.delete(personId);
+        participant = await participantRepo.upsertParticipant({
+          channelAccountId,
+          participantId,
+          senderKind: "PERSON",
+          reliability: "VERIFIED",
+          isVerified: true,
+          displayName: candidate.name,
+          avatarUrl: candidate.avatarUrl ?? null,
+          metadata: { source: "FACEBOOK_DISCOVERY" },
+        });
+      }
+      if (!participant.isVerified || participant.senderKind !== "PERSON") {
         return reply.status(400).send({
           error: "Only verified persons (PERSON) can be added to reply policy.",
         });

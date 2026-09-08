@@ -24,6 +24,7 @@ const PAGE_SIZE = 20;
 export const InboxPage: React.FC = () => {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [filter, setFilter] = useState<string>("all");
+  const [scope, setScope] = useState<string>("policy");
   const [loading, setLoading] = useState<boolean>(true);
   const [loadingMore, setLoadingMore] = useState<boolean>(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -33,8 +34,10 @@ export const InboxPage: React.FC = () => {
 
   const filterRef = useRef(filter);
   filterRef.current = filter;
+  const scopeRef = useRef(scope);
+  scopeRef.current = scope;
 
-  const loadInbox = useCallback(async (selectedFilter: string, cursor: string | null = null, append = false) => {
+  const loadInbox = useCallback(async (selectedFilter: string, cursor: string | null = null, append = false, selectedScope = scopeRef.current) => {
     if (append) {
       setLoadingMore(true);
     } else {
@@ -47,6 +50,7 @@ export const InboxPage: React.FC = () => {
         filter: selectedFilter,
         limit: PAGE_SIZE,
         cursor: cursor || undefined,
+        scope: selectedScope === "all" ? "all" : undefined,
       });
 
       const res = await apiFetch<PaginatedInboxResponse>(`/api/inbox${query}`);
@@ -70,12 +74,12 @@ export const InboxPage: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    loadInbox(filter, null, false);
-  }, [filter, loadInbox]);
+    loadInbox(filter, null, false, scope);
+  }, [filter, scope, loadInbox]);
 
   // SSE wakeup: refetch current filter on matching inbound/conversation events without poll duplication
   useSseWakeup(shouldRefetchInbox, () => {
-    loadInbox(filterRef.current, null, false);
+    loadInbox(filterRef.current, null, false, scopeRef.current);
   });
 
   const handleLoadMore = () => {
@@ -145,8 +149,26 @@ export const InboxPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Filter buttons */}
-        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+        {/* Scope selector and Filter buttons */}
+        <div style={{ display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" }}>
+          <select
+            value={scope}
+            onChange={(e) => setScope(e.target.value)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "6px",
+              border: "1px solid #cbd5e1",
+              backgroundColor: "#f8fafc",
+              color: "#334155",
+              fontSize: "0.85rem",
+              fontWeight: "600",
+              cursor: "pointer",
+            }}
+          >
+            <option value="policy">Theo mode phản hồi</option>
+            <option value="all">Toàn bộ lịch sử</option>
+          </select>
+
           {[
             { id: "all", label: "Tất cả" },
             { id: "queued", label: "Trong hàng đợi" },
