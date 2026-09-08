@@ -667,6 +667,101 @@ describe("Messenger session hardening", () => {
     expect(parsed.bubbles[0]?.isOutgoing).toBe(false);
   });
 
+  it("removes an image part when its URL is the resolved customer avatar", async () => {
+    const adapter = new PlaywrightMessengerAdapter({ profileDir: "./test-profile", channelAccountId: "account-1" });
+    const callback = vi.fn().mockResolvedValue(undefined);
+    Object.assign(internals(adapter), { inboundCallback: callback });
+
+    const avatarUrl = "https://scontent.example/avatar.jpg?size=100&token=live";
+    await internals(adapter).processInboundBubbles(
+      {
+        ok: true,
+        bubbles: [{
+          id: "mid.observed-text-avatar",
+          text: "Observed customer text",
+          isOutgoing: false,
+          hasMedia: true,
+          contentStatus: "PARTIAL",
+          parts: [
+            { type: "TEXT", text: "Observed customer text" },
+            {
+              type: "IMAGE",
+              media: {
+                mediaId: "img:avatar",
+                mediaRefId: "mid.observed-text-avatar:image:0",
+                role: "ATTACHMENT",
+                status: "READY",
+                sourceUrl: avatarUrl.replace(/&/g, "&amp;"),
+              },
+              altText: "Customer",
+            },
+          ],
+          threadKind: "DIRECT",
+          threadReliability: "VERIFIED",
+          threadEvidence: [],
+          senderEvidence: [],
+          mentions: [],
+          observedTimestamp: new Date("2026-09-08T15:37:19.000Z"),
+        }],
+        isDegraded: false,
+        avatarUrl,
+        threadClassification: { kind: "DIRECT", reliability: "VERIFIED", evidence: [] },
+      },
+      { threadId: "thread-1", customerName: "Customer", avatarUrl },
+      true
+    );
+
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({
+      text: "Observed customer text",
+      parts: [{ type: "TEXT", text: "Observed customer text" }],
+      contentStatus: "READY",
+    }));
+  });
+
+  it("preserves an image attachment when its URL differs from the customer avatar", async () => {
+    const adapter = new PlaywrightMessengerAdapter({ profileDir: "./test-profile", channelAccountId: "account-1" });
+    const callback = vi.fn().mockResolvedValue(undefined);
+    Object.assign(internals(adapter), { inboundCallback: callback });
+
+    await internals(adapter).processInboundBubbles(
+      {
+        ok: true,
+        bubbles: [{
+          id: "mid.real-image",
+          text: "Ảnh sản phẩm",
+          isOutgoing: false,
+          hasMedia: true,
+          contentStatus: "READY",
+          parts: [{
+            type: "IMAGE",
+            media: {
+              mediaId: "img:attachment",
+              mediaRefId: "mid.real-image:image:0",
+              role: "ATTACHMENT",
+              status: "READY",
+              sourceUrl: "https://scontent.example/product.jpg?token=live",
+            },
+          }],
+          threadKind: "DIRECT",
+          threadReliability: "VERIFIED",
+          threadEvidence: [],
+          senderEvidence: [],
+          mentions: [],
+          observedTimestamp: new Date("2026-09-08T15:38:19.000Z"),
+        }],
+        isDegraded: false,
+        avatarUrl: "https://scontent.example/avatar.jpg?size=100&token=live",
+        threadClassification: { kind: "DIRECT", reliability: "VERIFIED", evidence: [] },
+      },
+      { threadId: "thread-1", customerName: "Customer" },
+      true
+    );
+
+    expect(callback).toHaveBeenCalledWith(expect.objectContaining({
+      parts: [expect.objectContaining({ type: "IMAGE" })],
+    }));
+  });
+
   it("never emits an outgoing bubble through the inbound callback", async () => {
     const adapter = new PlaywrightMessengerAdapter({
       profileDir: "./test-profile",

@@ -1116,6 +1116,21 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           null;
 
         const resolvedAvatar = bubbleResult.avatarUrl || threadInfo.avatarUrl || null;
+        const normalizeMediaUrl = (value: string | null | undefined) =>
+          value?.replace(/&amp;/g, "&").trim() || null;
+        const avatarUrl = normalizeMediaUrl(resolvedAvatar);
+        const parts = (bubble.parts || []).filter((part) => {
+          if (part.type !== "IMAGE" && part.type !== "STICKER" && part.type !== "GIF") {
+            return true;
+          }
+          const mediaUrl = normalizeMediaUrl(part.media?.sourceUrl);
+          return !avatarUrl || !mediaUrl || mediaUrl !== avatarUrl;
+        });
+        const contentStatus =
+          parts.some((part) => part.type !== "TEXT" && part.type !== "UNKNOWN") ||
+          parts.some((part) => part.type === "UNKNOWN")
+            ? bubble.contentStatus ?? "READY"
+            : "READY";
 
         await this.inboundCallback({
           channelAccountId: this.channelAccountId,
@@ -1127,8 +1142,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           externalMessageId,
           text: bubble.text,
           timestamp: bubble.facebookEventTimestamp ?? bubble.observedTimestamp ?? new Date(),
-          parts: bubble.parts,
-          contentStatus: bubble.contentStatus ?? "READY",
+          parts,
+          contentStatus,
           eventKind: bubble.eventKind ?? "MESSAGE_CREATED",
           contentQuality: bubble.contentQuality ?? bubble.quality ?? "TRUSTED",
           quality: bubble.quality ?? bubble.contentQuality ?? "TRUSTED",
