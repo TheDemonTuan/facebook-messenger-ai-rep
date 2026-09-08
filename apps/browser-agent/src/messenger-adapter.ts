@@ -1079,7 +1079,9 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       const seenActiveOccurrences = useActiveSequenceFallback
         ? (this.lastSeenActiveSignatures.get(activeSequenceKey) ?? 0)
         : 0;
-      const hasNewActiveOccurrence = useActiveSequenceFallback && activeOccurrence > seenActiveOccurrences;
+      const hasStableMessageId = /^mid[.$:]/i.test(bubble.id);
+      const hasNewActiveOccurrence =
+        useActiveSequenceFallback && !hasStableMessageId && activeOccurrence > seenActiveOccurrences;
 
       if (this.lastSeenMessageIds.has(bubble.id) && !hasNewActiveOccurrence) {
         continue; // Dedupe

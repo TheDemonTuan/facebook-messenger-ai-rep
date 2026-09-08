@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   MessageContentRenderer,
   MessageTimeBadge,
+  ConversationStateMarker,
   MessageStatusBadges,
   conversationStateMarkersBeforeMessages,
   getMessagePreviewSummary,
@@ -322,6 +323,45 @@ describe("PR-04 Rich Message Renderer & Timeline Components", () => {
 
       expect(markers.get("first")?.map((event) => event.id)).toEqual(["takeover"]);
       expect(markers.get("second")?.map((event) => event.id)).toEqual(["resume"]);
+    });
+
+    it("collapses repeated human activity until support returns to the bot", () => {
+      const markers = conversationStateMarkersBeforeMessages(
+        [
+          { id: "takeover-1", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: "2026-09-08T10:01:00.000Z" },
+          { id: "takeover-2", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: "2026-09-08T10:02:00.000Z" },
+          { id: "release", type: "MANUAL_RELEASED", actor: "agent@example.com", createdAt: "2026-09-08T10:03:00.000Z" },
+          { id: "takeover-3", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: "2026-09-08T10:04:00.000Z" },
+        ],
+        [
+          { id: "message-1", timestamp: "2026-09-08T10:01:30.000Z" },
+          { id: "message-2", timestamp: "2026-09-08T10:02:30.000Z" },
+          { id: "message-3", timestamp: "2026-09-08T10:03:30.000Z" },
+          { id: "message-4", timestamp: "2026-09-08T10:04:30.000Z" },
+        ]
+      );
+
+      expect(Array.from(markers.values()).flat().map((event) => event.id)).toEqual([
+        "takeover-1",
+        "release",
+        "takeover-3",
+      ]);
+    });
+
+    it("shows the Messenger source actor as a generic employee", () => {
+      const html = renderToStaticMarkup(
+        React.createElement(ConversationStateMarker, {
+          event: {
+            id: "takeover",
+            type: "MANUAL_TAKEOVER",
+            actor: "HUMAN_MESSENGER",
+            createdAt: "2026-09-08T10:01:00.000Z",
+          },
+        })
+      );
+
+      expect(html).toContain("Nhân viên bắt đầu hỗ trợ");
+      expect(html).not.toContain("HUMAN_MESSENGER");
     });
   });
 

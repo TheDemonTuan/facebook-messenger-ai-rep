@@ -137,7 +137,8 @@ async function mockApi(page: Page): Promise<void> {
         aiRuns: [],
         outboundActions: [],
         events: [
-          { id: "event-takeover", type: "MANUAL_TAKEOVER", actor: "agent@example.com", createdAt: new Date(Date.parse(now) - 1000).toISOString() },
+          { id: "event-takeover", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: new Date(Date.parse(now) - 2000).toISOString() },
+          { id: "event-human-activity", type: "MANUAL_TAKEOVER", actor: "HUMAN_MESSENGER", createdAt: new Date(Date.parse(now) - 1000).toISOString() },
         ],
         hasMoreMessages: false,
         nextMessageCursor: null,
@@ -373,7 +374,9 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   assert(!convDetailText.includes("Inbound Version:"), `${name}: raw 'Inbound Version:' exposed in default detail view`);
   assert(convDetailText.includes("Tin nhắn thoại"), `${name}: missing rich voice component in conversation detail`);
   assert(convDetailText.includes("AI tạo phản hồi"), `${name}: missing decision badge in conversation detail`);
-  assert(convDetailText.includes("agent@example.com bắt đầu hỗ trợ — bot tạm dừng"), `${name}: missing manual-support state marker`);
+  assert(convDetailText.includes("Nhân viên bắt đầu hỗ trợ — bot tạm dừng"), `${name}: missing manual-support state marker`);
+  assert(!convDetailText.includes("HUMAN_MESSENGER"), `${name}: technical Messenger actor is visible`);
+  assert((convDetailText.match(/Nhân viên bắt đầu hỗ trợ — bot tạm dừng/g) || []).length === 1, `${name}: repeated manual-support state marker`);
   assert(convDetailText.includes("Không thể tải hình ảnh"), `${name}: missing explicit unavailable-image state`);
   assert(!convDetailText.includes("Quyết định: Bỏ qua (Hội thoại đang ở chế độ nhân viên hỗ trợ trực tiếp.)"), `${name}: repeated manual-support skip is still visible`);
 

@@ -9,6 +9,11 @@ export interface ConversationStateEvent {
   createdAt: string;
 }
 
+function displayActor(actor?: string | null): string | null {
+  if (!actor || actor === "SYSTEM" || actor === "HUMAN_MESSENGER") return null;
+  return actor;
+}
+
 function markerDetails(event: ConversationStateEvent): {
   label: string;
   icon: "BOT" | "HUMAN";
@@ -17,16 +22,16 @@ function markerDetails(event: ConversationStateEvent): {
   switch (event.type) {
     case "MANUAL_TAKEOVER":
       return {
-        label: event.actor && event.actor !== "SYSTEM"
-          ? `${event.actor} bắt đầu hỗ trợ — bot tạm dừng`
+        label: displayActor(event.actor)
+          ? `${displayActor(event.actor)} bắt đầu hỗ trợ — bot tạm dừng`
           : "Nhân viên bắt đầu hỗ trợ — bot tạm dừng",
         icon: "HUMAN",
         tone: "human",
       };
     case "MANUAL_RELEASED":
       return {
-        label: event.actor && event.actor !== "SYSTEM"
-          ? `${event.actor} chuyển lại cho bot hỗ trợ`
+        label: displayActor(event.actor)
+          ? `${displayActor(event.actor)} chuyển lại cho bot hỗ trợ`
           : "Nhân viên chuyển lại cho bot hỗ trợ",
         icon: "BOT",
         tone: "bot",

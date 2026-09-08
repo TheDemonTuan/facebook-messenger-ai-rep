@@ -254,7 +254,7 @@ describe("Messenger session hardening", () => {
     expect(callback).toHaveBeenCalledWith(
       expect.objectContaining({
         externalThreadId: "thread-1",
-        externalMessageId: expect.stringMatching(/^active\.\$thread-1\./),
+        externalMessageId: "mid.active-new-message",
         text: "Tin mới trong chat đang mở",
       })
     );
@@ -667,6 +667,38 @@ describe("Messenger session hardening", () => {
     expect(parsed.bubbles[0]?.isOutgoing).toBe(false);
   });
 
+  it("never emits an outgoing bubble through the inbound callback", async () => {
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+    const callback = vi.fn().mockResolvedValue(undefined);
+    Object.assign(internals(adapter), { inboundCallback: callback });
+
+    await internals(adapter).processInboundBubbles(
+      {
+        ok: true,
+        bubbles: [{
+          id: "mid.self-message",
+          text: "tin do chính tài khoản gửi",
+          isOutgoing: true,
+          threadKind: "DIRECT",
+          threadReliability: "VERIFIED",
+          threadEvidence: [],
+          senderEvidence: [],
+          mentions: [],
+          observedTimestamp: new Date("2026-09-06T12:00:00.000Z"),
+        }],
+        isDegraded: false,
+        threadClassification: { kind: "DIRECT", reliability: "VERIFIED", evidence: [] },
+      },
+      { threadId: "thread-1", customerName: "Khách hàng", avatarUrl: null },
+      true
+    );
+
+    expect(callback).not.toHaveBeenCalled();
+  });
+
   it("does not leak an outgoing marker from one row into later incoming rows", () => {
     const parsed = parseMessengerBubblesFromHtml(`
       <div role="main">
@@ -717,7 +749,7 @@ describe("Messenger session hardening", () => {
     expect(callback).toHaveBeenCalledWith(expect.objectContaining({ customerName: "Sin Sin" }));
   });
 
-  it("processes a new active-chat occurrence when Messenger reuses its DOM message id", async () => {
+  it("does not re-emit a stable active-chat message under a synthetic id", async () => {
     const adapter = new PlaywrightMessengerAdapter({
       profileDir: "./test-profile",
       channelAccountId: "account-1",
@@ -760,14 +792,7 @@ describe("Messenger session hardening", () => {
       true
     );
 
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback).toHaveBeenCalledWith(
-      expect.objectContaining({
-        externalThreadId: "thread-1",
-        externalMessageId: expect.stringMatching(/^active\.\$thread-1\./),
-        text: "tin mới nhưng cùng id DOM",
-      })
-    );
+    expect(callback).not.toHaveBeenCalled();
   });
 
   it("verifies a sent bubble when Messenger reuses the latest DOM id after Enter", async () => {
