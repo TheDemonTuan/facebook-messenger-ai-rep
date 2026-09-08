@@ -556,7 +556,10 @@ describe("PR-03: Message Pipeline Persistence v2 & Updates", () => {
         contextMaxInputTokens: 4096,
       } as SystemSettings;
 
-      const res = buildLeanConversationContext(messages, { settings });
+      const res = buildLeanConversationContext(messages, {
+        settings,
+        now: new Date("2026-09-07T11:00:00.000Z"),
+      });
       expect(res.messages).toHaveLength(2);
       expect(res.messages[0].id).toBe("m1");
       expect(res.messages[0].parts).toHaveLength(1);
