@@ -152,7 +152,7 @@ export const ConversationDetailPage: React.FC = () => {
     setTakeoverCtx((prev) => transitionToWaitingCancelAck(prev));
 
     try {
-      const res = await apiFetch<{ success: boolean; cancelAck?: boolean }>(
+      await apiFetch<{ success: boolean; manualMode: boolean }>(
         `/api/inbox/${conversationId}/takeover`,
         { method: "POST" }
       );
