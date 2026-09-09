@@ -560,7 +560,11 @@ export class ConversationRepository {
       if (existingConv.length > 0 && existingConv[0]) {
         conversationId = existingConv[0].id;
         newInboundVersion = isNonTurnEvent ? existingConv[0].inboundVersion : existingConv[0].inboundVersion + 1;
-        isManual = existingConv[0].manualMode;
+        const isHumanControlled = Boolean(
+          (existingConv[0].replyControlMode && existingConv[0].replyControlMode !== "AUTO") ||
+          (existingConvRow?.replyControlMode && existingConvRow?.replyControlMode !== "AUTO")
+        );
+        isManual = Boolean(existingConv[0].manualMode || isHumanControlled);
 
         // Preserve current conversation status before eligibility check (never set DEBOUNCING prematurely)
         const initialStatus: ConversationStatus = isManual
@@ -839,6 +843,8 @@ export class ConversationRepository {
 
       const isBlocked = Boolean(existingConv[0]?.isBlocked);
       const currentMode = (existingConv[0]?.replyControlMode || existingConvRow?.replyControlMode || "AUTO") as string;
+      const isHumanControlled = currentMode !== "AUTO";
+      isManual = Boolean(isManual || isHumanControlled);
       const isHumanSession = currentMode === "HUMAN_SESSION";
       const isEligibleLive = !isNonTurnEvent && evaluationMode === "LIVE" && evalResult.result.eligible && !isManual && !isBlocked && currentMode === "AUTO";
 
@@ -1295,22 +1301,10 @@ export class ConversationRepository {
   }
 
   async setManualMode(conversationId: string, manualMode: boolean): Promise<void> {
-    const status: ConversationStatus = manualMode ? "MANUAL" : "WAITING_CUSTOMER";
-    await this.db
-      .update(conversations)
-      .set({
-        manualMode,
-        status,
-        humanHoldUntil: manualMode ? undefined : null,
-        updatedAt: new Date(),
-      })
-      .where(eq(conversations.id, conversationId));
-
     if (manualMode) {
-      // Remove from active queue if present
-      await this.db
-        .delete(conversationQueue)
-        .where(eq(conversationQueue.conversationId, conversationId));
+      await this.controlService.acquirePinned(conversationId, "MANUAL_MODE_SET");
+    } else {
+      await this.controlService.release(conversationId, "MANUAL_MODE_CLEARED");
     }
   }
 

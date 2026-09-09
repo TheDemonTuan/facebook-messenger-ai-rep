@@ -26,6 +26,8 @@ import {
   MessageSquare,
   UserCog,
   Database,
+  Sparkles,
+  Send,
 } from "lucide-react";
 
 const POPULAR_TIMEZONES = [
@@ -61,6 +63,20 @@ export const SettingsPage: React.FC = () => {
     latencyMs?: number;
     message?: string;
     error?: string;
+  } | null>(null);
+
+  // AI Interactive Playground state
+  const [playgroundInput, setPlaygroundInput] = useState("");
+  const [playgroundLoading, setPlaygroundLoading] = useState(false);
+  const [playgroundResult, setPlaygroundResult] = useState<{
+    success: boolean;
+    latencyMs?: number;
+    model?: string;
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    data?: { messages?: string[] } | null;
+    errorMessage?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
@@ -158,6 +174,36 @@ export const SettingsPage: React.FC = () => {
       });
     } finally {
       setTestingAi(false);
+    }
+  };
+
+  const handlePlaygroundTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playgroundInput.trim() || playgroundLoading) return;
+    setPlaygroundLoading(true);
+    setPlaygroundResult(null);
+    try {
+      const res = await apiFetch<{
+        success: boolean;
+        latencyMs?: number;
+        model?: string;
+        promptTokens?: number;
+        completionTokens?: number;
+        totalTokens?: number;
+        data?: { messages?: string[] } | null;
+        errorMessage?: string;
+      }>("/api/ai-runs/test", {
+        method: "POST",
+        body: JSON.stringify({ message: playgroundInput.trim() }),
+      });
+      setPlaygroundResult(res);
+    } catch (err: unknown) {
+      setPlaygroundResult({
+        success: false,
+        errorMessage: (err as Error).message || "Lỗi trong quá trình thử nghiệm AI",
+      });
+    } finally {
+      setPlaygroundLoading(false);
     }
   };
 
@@ -970,6 +1016,106 @@ export const SettingsPage: React.FC = () => {
                 style={inputStyle}
               />
             </div>
+          </div>
+
+          {/* AI Interactive Testing Playground */}
+          <div style={{ marginTop: "16px", padding: "16px", backgroundColor: "#eff6ff", borderRadius: "8px", border: "1px solid #bfdbfe" }}>
+            <div style={{ fontWeight: "600", color: "#1e40af", marginBottom: "4px", display: "flex", alignItems: "center", gap: "6px", fontSize: "0.95rem" }}>
+              <Sparkles size={16} /> Thử nghiệm tương tác AI (Playground — Không gửi tới Messenger)
+            </div>
+            <p style={{ margin: "0 0 12px 0", fontSize: "0.83rem", color: "#2563eb" }}>
+              Nhập nội dung khách hỏi để kiểm tra prompt, độ trễ và câu trả lời thực tế của mô hình. Tác vụ này chạy độc lập trong sandbox, không kích hoạt gửi tin ra Facebook Messenger.
+            </p>
+
+            <form onSubmit={handlePlaygroundTest} style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+              <input
+                type="text"
+                value={playgroundInput}
+                onChange={(e) => setPlaygroundInput(e.target.value)}
+                placeholder="Ví dụ: Sản phẩm bên mình bảo hành bao lâu ạ?..."
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  borderRadius: "6px",
+                  border: "1px solid #cbd5e1",
+                  fontSize: "0.88rem",
+                  backgroundColor: "#ffffff",
+                }}
+              />
+              <button
+                type="submit"
+                disabled={playgroundLoading || !playgroundInput.trim()}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                  padding: "8px 16px",
+                  borderRadius: "6px",
+                  backgroundColor: "#2563eb",
+                  color: "#ffffff",
+                  border: "none",
+                  fontSize: "0.85rem",
+                  fontWeight: "600",
+                  cursor: playgroundLoading || !playgroundInput.trim() ? "not-allowed" : "pointer",
+                }}
+              >
+                {playgroundLoading ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
+                {playgroundLoading ? "Đang sinh..." : "Gửi thử nghiệm"}
+              </button>
+            </form>
+
+            {playgroundResult && (
+              <div
+                style={{
+                  backgroundColor: "#ffffff",
+                  borderRadius: "6px",
+                  border: "1px solid #cbd5e1",
+                  padding: "12px 14px",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {playgroundResult.success ? (
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f1f5f9", paddingBottom: "8px", marginBottom: "8px", flexWrap: "wrap", gap: "8px" }}>
+                      <span style={{ fontWeight: "600", color: "#166534" }}>✓ Phản hồi thành công</span>
+                      <span style={{ fontSize: "0.78rem", color: "#64748b" }}>
+                        Model: <strong>{playgroundResult.model || aiProvider.model}</strong> • Độ trễ: <strong>{playgroundResult.latencyMs}ms</strong> • Tokens: <strong>{playgroundResult.totalTokens ?? "—"}</strong>
+                      </span>
+                    </div>
+
+                    <div style={{ fontWeight: 600, color: "#334155", marginBottom: "4px", fontSize: "0.8rem" }}>
+                      Tin nhắn câu trả lời:
+                    </div>
+                    {playgroundResult.data?.messages && playgroundResult.data.messages.length > 0 ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                        {playgroundResult.data.messages.map((msg, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              backgroundColor: "#f8fafc",
+                              padding: "8px 12px",
+                              borderRadius: "6px",
+                              border: "1px solid #e2e8f0",
+                              color: "#0f172a",
+                              whiteSpace: "pre-wrap",
+                            }}
+                          >
+                            {msg}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div style={{ color: "#64748b", fontStyle: "italic" }}>Không có nội dung tin nhắn được tạo.</div>
+                    )}
+                  </div>
+                ) : (
+                  <div style={{ color: "#b91c1c" }}>
+                    <div style={{ fontWeight: 600, marginBottom: "4px" }}>✕ Thử nghiệm thất bại:</div>
+                    <div>{playgroundResult.errorMessage || "Không nhận được phản hồi từ AI."}</div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

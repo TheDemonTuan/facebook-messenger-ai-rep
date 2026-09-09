@@ -255,6 +255,10 @@ async function waitForRoute(page: Page, route: string, isPaused = false): Promis
       await page.getByRole("heading", { name: "Hộp thư khách hàng" }).waitFor();
       await page.getByText("Khách thử nghiệm").first().waitFor();
       break;
+    case "operations":
+      await page.getByRole("heading", { name: "Không gian Vận hành" }).waitFor();
+      await page.getByText("Điều phối & Hàng đợi").waitFor();
+      break;
     case "queue":
       await page.getByRole("heading", { name: "Quản lý hàng đợi xử lý" }).waitFor();
       await page.getByText("Không có tác vụ nào theo bộ lọc đã chọn!").waitFor();
@@ -287,11 +291,21 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   page.on("dialog", (dialog) => dialog.accept());
   const controls = await mockApi(page);
 
-  for (const route of ["overview", "inbox", "queue", "incidents", "ai-logs", "settings", "audit"]) {
+  for (const route of ["overview", "inbox", "operations", "queue", "incidents", "ai-logs", "settings", "audit"]) {
     const response = await page.goto(`${baseURL}/${route}`);
     assert(response?.ok(), `${name}: ${route} returned ${response?.status()}`);
     await waitForRoute(page, route);
   }
+
+  // Verify Operations workspace tabs
+  await page.goto(`${baseURL}/operations`);
+  await waitForRoute(page, "operations");
+  await page.getByRole("button", { name: /Hoạt động AI/ }).click();
+  await page.getByText(/Lượt gọi AI|kết quả/).first().waitFor();
+  await page.getByRole("button", { name: /Kỹ thuật/ }).click();
+  await page.getByText("Sự cố kỹ thuật kênh & phiên").waitFor();
+  await page.getByRole("button", { name: /Điều phối/ }).click();
+  await page.getByText(/Các lượt đang chờ xử lý|Hàng đợi/).first().waitFor();
 
   const bodyText = (await page.locator("body").innerText()).toLowerCase();
   assert(!bodyText.includes("novnc"), `${name}: public noVNC control is visible`);
@@ -319,6 +333,7 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
 
   await page.goto(`${baseURL}/settings`);
   await waitForRoute(page, "settings");
+  await page.getByText(/Thử nghiệm tương tác AI \(Playground/).waitFor();
 
   // Verify people search waiting feedback & empty state UX
   const searchInput = page.locator('input[placeholder*="Tìm kiếm người dùng"]');

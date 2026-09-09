@@ -6,6 +6,7 @@ import { TimezoneProvider } from "./context/TimezoneContext";
 import { Layout } from "./components/Layout";
 import { OverviewPage } from "./pages/OverviewPage";
 import { WorkflowPage } from "./pages/WorkflowPage";
+import { OperationsPage } from "./pages/OperationsPage";
 import { InboxPage } from "./pages/InboxPage";
 import { ConversationDetailPage } from "./pages/ConversationDetailPage";
 import { QueuePage } from "./pages/QueuePage";
@@ -34,14 +35,6 @@ export const App: React.FC = () => {
               }
             />
             <Route
-              path="/workflow"
-              element={
-                <Layout>
-                  <WorkflowPage />
-                </Layout>
-              }
-            />
-            <Route
               path="/inbox"
               element={
                 <Layout>
@@ -54,6 +47,22 @@ export const App: React.FC = () => {
               element={
                 <Layout>
                   <ConversationDetailPage />
+                </Layout>
+              }
+            />
+            <Route
+              path="/operations"
+              element={
+                <Layout>
+                  <OperationsPage />
+                </Layout>
+              }
+            />
+            <Route
+              path="/workflow"
+              element={
+                <Layout>
+                  <WorkflowPage />
                 </Layout>
               }
             />

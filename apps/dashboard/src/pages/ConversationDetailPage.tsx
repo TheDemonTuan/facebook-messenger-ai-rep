@@ -27,6 +27,7 @@ import {
   MessageTimeBadge,
   MessageStatusBadges,
 } from "../components/messages";
+import { AiRunInspector } from "../components/messages/AiRunInspector";
 import {
   ArrowLeft,
   User,
@@ -112,8 +113,9 @@ export const ConversationDetailPage: React.FC = () => {
       // A completed HTTP takeover only establishes human ownership. Keep the
       // composer locked while an AI action is still being cancelled.
       setTakeoverCtx((prev) => {
-        if (res.conversation.manualMode) {
-          return transitionToManualActive(prev, { actions: res.outboundActions });
+        const isHuman = res.conversation.manualMode || (Boolean(res.conversation.replyControlMode) && res.conversation.replyControlMode !== "AUTO");
+        if (isHuman) {
+          return transitionToManualActive(prev, { actions: res.outboundActions, replyControlMode: res.conversation.replyControlMode });
         }
         return transitionToAuto(prev);
       });
@@ -279,9 +281,12 @@ export const ConversationDetailPage: React.FC = () => {
     (a) => a.status === "SEND_UNCERTAIN" || a.status === "UNCONFIRMED"
   );
 
-  const formatConversationStatus = (status: string, manualMode?: boolean) => {
+  const formatConversationStatus = (status: string, manualMode?: boolean, replyControlMode?: string | null) => {
     if (takeoverCtx.state === "WAITING_CANCEL_ACK") return "Đang dừng AI để tiếp quản";
     if (takeoverCtx.state === "RESUMING") return "Đang bật lại phản hồi tự động";
+    if (replyControlMode === "HUMAN_PINNED") return "Người vận hành tiếp quản cố định (Chặn AI)";
+    if (replyControlMode === "HUMAN_SESSION") return "Đang trong phiên hỗ trợ trực tiếp";
+    if (replyControlMode === "HUMAN_DRAFT") return "Người vận hành đang giữ bản thảo";
     if (manualMode) return "Hỗ trợ trực tiếp";
     switch (status) {
       case "WAITING":
@@ -381,7 +386,7 @@ export const ConversationDetailPage: React.FC = () => {
               )}
             </div>
             <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: "2px" }}>
-              Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode)}</strong>
+              Trạng thái: <strong style={{ color: "#1e293b" }}>{formatConversationStatus(conv.status, conv.manualMode, conv.replyControlMode)}</strong>
             </div>
             <details style={{ marginTop: "4px", fontSize: "0.75rem", color: "#64748b" }}>
               <summary style={{ cursor: "pointer", color: "#64748b" }}>Chi tiết kỹ thuật</summary>
@@ -397,7 +402,7 @@ export const ConversationDetailPage: React.FC = () => {
 
         {/* Takeover and Controls */}
         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
-          {conv.manualMode || takeoverCtx.state === "MANUAL_ACTIVE" ? (
+          {conv.manualMode || takeoverCtx.state === "MANUAL_ACTIVE" || (conv.replyControlMode && conv.replyControlMode !== "AUTO") ? (
             <button
               onClick={handleResumeAi}
               disabled={takeoverCtx.state === "RESUMING"}
@@ -415,7 +420,7 @@ export const ConversationDetailPage: React.FC = () => {
                 cursor: takeoverCtx.state === "RESUMING" ? "not-allowed" : "pointer",
               }}
             >
-              <Play size={15} /> Bật lại AI tự động
+              <Play size={15} /> Trả quyền cho bot (Bật lại AI)
             </button>
           ) : (
             <button
@@ -441,7 +446,7 @@ export const ConversationDetailPage: React.FC = () => {
 
           <button
             onClick={handleAcquireDraft}
-            disabled={acquiringDraft || Boolean(conv.manualMode)}
+            disabled={acquiringDraft || Boolean(conv.manualMode) || (Boolean(conv.replyControlMode) && conv.replyControlMode !== "AUTO")}
             title="Giữ bot im lặng trong 60 giây khi bạn bắt đầu soạn"
             style={{
               display: "flex",
@@ -451,7 +456,7 @@ export const ConversationDetailPage: React.FC = () => {
               backgroundColor: "#f8fafc",
               border: "1px solid #cbd5e1",
               borderRadius: "6px",
-              cursor: acquiringDraft || conv.manualMode ? "not-allowed" : "pointer",
+              cursor: acquiringDraft || conv.manualMode || (conv.replyControlMode && conv.replyControlMode !== "AUTO") ? "not-allowed" : "pointer",
             }}
           >
             <User size={15} /> {acquiringDraft ? "Đang giữ..." : "Tôi đang soạn"}
@@ -790,8 +795,18 @@ export const ConversationDetailPage: React.FC = () => {
           </form>
         </div>
 
-        {/* Sidebar Panel: Outbound Actions & Audit Events */}
+        {/* Sidebar Panel: AiRunInspector & Audit Events */}
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+          {/* AiRunInspector Integration */}
+          <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", maxHeight: "420px", display: "flex", flexDirection: "column" }}>
+            <AiRunInspector
+              run={data?.aiRuns?.[0] || null}
+              actions={actions}
+              messages={messages}
+              compact={true}
+            />
+          </div>
+
           {/* Outbound Actions List */}
           <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", padding: "16px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
             <h3 style={{ margin: "0 0 12px 0", fontSize: "0.95rem", fontWeight: "700", color: "#1e293b", display: "flex", alignItems: "center", gap: "6px" }}>

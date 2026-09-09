@@ -42,6 +42,9 @@ export interface ConversationItem {
     unreadCount: number;
     isBlocked: boolean;
     manualMode: boolean;
+    replyControlMode?: string | null;
+    controlReason?: string | null;
+    humanHoldUntil?: string | null;
     title?: string | null;
     claimedAt?: string | null;
     claimToken?: string | null;
@@ -491,6 +494,9 @@ export interface ConversationDetailData {
     title?: string | null;
     isBlocked: boolean;
     manualMode: boolean;
+    replyControlMode?: string | null;
+    controlReason?: string | null;
+    humanHoldUntil?: string | null;
     unreadCount: number;
     summary?: string | null;
     summaryVersion?: number;

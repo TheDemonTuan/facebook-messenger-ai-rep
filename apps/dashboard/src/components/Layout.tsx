@@ -4,10 +4,7 @@ import {
   LayoutDashboard,
   Workflow,
   Inbox,
-  ListOrdered,
-  AlertTriangle,
   Settings,
-  FileText,
   LogOut,
   Pause,
   Play,
@@ -91,11 +88,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const navItems = [
     { label: "Tổng quan", path: "/overview", icon: LayoutDashboard },
-    { label: "Luồng xử lý", path: "/workflow", icon: Workflow },
-    { label: "Hộp thư", path: "/inbox", icon: Inbox },
-    { label: "Hàng đợi", path: "/queue", icon: ListOrdered, badge: overview?.queueLength },
-    { label: "Sự cố", path: "/incidents", icon: AlertTriangle, badge: overview?.openIncidentsCount, badgeColor: "#ef4444" },
-    { label: "AI Logs", path: "/ai-logs", icon: FileText },
+    { label: "Hội thoại", path: "/inbox", icon: Inbox, badge: overview?.todayMessagesCount ? undefined : undefined },
+    { label: "Vận hành", path: "/operations", icon: Workflow, badge: (overview?.openIncidentsCount || overview?.queueLength) ? ((overview?.openIncidentsCount || 0) + (overview?.queueLength || 0)) : undefined, badgeColor: overview?.openIncidentsCount ? "#ef4444" : "#3b82f6" },
     { label: "Cài đặt", path: "/settings", icon: Settings },
     { label: "Nhật ký hoạt động", path: "/audit", icon: Shield },
   ];

@@ -350,6 +350,31 @@ export class ConversationControlService {
         );
 
       if (!isExpiredDraft && !isExpiredSession && !isMaxExceeded) {
+        if (mode !== "AUTO") {
+          await dbTx
+            .update(conversations)
+            .set({ manualMode: true, updatedAt: now })
+            .where(
+              and(
+                eq(conversations.id, conversationId),
+                eq(conversations.manualMode, false),
+                eq(conversations.replyControlMode, mode),
+                eq(conversations.controlEpoch, controlEpoch)
+              )
+            );
+        } else {
+          await dbTx
+            .update(conversations)
+            .set({ manualMode: false, updatedAt: now })
+            .where(
+              and(
+                eq(conversations.id, conversationId),
+                eq(conversations.manualMode, true),
+                eq(conversations.replyControlMode, "AUTO"),
+                eq(conversations.controlEpoch, controlEpoch)
+              )
+            );
+        }
         return {
           mode,
           epoch: controlEpoch,

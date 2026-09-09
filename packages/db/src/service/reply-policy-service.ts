@@ -159,7 +159,11 @@ export class ReplyPolicyService {
             (conv as { humanHoldUntil?: Date | null }).humanHoldUntil &&
               new Date((conv as { humanHoldUntil?: Date | null }).humanHoldUntil!) > now
           );
-          manualMode = Boolean(conv.manualMode || isHumanHold);
+          const isHumanControl = Boolean(
+            (conv as { replyControlMode?: string | null }).replyControlMode &&
+              (conv as { replyControlMode?: string | null }).replyControlMode !== "AUTO"
+          );
+          manualMode = Boolean(conv.manualMode || isHumanHold || isHumanControl);
           if (conv.threadKind && conv.threadKind !== "UNKNOWN") {
             threadKind = conv.threadKind as ThreadKind;
           }
@@ -451,7 +455,11 @@ export class ReplyPolicyService {
       };
     }
 
-    if (conv.manualMode) {
+    const convHumanControl = Boolean(
+      (conv as { replyControlMode?: string | null }).replyControlMode &&
+        (conv as { replyControlMode?: string | null }).replyControlMode !== "AUTO"
+    );
+    if (conv.manualMode || convHumanControl) {
       return {
         decision: "INELIGIBLE",
         eligible: false,
@@ -563,13 +571,17 @@ export class ReplyPolicyService {
       (conv as { humanHoldUntil?: Date | null }).humanHoldUntil &&
         new Date((conv as { humanHoldUntil?: Date | null }).humanHoldUntil!) > now
     );
+    const isHumanControl = Boolean(
+      (conv as { replyControlMode?: string | null }).replyControlMode &&
+        (conv as { replyControlMode?: string | null }).replyControlMode !== "AUTO"
+    );
     const threadContext = {
       id: params.conversationId ?? undefined,
       externalThreadId,
       kind: ((conv.threadKind as ThreadKind) || rawPayload.threadKind || "UNKNOWN"),
       reliability: ((conv.reliability as ClassificationReliability) || rawPayload.threadReliability || "UNVERIFIED"),
       isBlocked: Boolean(conv.isBlocked),
-      manualMode: Boolean(conv.manualMode || isHumanHold),
+      manualMode: Boolean(conv.manualMode || isHumanHold || isHumanControl),
       evidence: rawPayload.threadEvidence ?? [],
     };
 

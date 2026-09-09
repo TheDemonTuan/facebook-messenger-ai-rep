@@ -10,13 +10,14 @@ export interface TakeoverMachineContext {
 }
 
 /**
- * Creates the initial takeover context based on conversation manualMode.
+ * Creates the initial takeover context based on conversation manualMode and replyControlMode.
  */
-export function createTakeoverContext(manualMode: boolean): TakeoverMachineContext {
+export function createTakeoverContext(manualMode: boolean, replyControlMode?: string | null): TakeoverMachineContext {
+  const isHuman = manualMode || (Boolean(replyControlMode) && replyControlMode !== "AUTO");
   return {
-    state: manualMode ? "MANUAL_ACTIVE" : "AUTO",
-    manualMode,
-    cancelAckReceived: manualMode,
+    state: isHuman ? "MANUAL_ACTIVE" : "AUTO",
+    manualMode: isHuman,
+    cancelAckReceived: isHuman,
   };
 }
 
@@ -47,7 +48,7 @@ export function transitionToWaitingCancelAck(context: TakeoverMachineContext): T
  */
 export function transitionToManualActive(
   context: TakeoverMachineContext,
-  options?: { actions?: OutboundActionItem[] }
+  options?: { actions?: OutboundActionItem[]; replyControlMode?: string | null }
 ): TakeoverMachineContext {
   if (context.state !== "WAITING_CANCEL_ACK" && context.state !== "AUTO") {
     return context;

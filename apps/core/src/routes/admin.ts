@@ -1489,22 +1489,36 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           return reply.status(404).send({ error: "Incident not found" });
         }
 
-        // 1. If incident was attached to a specific conversation, restore it out of manual mode
+        // 1. If incident was attached to a specific conversation, clear ERROR status without corrupting control mode
         if (resolved.conversationId) {
-          await db
-            .update(conversations)
-            .set({
-              manualMode: false,
-              status: "WAITING_CUSTOMER",
-              updatedAt: new Date(),
+          const [conv] = await db
+            .select({
+              id: conversations.id,
+              status: conversations.status,
+              replyControlMode: conversations.replyControlMode,
             })
-            .where(eq(conversations.id, resolved.conversationId));
+            .from(conversations)
+            .where(eq(conversations.id, resolved.conversationId))
+            .limit(1);
 
-          await broadcaster.broadcast("conversation:status", {
-            conversationId: resolved.conversationId,
-            manualMode: false,
-            status: "WAITING_CUSTOMER",
-          });
+          if (conv && conv.status === "ERROR") {
+            const isHuman = Boolean(conv.replyControlMode && conv.replyControlMode !== "AUTO");
+            const nextStatus = isHuman ? "MANUAL" : "WAITING_CUSTOMER";
+            await db
+              .update(conversations)
+              .set({
+                manualMode: isHuman,
+                status: nextStatus,
+                updatedAt: new Date(),
+              })
+              .where(eq(conversations.id, resolved.conversationId));
+
+            await broadcaster.broadcast("conversation:status", {
+              conversationId: resolved.conversationId,
+              manualMode: isHuman,
+              status: nextStatus,
+            });
+          }
         }
 
         // 2. Auto un-suspend channel account if no other open incidents remain
@@ -1546,20 +1560,34 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         for (const item of openItems) {
           await incidentRepo.resolveIncident(item.id, user.email, "Đã đóng hàng loạt từ quản lý sự cố");
           if (item.conversationId) {
-            await db
-              .update(conversations)
-              .set({
-                manualMode: false,
-                status: "WAITING_CUSTOMER",
-                updatedAt: new Date(),
+            const [conv] = await db
+              .select({
+                id: conversations.id,
+                status: conversations.status,
+                replyControlMode: conversations.replyControlMode,
               })
-              .where(eq(conversations.id, item.conversationId));
+              .from(conversations)
+              .where(eq(conversations.id, item.conversationId))
+              .limit(1);
 
-            await broadcaster.broadcast("conversation:status", {
-              conversationId: item.conversationId,
-              manualMode: false,
-              status: "WAITING_CUSTOMER",
-            });
+            if (conv && conv.status === "ERROR") {
+              const isHuman = Boolean(conv.replyControlMode && conv.replyControlMode !== "AUTO");
+              const nextStatus = isHuman ? "MANUAL" : "WAITING_CUSTOMER";
+              await db
+                .update(conversations)
+                .set({
+                  manualMode: isHuman,
+                  status: nextStatus,
+                  updatedAt: new Date(),
+                })
+                .where(eq(conversations.id, item.conversationId));
+
+              await broadcaster.broadcast("conversation:status", {
+                conversationId: item.conversationId,
+                manualMode: isHuman,
+                status: nextStatus,
+              });
+            }
           }
         }
 
