@@ -171,6 +171,9 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
         } else {
           hasAnyChanges = true;
           allPartsSuccessful = false;
+          console.warn(
+            `[MediaEnrichmentHandler] Image ${media.mediaRefId || media.mediaId} failed: ${fetchRes.error || fetchRes.status}`
+          );
           updatedParts.push({
             ...part,
             media: {
@@ -518,6 +521,13 @@ export function createMediaEnrichmentHandler(deps: MediaEnrichmentHandlerDeps) {
         contentRevision: updateResult.contentRevision,
         contentStatus: overallStatus,
         allPartsSuccessful,
+        failedMedia: updatedParts.flatMap((part) => {
+          if (!("media" in part) || !part.media || part.media.status === "READY") return [];
+          return [{
+            mediaRefId: part.media.mediaRefId || part.media.mediaId,
+            status: part.media.status,
+          }];
+        }),
       },
     });
 

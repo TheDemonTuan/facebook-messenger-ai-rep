@@ -187,6 +187,8 @@ async function main() {
     console.log(`[Browser Agent] Inbound received from ${inbound.externalCustomerId}: "${inbound.text.slice(0, 30)}..."`);
 
     let debounceMs = 3000;
+    let humanInboundResponseWaitMs = 60_000;
+    let autoResumeAfterHuman = true;
     try {
       const s = await settingsRepo.getSettings(inbound.channelAccountId);
       if (s?.settings?.businessTimeZone && typeof adapter.setTimeZone === "function") {
@@ -199,12 +201,22 @@ async function main() {
       if (s?.settings?.debounceMs) {
         debounceMs = s.settings.debounceMs;
       }
+      if (s?.settings?.humanInboundResponseWaitMs) {
+        humanInboundResponseWaitMs = s.settings.humanInboundResponseWaitMs;
+      }
+      if (typeof s?.settings?.autoResumeAfterHuman === "boolean") {
+        autoResumeAfterHuman = s.settings.autoResumeAfterHuman;
+      }
     } catch (err) {
       console.warn("[Browser Agent] Failed to read settings, defaulting to 3000ms:", err);
     }
 
     // Ingest into PostgreSQL atomically with debounce job enqueued/updated
-    const result = await convRepo.ingestInboundMessage(inbound, { debounceMs });
+    const result = await convRepo.ingestInboundMessage(inbound, {
+      debounceMs,
+      humanInboundResponseWaitMs,
+      autoResumeAfterHuman,
+    });
     if (result.isDuplicate) {
       console.log(`[Browser Agent] Deduplicated message ${inbound.externalMessageId}`);
       return;
@@ -305,18 +317,19 @@ async function main() {
           },
         });
 
-        // 3. Record event
-        await eventRepo.recordEvent({
-          channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
-          conversationId: convId,
-          type: "MANUAL_TAKEOVER",
-          actor: "HUMAN_MESSENGER",
-          payload: {
-            text: outbound.text.slice(0, 100),
-            detectedAt: new Date(outbound.timestamp).toISOString(),
-            holdDurationMinutes: 30,
-          },
-        });
+        // 3. Record the state transition once; later human messages only refresh the session.
+        if (control.changed) {
+          await eventRepo.recordEvent({
+            channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
+            conversationId: convId,
+            type: "MANUAL_TAKEOVER",
+            actor: "HUMAN_MESSENGER",
+            payload: {
+              detectedAt: new Date(outbound.timestamp).toISOString(),
+              holdDurationMs,
+            },
+          });
+        }
       } catch (err) {
         console.error("[Browser Agent] Error handling external outbound:", err);
       }

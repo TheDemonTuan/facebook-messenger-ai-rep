@@ -55,6 +55,7 @@ export interface InboundIngestOptions {
   dedupeWindowMs?: number;
   evaluationMode?: "LIVE" | "SHADOW";
   humanInboundResponseWaitMs?: number;
+  autoResumeAfterHuman?: boolean;
 }
 
 export class ConversationRepository {
@@ -140,14 +141,25 @@ export class ConversationRepository {
         // Mock / fallback
       }
 
-      if (existingConvRow) {
+      if (existingConvRow && options?.autoResumeAfterHuman !== false) {
         try {
+          const previousMode = existingConvRow.replyControlMode;
           const normalized = await this.controlService.normalizeForInbound(existingConvRow.id, now);
           if (normalized) {
             existingConvRow.replyControlMode = normalized.mode;
             existingConvRow.humanHoldUntil = normalized.holdUntil;
             existingConvRow.controlEpoch = normalized.epoch;
             existingConvRow.manualMode = normalized.mode !== "AUTO";
+            if (normalized.changed && previousMode === "HUMAN_SESSION" && normalized.mode === "AUTO") {
+              await this.db.insert(conversationEvents).values({
+                channelAccountId: payload.channelAccountId,
+                conversationId: existingConvRow.id,
+                type: "AI_RESUMED_AFTER_HUMAN",
+                inboundVersion: existingConvRow.inboundVersion,
+                actor: "SYSTEM",
+                payload: { reason: "human_session_expired" },
+              });
+            }
           }
         } catch {
           // Mock fallback
@@ -907,7 +919,12 @@ export class ConversationRepository {
           actor: "BROWSER_AGENT",
           payload: { debounceMs },
         });
-      } else if (isHumanSession && evaluationMode === "LIVE" && !isBlocked) {
+      } else if (
+        isHumanSession &&
+        evaluationMode === "LIVE" &&
+        !isBlocked &&
+        options?.autoResumeAfterHuman !== false
+      ) {
         const waitMs = options?.humanInboundResponseWaitMs ?? 60_000;
         const availableAt = new Date(Date.now() + waitMs);
         await tx

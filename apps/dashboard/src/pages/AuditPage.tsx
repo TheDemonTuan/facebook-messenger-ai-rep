@@ -71,6 +71,7 @@ export const AuditPage: React.FC = () => {
   const formatActor = (actor?: string | null) => {
     if (!actor || actor === "SYSTEM") return "Hệ thống";
     if (actor === "AI") return "Trợ lý AI";
+    if (actor === "HUMAN_MESSENGER") return "Nhân viên Messenger";
     if (actor === "OWNER") return "Chủ sở hữu";
     if (actor === "OPERATOR") return "Quản trị viên";
     return actor;

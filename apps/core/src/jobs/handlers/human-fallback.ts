@@ -1,5 +1,5 @@
 import type { JobExecutionContext } from "@messenger/db";
-import type { Database, EventRepository } from "@messenger/db";
+import type { Database, EventRepository, SettingsRepository } from "@messenger/db";
 import { conversations, conversationQueue, jobs, ConversationControlService } from "@messenger/db";
 import { eq } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
@@ -8,6 +8,7 @@ import type { HumanFallbackJobPayload } from "@messenger/contracts";
 export interface HumanFallbackHandlerDeps {
   db: Database;
   eventRepo: EventRepository;
+  settingsRepo?: SettingsRepository;
   broadcaster: OutboxBroadcaster;
   controlService?: ConversationControlService;
 }
@@ -69,7 +70,17 @@ export function createHumanFallbackHandler(deps: HumanFallbackHandlerDeps) {
       return;
     }
 
-    // 6. Transition to AUTO
+    // 6. Honor the configured auto-resume policy before changing ownership.
+    if (deps.settingsRepo) {
+      const { settings } = await deps.settingsRepo.getSettings(channelAccountId);
+      if (!settings.autoResumeAfterHuman) {
+        console.log(
+          `[HumanFallbackHandler] Auto-resume is disabled for channel ${channelAccountId}. Keeping human control.`
+        );
+        return;
+      }
+    }
+
     console.log(
       `[HumanFallbackHandler] Human response grace period expired for conversation ${conversationId}. Resuming AI automatically.`
     );

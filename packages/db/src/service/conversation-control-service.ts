@@ -15,6 +15,7 @@ export interface ConversationControl {
   epoch: number;
   holdUntil: Date | null;
   suppressedThroughInboundVersion: number;
+  changed?: boolean;
 }
 
 export interface AcquireSessionOptions {
@@ -121,6 +122,7 @@ export class ConversationControlService {
           epoch: current.controlEpoch,
           holdUntil: null,
           suppressedThroughInboundVersion: current.inboundVersion,
+          changed: false,
         };
       }
 
@@ -156,6 +158,7 @@ export class ConversationControlService {
           epoch,
           holdUntil: finalHoldUntil,
           suppressedThroughInboundVersion: current.inboundVersion,
+          changed: false,
         };
       }
 
@@ -191,6 +194,7 @@ export class ConversationControlService {
         epoch,
         holdUntil: targetHold,
         suppressedThroughInboundVersion: current.inboundVersion,
+        changed: true,
       };
     };
 
@@ -385,6 +389,7 @@ export class ConversationControlService {
         epoch,
         holdUntil: null,
         suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
+        changed: true,
       };
     };
 

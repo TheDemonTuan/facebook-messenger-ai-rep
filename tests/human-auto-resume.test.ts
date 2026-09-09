@@ -89,6 +89,7 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     });
 
     expect(control.mode).toBe("HUMAN_SESSION");
+    expect(control.changed).toBe(true);
     expect(control.epoch).toBe(6);
     expect(state.conv.replyControlMode).toBe("HUMAN_SESSION");
     expect(state.conv.manualMode).toBe(true);
@@ -111,6 +112,7 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
 
     expect(normalized).toBeDefined();
     expect(normalized?.mode).toBe("AUTO");
+    expect(normalized?.changed).toBe(true);
     expect(normalized?.epoch).toBe(11);
     expect(state.conv.replyControlMode).toBe("AUTO");
     expect(state.conv.manualMode).toBe(false);
@@ -210,6 +212,42 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     expect(mockBroadcaster.broadcast).toHaveBeenCalledWith("conversation:resumed", expect.any(Object));
   });
 
+  it("keeps human control when auto-resume is disabled", async () => {
+    const now = new Date();
+    const { mockDb, state } = createMockDb({
+      replyControlMode: "HUMAN_SESSION",
+      controlEpoch: 30,
+      inboundVersion: 7,
+      lastInboundAt: new Date(now.getTime() - 60_000),
+      lastHumanOutboundAt: new Date(now.getTime() - 120_000),
+    });
+    const mockEventRepo = { recordEvent: vi.fn() } as unknown as EventRepository;
+    const mockBroadcaster = { broadcast: vi.fn() };
+    const fallbackHandler = createHumanFallbackHandler({
+      db: mockDb,
+      eventRepo: mockEventRepo,
+      settingsRepo: {
+        getSettings: vi.fn().mockResolvedValue({ settings: { autoResumeAfterHuman: false } }),
+      } as never,
+      broadcaster: mockBroadcaster as unknown as OutboxBroadcaster,
+    });
+
+    await fallbackHandler({
+      job: {
+        payload: {
+          channelAccountId: "acc-1",
+          conversationId: "conv-h-1",
+          inboundVersion: 7,
+          controlEpoch: 30,
+        },
+      },
+    } as unknown as JobExecutionContext);
+
+    expect(state.conv.replyControlMode).toBe("HUMAN_SESSION");
+    expect(mockEventRepo.recordEvent).not.toHaveBeenCalled();
+    expect(mockBroadcaster.broadcast).not.toHaveBeenCalled();
+  });
+
   // H5: HUMAN_PINNED customer sends -> persist inbound, AI never auto-resumes
   it("H5: HUMAN_PINNED mode never auto-releases to AUTO", async () => {
     const { mockDb, state } = createMockDb({
@@ -268,6 +306,7 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     });
 
     expect(control.mode).toBe("HUMAN_SESSION");
+    expect(control.changed).toBe(false);
     expect(control.epoch).toBe(51);
     // Capped by maxSessionMs (sessionStart + 600_000 = now + 100s, less than now + 120s)
     const maxPossibleHold = sessionStart.getTime() + 600_000;
