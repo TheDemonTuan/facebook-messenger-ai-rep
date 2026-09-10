@@ -5,6 +5,7 @@ import {
   parseMessengerBubblesFromHtml,
   parseSidebarThreadsFromHtml,
   isSnippetOutgoing,
+  fuzzyMatchesOutboundText,
 } from "@messenger/channel";
 import type {
   InboundMessagePayload,
@@ -333,6 +334,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
 
       const isBotSent = this.recentBotSentTexts.some((botMsg) => {
         return (
+          fuzzyMatchesOutboundText(botMsg.text, outText) ||
           botMsg.text === outText ||
           (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
         );
@@ -1011,6 +1013,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           this.recentBotSentTexts = this.recentBotSentTexts.filter((item) => now - item.sentAt < 180000);
           const isRecentBotSent = this.recentBotSentTexts.some((botMsg) => {
             return (
+              fuzzyMatchesOutboundText(botMsg.text, outText) ||
               botMsg.text === outText ||
               (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
             );
@@ -1061,6 +1064,32 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     for (let i = startIdx; i < bubbleResult.bubbles.length; i++) {
       const bubble = bubbleResult.bubbles[i];
       if (!bubble || bubble.isOutgoing) continue;
+
+      // ANTI-ECHO GUARD: A bot reply bubble must NEVER be misclassified and ingested as customer inbound.
+      // If this bubble matches any recent bot message or durable bot action, treat it as outgoing and suppress it.
+      const isRecentBotReply = this.recentBotSentTexts.some((botMsg) =>
+        fuzzyMatchesOutboundText(botMsg.text, bubble.text)
+      );
+      let isDurableBotReply = this.confirmedOutboundMessageIds.has(bubble.id);
+      if (!isDurableBotReply && !isRecentBotReply && this.isDurableBotOutboundChecker) {
+        try {
+          isDurableBotReply = await this.isDurableBotOutboundChecker({
+            threadId: threadInfo.threadId,
+            bubbleId: bubble.id,
+            text: bubble.text.trim(),
+          });
+        } catch {
+          // Ignore
+        }
+      }
+
+      if (isRecentBotReply || isDurableBotReply) {
+        console.log(`[BrowserAdapter] Anti-echo: Suppressed bot reply bubble "${bubble.text.slice(0, 30)}..." from customer inbound ingestion`);
+        bubble.isOutgoing = true;
+        this.lastSeenMessageIds.add(bubble.id);
+        this.confirmedOutboundMessageIds.add(bubble.id);
+        continue;
+      }
 
       const mediaSignature = Array.isArray(bubble.parts) && bubble.parts.length > 0
         ? bubble.parts.filter((p) => p.type !== "TEXT").map((p) => ("media" in p && p.media ? `${p.type}:${p.media.mediaId}` : p.type)).join(",")
@@ -1873,6 +1902,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           const bubbleText = b.text.trim();
           const normBubble = bubbleText.toLowerCase();
           const textMatches =
+            fuzzyMatchesOutboundText(expectedText, bubbleText) ||
             normBubble === normExp ||
             normBubble.includes(normExp) ||
             normExp.includes(normBubble) ||

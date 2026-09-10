@@ -668,15 +668,19 @@ export class SenderWorkerService {
       await this.turnRepo.cancelTurn(turnId, "SEND_UNCERTAIN").catch(() => {});
     }
 
-    // Isolate failure to the specific conversation - switch conversation to manual mode
+    // Isolate failure to the specific conversation (uses REVIEW_HOLD for SEND_UNCERTAIN via setManualMode)
     // Do NOT suspend the entire channel account for all customers
     if (this.convRepo) {
       if (typeof this.convRepo.setManualMode === "function") {
         await this.convRepo.setManualMode(conversationId, true).catch((err) => {
           console.warn(`[Sender Worker] Failed to set manual mode on conversation ${conversationId}:`, err);
         });
+      } else if (typeof this.convRepo.setReviewHold === "function") {
+        await this.convRepo.setReviewHold(conversationId, "SEND_UNCERTAIN").catch((err) => {
+          console.warn(`[Sender Worker] Failed to set review hold on conversation ${conversationId}:`, err);
+        });
       } else if (typeof this.convRepo.updateStatus === "function") {
-        await this.convRepo.updateStatus(conversationId, "MANUAL").catch((err) => {
+        await this.convRepo.updateStatus(conversationId, "WAITING_CUSTOMER").catch((err) => {
           console.warn(`[Sender Worker] Failed to update conversation status ${conversationId}:`, err);
         });
       }

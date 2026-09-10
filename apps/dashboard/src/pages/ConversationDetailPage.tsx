@@ -536,7 +536,7 @@ export const ConversationDetailPage: React.FC = () => {
         </div>
       )}
 
-      {takeoverCtx.state === "MANUAL_ACTIVE" && (
+      {takeoverCtx.state === "MANUAL_ACTIVE" && uncertainActions.length === 0 && (
         <div
           style={{
             display: "flex",

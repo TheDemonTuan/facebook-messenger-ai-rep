@@ -6,6 +6,7 @@ import {
   parseSidebarThreadsFromHtml,
   parseThreadClassification,
   getUtcDateFromZonedParts,
+  fuzzyMatchesOutboundText,
 } from "../packages/channel/src/index.js";
 import {
   evaluateReplyEligibility,
@@ -963,6 +964,45 @@ describe("Messenger DOM Identity, Thread Type, Mention & Timestamp Observation (
       expect(b0.text).toBe("Sanitized group message text 1");
       expect(b0.text).not.toContain("Member Alpha");
       expect(b0.text).not.toContain("Enter, Message sent");
+    });
+  });
+
+  describe("10. Emoji Preservation and Outbound Text Matching (Sin Sin Case)", () => {
+    it("preserves emoji alt attribute text from Facebook img tags during HTML cleanup", () => {
+      const htmlWithEmoji = `
+        <div role="main">
+          <div role="row" id="mid.$cAAAAANpWu8ymvV6hi2gjBlXhBpp1" aria-roledescription="message" data-testid="mw_message_row">
+            <div data-testid="message_container">
+              <span dir="auto">Hé lôoo <img alt="🥰" src="https://static.xx.fbcdn.net/rsrc.php/v4/yK/r/emoji.png"> Shop đây nè, bạn cần shop hỗ trợ gì á?</span>
+            </div>
+          </div>
+        </div>
+      `;
+      const result = parseMessengerBubblesFromHtml(htmlWithEmoji, mockBotOptions);
+      expect(result.ok).toBe(true);
+      const b = result.bubbles.find((row) => row.id === "mid.$cAAAAANpWu8ymvV6hi2gjBlXhBpp1");
+      expect(b).toBeDefined();
+      expect(b!.text).toContain("Hé lôoo");
+      expect(b!.text).toContain("🥰");
+      expect(b!.text).toContain("Shop đây nè");
+    });
+
+    it("fuzzyMatchesOutboundText matches bot messages with emojis against DOM bubbles with or without emojis", () => {
+      // Case 1: Greeting with 🥰
+      const expectedGreeting = "Hé lôoo 🥰 Shop đây nè, bạn cần shop hỗ trợ gì á?";
+      const domGreetingWithoutEmoji = "Hé lôoo Shop đây nè, bạn cần shop hỗ trợ gì á?";
+      const domGreetingWithEmoji = "Hé lôoo 🥰 Shop đây nè, bạn cần shop hỗ trợ gì á?";
+      expect(fuzzyMatchesOutboundText(expectedGreeting, domGreetingWithoutEmoji)).toBe(true);
+      expect(fuzzyMatchesOutboundText(expectedGreeting, domGreetingWithEmoji)).toBe(true);
+
+      // Case 2: Reply with 😅 and 💕
+      const expectedReply = "Dạ đúng rồi ạ 😅 Shop xin lỗi, nãy trả lời ngoài phạm vi hỗ trợ của Sin Sin Shop. Từ giờ shop sẽ tập trung tư vấn sản phẩm và hỗ trợ khách hàng thôi nha 💕";
+      const domReplyWithoutEmoji = "Dạ đúng rồi ạ Shop xin lỗi, nãy trả lời ngoài phạm vi hỗ trợ của Sin Sin Shop. Từ giờ shop sẽ tập trung tư vấn sản phẩm và hỗ trợ khách hàng thôi nha";
+      expect(fuzzyMatchesOutboundText(expectedReply, domReplyWithoutEmoji)).toBe(true);
+
+      // Case 3: Completely different customer messages must not match
+      expect(fuzzyMatchesOutboundText(expectedGreeting, "ai cho phép trả lời ngoài luồng vậy")).toBe(false);
+      expect(fuzzyMatchesOutboundText(expectedGreeting, "bao giờ trung thu")).toBe(false);
     });
   });
 });

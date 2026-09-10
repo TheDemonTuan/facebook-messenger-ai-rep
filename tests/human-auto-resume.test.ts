@@ -265,6 +265,24 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     expect(state.conv.manualMode).toBe(true);
   });
 
+  it("H5b: REVIEW_HOLD with SEND_UNCERTAIN automatically releases back to AUTO on customer inbound", async () => {
+    const { mockDb, state } = createMockDb({
+      replyControlMode: "REVIEW_HOLD",
+      controlEpoch: 35,
+      controlReason: "SEND_UNCERTAIN",
+      manualMode: false,
+    });
+
+    const controlService = new ConversationControlService(mockDb);
+    const normalized = await controlService.normalizeForInbound("conv-h-1", new Date());
+
+    expect(normalized?.mode).toBe("AUTO");
+    expect(normalized?.epoch).toBe(36);
+    expect(state.conv.replyControlMode).toBe("AUTO");
+    expect(state.conv.manualMode).toBe(false);
+    expect(state.conv.status).toBe("WAITING_CUSTOMER");
+  });
+
   // H6: HUMAN_DRAFT expires without send -> AUTO
   it("H6: expired HUMAN_DRAFT lease automatically releases back to AUTO", async () => {
     const pastLease = new Date(Date.now() - 10000);

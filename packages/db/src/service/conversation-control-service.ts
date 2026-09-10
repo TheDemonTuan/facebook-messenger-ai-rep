@@ -316,6 +316,7 @@ export class ConversationControlService {
         .select({
           mode: conversations.replyControlMode,
           controlEpoch: conversations.controlEpoch,
+          controlReason: conversations.controlReason,
           humanHoldUntil: conversations.humanHoldUntil,
           humanSessionStartedAt: conversations.humanSessionStartedAt,
           suppressedThroughInboundVersion: conversations.suppressedThroughInboundVersion,
@@ -329,6 +330,7 @@ export class ConversationControlService {
 
       const mode = (current.mode || (current as unknown as { replyControlMode?: string }).replyControlMode || "AUTO") as ReplyControlMode;
       const controlEpoch = current.controlEpoch ?? (current as unknown as { epoch?: number }).epoch ?? 0;
+      const controlReason = current.controlReason ?? (current as unknown as { reason?: string }).reason ?? null;
       const humanHoldUntil = current.humanHoldUntil ?? (current as unknown as { holdUntil?: Date | null }).holdUntil ?? null;
       const humanSessionStartedAt = current.humanSessionStartedAt ?? null;
       const draftLeaseExpiresAt = current.draftLeaseExpiresAt ?? null;
@@ -349,7 +351,10 @@ export class ConversationControlService {
             now.getTime() - humanSessionStartedAt.getTime() >= options.maxSessionMs
         );
 
-      if (!isExpiredDraft && !isExpiredSession && !isMaxExceeded) {
+      const isReviewHoldUncertain =
+        mode === "REVIEW_HOLD" && controlReason === "SEND_UNCERTAIN";
+
+      if (!isExpiredDraft && !isExpiredSession && !isMaxExceeded && !isReviewHoldUncertain) {
         if (mode !== "AUTO") {
           await dbTx
             .update(conversations)
@@ -385,7 +390,8 @@ export class ConversationControlService {
 
       // Automatic expiry must honor the channel policy. Explicit operator release
       // uses a separate transition and is never blocked by this setting.
-      if (options?.autoResumeAfterHuman === false) {
+      // SEND_UNCERTAIN review hold is a technical ambiguity hold, not a human takeover.
+      if (!isReviewHoldUncertain && options?.autoResumeAfterHuman === false) {
         return {
           mode,
           epoch: controlEpoch,
@@ -394,15 +400,22 @@ export class ConversationControlService {
         };
       }
 
-      // Transition expired human mode back to AUTO
+      // Transition expired human mode or resolved technical hold back to AUTO
       const epoch = controlEpoch + 1;
-      const reason = isExpiredDraft
+      const reason = isReviewHoldUncertain
+        ? "SEND_UNCERTAIN_AUTO_RESUMED"
+        : isExpiredDraft
         ? "DRAFT_LEASE_EXPIRED"
         : isMaxExceeded
         ? "HUMAN_SESSION_MAX_EXCEEDED"
         : "HUMAN_SESSION_EXPIRED";
 
-      const expiryCondition = isExpiredDraft
+      const expiryCondition = isReviewHoldUncertain
+        ? and(
+            eq(conversations.replyControlMode, "REVIEW_HOLD"),
+            eq(conversations.controlEpoch, controlEpoch)
+          )
+        : isExpiredDraft
         ? and(
             eq(conversations.replyControlMode, "HUMAN_DRAFT"),
             eq(conversations.controlEpoch, controlEpoch),

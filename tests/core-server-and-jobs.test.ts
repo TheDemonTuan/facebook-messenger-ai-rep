@@ -560,6 +560,13 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
       } as unknown as JobRepository;
 
       const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })),
         update: vi.fn(() => ({
           set: vi.fn(() => ({
             where: vi.fn(() => ({

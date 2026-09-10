@@ -23,12 +23,13 @@ import {
   turns,
   aiDrafts,
   conversationEvents,
+  incidents,
   stripSensitiveData,
   sanitizeCustomerOutput,
   ConversationControlService,
   SettingsRepository,
 } from "@messenger/db";
-import { eq, and, desc, sql, ne, inArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, ne, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
 import { requireRole, hasRolePermission } from "../auth/roles.js";
@@ -866,6 +867,44 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           }
 
           await broadcaster.broadcast("action:reconciled", { actionId, resolution: "MARK_SENT" });
+
+          // Auto-resolve any open incident in incidents table
+          await db
+            .update(incidents)
+            .set({
+              status: "RESOLVED",
+              resolvedAt: new Date(),
+              resolvedBy: user.email,
+              resolutionNote: "Đã xác nhận gửi thành công từ hộp thư",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(incidents.conversationId, conversationId),
+                eq(incidents.status, "OPEN"),
+                or(
+                  eq(incidents.outboundActionId, action.id),
+                  sql`${incidents.metadata}->>'actionId' = ${actionId}`
+                )
+              )
+            );
+
+          // If conversation is in a technical hold due to send uncertainty, release back to AUTO
+          const [conv] = await db
+            .select({
+              id: conversations.id,
+              mode: conversations.replyControlMode,
+              reason: conversations.controlReason,
+            })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1);
+
+          if (conv && (conv.mode === "REVIEW_HOLD" || conv.reason === "SEND_UNCERTAIN" || conv.reason === "MANUAL_MODE_SET")) {
+            const controlService = new ConversationControlService(db);
+            await controlService.release(conversationId, "RECONCILED_MARK_SENT");
+          }
+
           return reply.send({ success: true, actionId, status: "CONFIRMED" });
         }
 
@@ -938,6 +977,44 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           }
 
           await broadcaster.broadcast("action:reconciled", { actionId, resolution: "RETRY" });
+
+          // Auto-resolve any open incident in incidents table
+          await db
+            .update(incidents)
+            .set({
+              status: "RESOLVED",
+              resolvedAt: new Date(),
+              resolvedBy: user.email,
+              resolutionNote: "Đã yêu cầu gửi lại từ hộp thư",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(incidents.conversationId, conversationId),
+                eq(incidents.status, "OPEN"),
+                or(
+                  eq(incidents.outboundActionId, action.id),
+                  sql`${incidents.metadata}->>'actionId' = ${actionId}`
+                )
+              )
+            );
+
+          // If conversation is in a technical hold due to send uncertainty, release back to AUTO
+          const [convRetry] = await db
+            .select({
+              id: conversations.id,
+              mode: conversations.replyControlMode,
+              reason: conversations.controlReason,
+            })
+            .from(conversations)
+            .where(eq(conversations.id, conversationId))
+            .limit(1);
+
+          if (convRetry && (convRetry.mode === "REVIEW_HOLD" || convRetry.reason === "SEND_UNCERTAIN" || convRetry.reason === "MANUAL_MODE_SET")) {
+            const controlService = new ConversationControlService(db);
+            await controlService.release(conversationId, "RECONCILED_RETRY");
+          }
+
           return reply.send({ success: true, actionId, status: "PENDING" });
         }
 

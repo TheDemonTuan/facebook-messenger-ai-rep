@@ -1061,7 +1061,14 @@ export function parseMessageTimestamp(
 }
 
 function cleanHtmlText(html: string): string {
-  const withLineBreaks = html.replace(/<br\s*\/?>/gi, "___LINEBREAK___");
+  // 1. Preserve emoji/text alt from <img> elements (e.g. <img alt="🥰">) before stripping HTML
+  const withEmojiAlt = html.replace(/<img\b[^>]*\balt=["']([^"']+)["'][^>]*>/gi, (_match, alt: string) => {
+    if (/^(?:avatar|ảnh đại diện|profile picture|user image)$/i.test(alt.trim())) {
+      return "";
+    }
+    return ` ${alt.trim()} `;
+  });
+  const withLineBreaks = withEmojiAlt.replace(/<br\s*\/?>/gi, "___LINEBREAK___");
   const stripped = withLineBreaks.replace(/<[^>]+>/g, "");
   const unescaped = stripped
     .replace(/&quot;/g, '"')
@@ -1078,7 +1085,15 @@ function cleanHtmlText(html: string): string {
 export function stripNonContentElements(body: string): string {
   let result = body;
 
-  // 1. Remove void tags like <img>, <input>, <textarea>
+  // 1. Preserve emoji/text alt from <img> elements before stripping void tags
+  result = result.replace(/<img\b[^>]*\balt=["']([^"']+)["'][^>]*>/gi, (_match, alt: string) => {
+    if (/^(?:avatar|ảnh đại diện|profile picture|user image)$/i.test(alt.trim())) {
+      return "";
+    }
+    return ` ${alt.trim()} `;
+  });
+
+  // 2. Remove void tags like <input>, <textarea> and remaining empty <img>
   result = result.replace(/<(?:img|input|textarea)\b[^>]*>/gi, "");
 
   // 2. Remove headings (author names above bubbles, e.g. <h3>Author Name</h3>) using balanced tag removal
@@ -1996,4 +2011,48 @@ export function parseSidebarThreadsFromHtml(html: string): ParsedSidebarThread[]
   }
 
   return threads;
+}
+
+/**
+ * Normalizes text for robust outbound comparison, stripping emojis, punctuation,
+ * and extra whitespace.
+ */
+export function normalizeForTextComparison(text: string): string {
+  if (!text) return "";
+  return text
+    .toLowerCase()
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D]/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Robustly matches expected outbound text against an observed bubble text,
+ * accounting for emojis rendered as <img>, punctuation variance, or partial prefixes.
+ */
+export function fuzzyMatchesOutboundText(expected: string, actual: string): boolean {
+  if (!expected || !actual) return false;
+  const expTrim = expected.trim().toLowerCase();
+  const actTrim = actual.trim().toLowerCase();
+
+  // 1. Direct match or substring match
+  if (expTrim === actTrim) return true;
+  if (expTrim.length > 5 && (expTrim.includes(actTrim) || actTrim.includes(expTrim))) return true;
+
+  // 2. Alphanumeric / emoji-stripped comparison
+  const expNorm = normalizeForTextComparison(expected);
+  const actNorm = normalizeForTextComparison(actual);
+
+  if (expNorm.length > 0 && actNorm.length > 0) {
+    if (expNorm === actNorm) return true;
+    if (expNorm.length > 8 && (expNorm.includes(actNorm) || actNorm.includes(expNorm))) return true;
+
+    // Check prefix match for longer sentences
+    const expPrefix = expNorm.slice(0, 25);
+    const actPrefix = actNorm.slice(0, 25);
+    if (expPrefix.length >= 15 && expPrefix === actPrefix) return true;
+  }
+
+  return false;
 }

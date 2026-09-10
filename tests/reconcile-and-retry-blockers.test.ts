@@ -69,8 +69,10 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
         update: vi.fn(() => ({
           set: vi.fn((data: Record<string, unknown>) => ({
             where: vi.fn(() => {
-              executionOrder.push("channel:resume");
-              Object.assign(channelAccountState, data);
+              if (data && "isSuspended" in data) {
+                executionOrder.push("channel:resume");
+                Object.assign(channelAccountState, data);
+              }
               return Promise.resolve([channelAccountState]);
             }),
           })),

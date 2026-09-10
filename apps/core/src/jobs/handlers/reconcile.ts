@@ -1,7 +1,7 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { Database, JobRepository, EventRepository, OutboxRepository } from "@messenger/db";
-import { channelAccounts, conversations, turns, outboundActions } from "@messenger/db";
-import { eq, and, or, sql, lte, isNotNull, isNull, inArray } from "drizzle-orm";
+import { channelAccounts, conversations, turns, outboundActions, incidents, messages, ConversationControlService } from "@messenger/db";
+import { eq, and, or, sql, lte, gte, isNotNull, isNull, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
 export interface ReconcileHandlerDeps {
@@ -194,6 +194,95 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
         .where(eq(channelAccounts.id, a.channelAccountId));
 
       await broadcaster.broadcast("channel:status", { status: "SUSPENDED", isSuspended: true });
+    }
+
+    // 7. Auto-reconcile SEND_UNCERTAIN outbound actions:
+    // If subsequent messages exist in the conversation, the thread has progressed past the uncertainty.
+    // Confirm the action, resolve open incidents, and auto-release the conversation to AUTO.
+    if (typeof db.select === "function") {
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000);
+      const uncertainActions = await db
+        .select({
+          id: outboundActions.id,
+          conversationId: outboundActions.conversationId,
+          channelAccountId: outboundActions.channelAccountId,
+          createdAt: outboundActions.createdAt,
+        })
+        .from(outboundActions)
+        .where(
+          and(
+            eq(outboundActions.status, "SEND_UNCERTAIN"),
+            gte(outboundActions.createdAt, twoHoursAgo)
+          )
+        )
+        .limit(20);
+
+      for (const a of uncertainActions) {
+        const [laterMsg] = await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, a.conversationId),
+              gte(messages.createdAt, a.createdAt)
+            )
+          )
+          .limit(1);
+
+        if (laterMsg) {
+          await db
+            .update(outboundActions)
+            .set({
+              status: "CONFIRMED",
+              unconfirmedReason: null,
+              updatedAt: now,
+            })
+            .where(eq(outboundActions.id, a.id));
+
+          await eventRepo.recordEvent({
+            channelAccountId: a.channelAccountId,
+            conversationId: a.conversationId,
+            type: "SEND_CONFIRMED",
+            actor: "RECONCILER",
+            payload: { actionId: a.id, autoReconciled: true },
+          });
+
+          await db
+            .update(incidents)
+            .set({
+              status: "RESOLVED",
+              resolvedAt: now,
+              resolvedBy: "system:reconciler",
+              resolutionNote: "Tự động đối soát thành công từ tiến trình hội thoại",
+              updatedAt: now,
+            })
+            .where(
+              and(
+                eq(incidents.conversationId, a.conversationId),
+                eq(incidents.status, "OPEN"),
+                or(
+                  eq(incidents.outboundActionId, a.id),
+                  sql`${incidents.metadata}->>'actionId' = ${a.id}`
+                )
+              )
+            );
+
+          const [conv] = await db
+            .select({
+              id: conversations.id,
+              mode: conversations.replyControlMode,
+              reason: conversations.controlReason,
+            })
+            .from(conversations)
+            .where(eq(conversations.id, a.conversationId))
+            .limit(1);
+
+          if (conv && conv.mode === "REVIEW_HOLD" && conv.reason === "SEND_UNCERTAIN") {
+            const controlService = new ConversationControlService(db);
+            await controlService.release(a.conversationId, "AUTO_RECONCILED");
+          }
+        }
+      }
     }
 
     return {

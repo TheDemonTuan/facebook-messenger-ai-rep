@@ -1300,9 +1300,33 @@ export class ConversationRepository {
     return this.updateStatus(conversationId, status);
   }
 
-  async setManualMode(conversationId: string, manualMode: boolean): Promise<void> {
+  async setManualMode(conversationId: string, manualMode: boolean, reason?: string): Promise<void> {
     if (manualMode) {
-      await this.controlService.acquirePinned(conversationId, "MANUAL_MODE_SET");
+      // If conversation has an active unconfirmed/SEND_UNCERTAIN action, acquire review hold instead of pinning permanently
+      let r = reason;
+      if (!r && typeof this.db.select === "function") {
+        try {
+          const [uncertain] = await this.db
+            .select({ id: outboundActions.id })
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.conversationId, conversationId),
+                sql`${outboundActions.status} IN ('SEND_UNCERTAIN', 'UNCONFIRMED')`
+              )
+            )
+            .limit(1);
+          if (uncertain) r = "SEND_UNCERTAIN";
+        } catch {
+          // Ignore
+        }
+      }
+
+      if (r === "SEND_UNCERTAIN") {
+        await this.controlService.acquireReviewHold(conversationId, "SEND_UNCERTAIN");
+      } else {
+        await this.controlService.acquirePinned(conversationId, r || "MANUAL_MODE_SET");
+      }
     } else {
       await this.controlService.release(conversationId, "MANUAL_MODE_CLEARED");
     }
@@ -1310,6 +1334,10 @@ export class ConversationRepository {
 
   async setHumanHold(conversationId: string, holdDurationMs: number = 120_000): Promise<void> {
     await this.controlService.acquireOrRefreshSession(conversationId, { holdDurationMs });
+  }
+
+  async setReviewHold(conversationId: string, reason: string = "SEND_UNCERTAIN"): Promise<void> {
+    await this.controlService.acquireReviewHold(conversationId, reason);
   }
 
   async clearHumanHold(conversationId: string): Promise<void> {

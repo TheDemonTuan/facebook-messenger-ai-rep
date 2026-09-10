@@ -4,6 +4,35 @@ import { outboundActions, conversations, messages } from "../schema/index.js";
 import type { OutboundActionStatus, SenderActor } from "@messenger/contracts";
 import { createHash } from "node:crypto";
 
+function normalizeTextForMatch(text: string): string {
+  if (!text) return "";
+  return text
+    .toLowerCase()
+    .replace(/[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D]/gu, "")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function fuzzyMatchText(expected: string, actual: string): boolean {
+  if (!expected || !actual) return false;
+  const eTrim = expected.trim().toLowerCase();
+  const aTrim = actual.trim().toLowerCase();
+  if (eTrim === aTrim) return true;
+  if (eTrim.length > 5 && (eTrim.includes(aTrim) || aTrim.includes(eTrim))) return true;
+
+  const eNorm = normalizeTextForMatch(expected);
+  const aNorm = normalizeTextForMatch(actual);
+  if (eNorm && aNorm) {
+    if (eNorm === aNorm) return true;
+    if (eNorm.length > 8 && (eNorm.includes(aNorm) || aNorm.includes(eNorm))) return true;
+    const ePrefix = eNorm.slice(0, 25);
+    const aPrefix = aNorm.slice(0, 25);
+    if (ePrefix.length >= 15 && ePrefix === aPrefix) return true;
+  }
+  return false;
+}
+
 export interface CreateOutboundActionParams {
   channelAccountId: string;
   conversationId: string;
@@ -483,23 +512,30 @@ export class OutboundRepository {
       if (matching.length > 0) return true;
     }
 
-    // 3. Check recent bot actions matching text or textHash within last 15 minutes
+    // 3. Check recent bot actions matching text, textHash, or fuzzy text within last 15 minutes
     if (text && text.trim().length > 0) {
       const textHash = createHash("sha256").update(text.trim()).digest("hex");
       const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
       const matching = await executor
-        .select({ id: outboundActions.id })
+        .select({ id: outboundActions.id, text: outboundActions.text, status: outboundActions.status })
         .from(outboundActions)
         .where(
           and(
             eq(outboundActions.channelAccountId, channelAccountId),
-            eq(outboundActions.textHash, textHash),
             eq(outboundActions.actor, "AI"),
             gte(outboundActions.createdAt, recentThreshold)
           )
         )
-        .limit(1);
-      if (matching.length > 0) return true;
+        .limit(25);
+
+      for (const m of matching) {
+        if (m.text === text || fuzzyMatchText(m.text, text)) {
+          if ((m.status === "SEND_UNCERTAIN" || m.status === "UNCONFIRMED") && externalMessageRef) {
+            await this.confirmSent(m.id, externalMessageRef, {}, executor).catch(() => {});
+          }
+          return true;
+        }
+      }
     }
 
     return false;
