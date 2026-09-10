@@ -161,10 +161,29 @@ async function mockApi(page: Page): Promise<{ finishAiCancellation: () => void }
       takeoverHasActiveAiAction = false;
       return json({ success: true });
     }
+    if (path.includes(`/api/inbox/${conversationId}/turns/`)) {
+      return json({
+        conversationId,
+        inboundVersion: 1,
+        turn: null,
+        inboundMessages: [],
+        aiRuns: [],
+        drafts: [],
+        outboundActions: [],
+        events: [],
+        completeness: {
+          messages: "AVAILABLE",
+          aiRuns: "NOT_CAPTURED",
+          snapshots: "NOT_CAPTURED",
+          delivery: "NOT_CAPTURED",
+        },
+      });
+    }
     if (path.endsWith("/send")) return json({ success: true, outboundActionId: "action-1" });
     if (path === "/api/queue") return json({ items: [], jobs: [] });
     if (path === "/api/incidents") return json({ items: [], total: 0, limit: 100, offset: 0, hasMore: false });
     if (path === "/api/ai-runs") return json({ items: [], total: 0, limit: 50, offset: 0, hasMore: false });
+    if (path.startsWith("/api/ai-runs/")) return json({ id: "run-1", model: "auto/best-chat", status: "SUCCESS", actions: [] });
     if (path === "/api/ai-runs/test") return json({ success: true, response: "ok" });
     if (path === "/api/settings/test-ai") return json({ healthy: true, status: "healthy", model: "auto/best-chat", latencyMs: 120 });
     if (path === "/api/settings/ai-provider") {

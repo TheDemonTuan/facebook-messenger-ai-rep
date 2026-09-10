@@ -30,7 +30,7 @@ import {
   stripSensitiveData,
   sanitizeCustomerOutput,
 } from "@messenger/db";
-import { eq, and, sql, gte, lt, desc, inArray } from "drizzle-orm";
+import { eq, and, sql, gte, lt, desc, inArray, or, ilike } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import {
   AiApiFormatSchema,
@@ -1289,8 +1289,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       }
     );
 
-    // 5. AI Runs with Pagination
-    fastify.get<{ Querystring: { conversationId?: string; status?: string; model?: string; limit?: string; offset?: string } }>(
+    // 5. AI Runs with Pagination & Search
+    fastify.get<{ Querystring: { conversationId?: string; status?: string; model?: string; q?: string; from?: string; to?: string; limit?: string; offset?: string } }>(
       "/api/ai-runs",
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
@@ -1305,6 +1305,28 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         }
         if (request.query.model) {
           conditions.push(eq(aiRuns.model, request.query.model));
+        }
+        if (request.query.from) {
+          const fromDate = new Date(request.query.from);
+          if (!isNaN(fromDate.getTime())) {
+            conditions.push(gte(aiRuns.createdAt, fromDate));
+          }
+        }
+        if (request.query.to) {
+          const toDate = new Date(request.query.to);
+          if (!isNaN(toDate.getTime())) {
+            conditions.push(lt(aiRuns.createdAt, toDate));
+          }
+        }
+        if (request.query.q && request.query.q.trim()) {
+          const searchPattern = `%${request.query.q.trim()}%`;
+          const qCond = or(
+            ilike(aiRuns.model, searchPattern),
+            ilike(aiRuns.status, searchPattern),
+            sql`${aiRuns.id}::text ILIKE ${searchPattern}`,
+            sql`${aiRuns.conversationId}::text ILIKE ${searchPattern}`
+          );
+          if (qCond) conditions.push(qCond);
         }
 
         const [items, totalRes] = await Promise.all([
@@ -1464,8 +1486,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
       }
     );
 
-    // 6. Incidents with Pagination
-    fastify.get<{ Querystring: { status?: string; limit?: string; offset?: string } }>(
+    // 6. Incidents with Pagination & Search
+    fastify.get<{ Querystring: { status?: string; type?: string; conversationId?: string; q?: string; from?: string; to?: string; limit?: string; offset?: string } }>(
       "/api/incidents",
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
@@ -1474,6 +1496,35 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const conditions = [eq(incidents.channelAccountId, channelAccountId)];
         if (request.query.status) {
           conditions.push(eq(incidents.status, request.query.status));
+        }
+        if (request.query.type) {
+          conditions.push(eq(incidents.type, request.query.type));
+        }
+        if (request.query.conversationId) {
+          conditions.push(eq(incidents.conversationId, request.query.conversationId));
+        }
+        if (request.query.from) {
+          const fromDate = new Date(request.query.from);
+          if (!isNaN(fromDate.getTime())) {
+            conditions.push(gte(incidents.createdAt, fromDate));
+          }
+        }
+        if (request.query.to) {
+          const toDate = new Date(request.query.to);
+          if (!isNaN(toDate.getTime())) {
+            conditions.push(lt(incidents.createdAt, toDate));
+          }
+        }
+        if (request.query.q && request.query.q.trim()) {
+          const searchPattern = `%${request.query.q.trim()}%`;
+          const qCond = or(
+            ilike(incidents.title, searchPattern),
+            ilike(incidents.description, searchPattern),
+            ilike(incidents.type, searchPattern),
+            sql`${incidents.id}::text ILIKE ${searchPattern}`,
+            sql`${incidents.conversationId}::text ILIKE ${searchPattern}`
+          );
+          if (qCond) conditions.push(qCond);
         }
 
         const [items, totalRes] = await Promise.all([

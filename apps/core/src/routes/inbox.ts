@@ -20,6 +20,11 @@ import {
   inboundMessages,
   replyEligibilityDecisions,
   sanitizeApiOutput,
+  turns,
+  aiDrafts,
+  conversationEvents,
+  stripSensitiveData,
+  sanitizeCustomerOutput,
   ConversationControlService,
   SettingsRepository,
 } from "@messenger/db";
@@ -445,6 +450,120 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             aiRuns: runs,
             outboundActions: actions,
             events,
+          })
+        );
+      }
+    );
+
+    // Exact-turn trace endpoint: comprehensive historical inspection for a specific inboundVersion
+    fastify.get<{ Params: { conversationId: string; version: string } }>(
+      "/api/inbox/:conversationId/turns/:version/trace",
+      { preHandler: [requireRole("OPERATOR")] },
+      async (request, reply) => {
+        const { conversationId, version } = request.params;
+        const inboundVersion = parseInt(version, 10);
+        if (isNaN(inboundVersion) || inboundVersion < 1) {
+          return reply.status(400).send({ error: "Invalid version: must be a positive integer" });
+        }
+
+        const [conv] = await db
+          .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
+          .from(conversations)
+          .where(and(eq(conversations.id, conversationId), eq(conversations.channelAccountId, channelAccountId)))
+          .limit(1);
+
+        if (!conv) {
+          return reply.status(404).send({ error: "Conversation not found" });
+        }
+
+        const [inboundList, turnRows, runRows, draftRows, actionRows, eventRows] = await Promise.all([
+          db
+            .select()
+            .from(inboundMessages)
+            .where(
+              and(
+                eq(inboundMessages.conversationId, conversationId),
+                eq(inboundMessages.inboundVersion, inboundVersion)
+              )
+            )
+            .orderBy(inboundMessages.receivedAt),
+          db
+            .select()
+            .from(turns)
+            .where(
+              and(
+                eq(turns.conversationId, conversationId),
+                eq(turns.inboundVersion, inboundVersion)
+              )
+            )
+            .limit(1),
+          db
+            .select()
+            .from(aiRuns)
+            .where(
+              and(
+                eq(aiRuns.conversationId, conversationId),
+                eq(aiRuns.inboundVersion, inboundVersion)
+              )
+            )
+            .orderBy(desc(aiRuns.createdAt)),
+          db
+            .select()
+            .from(aiDrafts)
+            .where(
+              and(
+                eq(aiDrafts.conversationId, conversationId),
+                eq(aiDrafts.inboundVersion, inboundVersion)
+              )
+            )
+            .orderBy(desc(aiDrafts.createdAt)),
+          db
+            .select()
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.conversationId, conversationId),
+                eq(outboundActions.inboundVersion, inboundVersion)
+              )
+            )
+            .orderBy(outboundActions.responseIndex),
+          db
+            .select()
+            .from(conversationEvents)
+            .where(eq(conversationEvents.conversationId, conversationId))
+            .orderBy(desc(conversationEvents.createdAt))
+            .limit(20),
+        ]);
+
+        const sanitizedRuns = runRows.map((r) => ({
+          ...r,
+          requestSnapshot: r.requestSnapshot ? stripSensitiveData(r.requestSnapshot) : null,
+          responseSnapshot: r.responseSnapshot ? stripSensitiveData(r.responseSnapshot) : null,
+          usedResult: r.usedResult ? sanitizeCustomerOutput(r.usedResult) : null,
+        }));
+
+        const completeness = {
+          messages: inboundList.length > 0 ? "AVAILABLE" : "NOT_CAPTURED",
+          aiRuns: runRows.length > 0 ? "AVAILABLE" : "NOT_CAPTURED",
+          snapshots: runRows.some((r) => r.requestSnapshot || r.responseSnapshot) ? "AVAILABLE" : "NOT_CAPTURED",
+          delivery: actionRows.length > 0
+            ? actionRows.every((a) => a.status === "CONFIRMED" || a.status === "SENT")
+              ? "AVAILABLE"
+              : "PARTIAL"
+            : "NOT_CAPTURED",
+        };
+
+        return reply.send(
+          sanitizeApiOutput({
+            conversationId,
+            inboundVersion,
+            turn: turnRows[0] || null,
+            inboundMessages: inboundList,
+            aiRuns: sanitizedRuns,
+            drafts: draftRows,
+            outboundActions: actionRows,
+            events: eventRows,
+            completeness,
           })
         );
       }

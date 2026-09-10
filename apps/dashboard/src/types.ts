@@ -285,6 +285,38 @@ export interface OutboundActionItem {
   confirmedAt?: string | null;
 }
 
+export interface ConversationEventItem {
+  id: string;
+  type: string;
+  inboundVersion?: number | null;
+  actor?: string | null;
+  payload?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface TurnTraceData {
+  conversationId: string;
+  inboundVersion: number;
+  turn?: Record<string, unknown> | null;
+  inboundMessages?: MessageItem[];
+  aiRuns?: AiRunItem[];
+  drafts?: Array<{
+    id: string;
+    inboundVersion: number;
+    aiRunId: string;
+    messages: string[];
+    createdAt: string;
+  }>;
+  outboundActions?: OutboundActionItem[];
+  events?: ConversationEventItem[];
+  completeness: {
+    messages: "AVAILABLE" | "PARTIAL" | "EXPIRED" | "NOT_CAPTURED";
+    aiRuns: "AVAILABLE" | "PARTIAL" | "EXPIRED" | "NOT_CAPTURED";
+    snapshots: "AVAILABLE" | "PARTIAL" | "EXPIRED" | "NOT_CAPTURED";
+    delivery: "AVAILABLE" | "PARTIAL" | "EXPIRED" | "NOT_CAPTURED";
+  };
+}
+
 export interface QueueItem {
   queueId: string;
   conversationId: string;

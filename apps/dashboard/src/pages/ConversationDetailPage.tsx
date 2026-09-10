@@ -5,6 +5,7 @@ import type {
   ConversationDetailData,
   MessageItem,
   OutboundActionItem,
+  TurnTraceData,
 } from "../types";
 import { mergePaginatedMessages } from "../helpers/pagination";
 import {
@@ -64,6 +65,37 @@ export const ConversationDetailPage: React.FC = () => {
   const [reconcilingId, setReconcilingId] = useState<string | null>(null);
   const [acquiringDraft, setAcquiringDraft] = useState(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedVersion, setSelectedVersion] = useState<number | null>(null);
+  const [traceData, setTraceData] = useState<TurnTraceData | null>(null);
+  const [_traceLoading, setTraceLoading] = useState(false);
+
+  useEffect(() => {
+    const version = selectedVersion ?? data?.conversation?.inboundVersion;
+    if (!conversationIdRef.current || !version) {
+      setTraceData(null);
+      return;
+    }
+    let cancelled = false;
+    setTraceLoading(true);
+    void apiFetch<TurnTraceData>(`/api/inbox/${conversationIdRef.current}/turns/${version}/trace`)
+      .then((res) => {
+        if (!cancelled) {
+          setTraceData(res);
+          if (res.aiRuns && res.aiRuns.length > 0) {
+            setSelectedRunId((cur) => (res.aiRuns!.some((r) => r.id === cur) ? cur : res.aiRuns![0].id));
+          }
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setTraceData(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTraceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedVersion, data?.conversation?.inboundVersion]);
 
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
@@ -799,17 +831,51 @@ export const ConversationDetailPage: React.FC = () => {
 
         {/* Sidebar Panel: AiRunInspector & Audit Events */}
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-          {/* AiRunInspector Integration */}
-          <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", maxHeight: "420px", display: "flex", flexDirection: "column" }}>
-            {data?.aiRuns && data.aiRuns.length > 1 && <label style={{ display: "block", padding: "10px 12px 0", fontSize: "12px", color: "#475569" }}>
-              Lượt chạy AI
-              <select aria-label="Lượt chạy AI" value={selectedRunId || ""} onChange={(event) => setSelectedRunId(event.target.value)} style={{ width: "100%", marginTop: 4 }}>
-                {data.aiRuns.map((run) => <option key={run.id} value={run.id}>v{run.inboundVersion} · {run.status} · {formatTime(run.createdAt)}</option>)}
-              </select>
-            </label>}
+          {/* AiRunInspector Integration with Exact-turn Trace */}
+          <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", display: "flex", flexDirection: "column" }}>
+            {/* Version Trace Selector */}
+            <div style={{ padding: "8px 12px", borderBottom: "1px solid #e2e8f0", backgroundColor: "#f8fafc", fontSize: "12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                <span style={{ fontWeight: 600, color: "#334155" }}>Lượt hội thoại:</span>
+                <select
+                  aria-label="Chọn phiên bản lượt"
+                  value={selectedVersion ?? data?.conversation?.inboundVersion ?? 1}
+                  onChange={(e) => setSelectedVersion(parseInt(e.target.value, 10))}
+                  style={{ fontSize: "12px", padding: "2px 6px", borderRadius: "4px", border: "1px solid #cbd5e1" }}
+                >
+                  {Array.from({ length: Math.max(data?.conversation?.inboundVersion || 1, 1) }, (_, i) => i + 1).reverse().map((v) => (
+                    <option key={v} value={v}>Phiên bản v{v}</option>
+                  ))}
+                </select>
+              </div>
+              {traceData?.completeness && (
+                <div style={{ fontSize: "11px", color: "#64748b" }}>
+                  {traceData.completeness.delivery === "AVAILABLE" ? "✓ Hoàn tất" : "v" + (selectedVersion ?? data?.conversation?.inboundVersion)}
+                </div>
+              )}
+            </div>
+
+            {((traceData?.aiRuns ?? data?.aiRuns ?? []).length > 1) && (
+              <label style={{ display: "block", padding: "8px 12px 0", fontSize: "12px", color: "#475569" }}>
+                Lượt chạy AI của v{selectedVersion ?? data?.conversation?.inboundVersion}
+                <select
+                  aria-label="Lượt chạy AI"
+                  value={selectedRunId || ""}
+                  onChange={(event) => setSelectedRunId(event.target.value)}
+                  style={{ width: "100%", marginTop: 4, fontSize: "12px", padding: "4px" }}
+                >
+                  {(traceData?.aiRuns ?? data?.aiRuns ?? []).map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {run.status} · {run.model} · {formatTime(run.createdAt)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+
             <AiRunInspector
-              run={data?.aiRuns?.find((run) => run.id === selectedRunId) || null}
-              actions={actions}
+              run={(traceData?.aiRuns ?? data?.aiRuns ?? []).find((run) => run.id === selectedRunId) || (traceData?.aiRuns ?? data?.aiRuns ?? [])[0] || null}
+              actions={traceData?.outboundActions ?? actions}
               messages={messages}
               compact={true}
             />
