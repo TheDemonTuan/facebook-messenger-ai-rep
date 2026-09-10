@@ -1,489 +1,293 @@
-import React, { useState, useEffect } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import { formatTime } from "../helpers/date-helpers";
 import { AiRunInspector } from "../components/messages/AiRunInspector";
-import type { QueueItem, IncidentItem, AiRunItem } from "../types";
+import { useSseWakeup } from "../context/SseContext";
+import { shouldRefetchAiRuns, shouldRefetchIncidents, shouldRefetchQueue } from "../helpers/sse-helpers";
 import {
-  Workflow,
-  ListOrdered,
-  AlertTriangle,
-  FileText,
-  RefreshCw,
-  ArrowRight,
+  getIncidentSafetyPolicy,
+  isCheckpoint,
+  isDomDegraded,
+} from "../helpers/incident-helpers";
+import type { AiRunItem, IncidentItem, JobItem, OutboundActionItem, PaginatedResponse, QueueItem } from "../types";
+import {
   AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Cpu,
+  ListOrdered,
+  RefreshCw,
   Search,
 } from "lucide-react";
 
 type OperationsTab = "dispatch" | "airuns" | "tech";
+type IncidentStatusFilter = "OPEN" | "RESOLVED" | "ALL";
+
+const tabs: OperationsTab[] = ["dispatch", "airuns", "tech"];
+
+function hasItems<T>(response: PaginatedResponse<T>, endpoint: string): T[] {
+  if (!Array.isArray(response.items)) {
+    throw new Error(`Phản hồi ${endpoint} không hợp lệ. Vui lòng thử lại hoặc liên hệ quản trị viên.`);
+  }
+  return response.items;
+}
+
+const buttonStyle: React.CSSProperties = {
+  border: "1px solid #cbd5e1",
+  borderRadius: "6px",
+  background: "#fff",
+  color: "#334155",
+  cursor: "pointer",
+  fontSize: "12px",
+  fontWeight: 600,
+  padding: "6px 9px",
+};
 
 export const OperationsPage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = (searchParams.get("tab") as OperationsTab) || "dispatch";
+  const tabParam = searchParams.get("tab");
+  const activeTab: OperationsTab = tabs.includes(tabParam as OperationsTab) ? (tabParam as OperationsTab) : "dispatch";
+  const requestVersion = useRef(0);
 
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [jobs, setJobs] = useState<JobItem[]>([]);
   const [incidents, setIncidents] = useState<IncidentItem[]>([]);
   const [aiRuns, setAiRuns] = useState<AiRunItem[]>([]);
-  const [selectedRun, setSelectedRun] = useState<AiRunItem | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRunDetail, setSelectedRunDetail] = useState<AiRunItem | null>(null);
+  const [selectedRunActions, setSelectedRunActions] = useState<OutboundActionItem[]>([]);
   const [filterText, setFilterText] = useState("");
+  const [incidentStatus, setIncidentStatus] = useState<IncidentStatusFilter>("OPEN");
+  const [incidentType, setIncidentType] = useState("ALL");
+  const [expandedIncidentIds, setExpandedIncidentIds] = useState<Set<string>>(new Set());
+  const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
-  const setTab = (tab: OperationsTab) => {
-    setSearchParams({ tab });
-  };
+  const setTab = (tab: OperationsTab) => setSearchParams({ tab });
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
+    const version = ++requestVersion.current;
     setLoading(true);
     setError(null);
     try {
       if (activeTab === "dispatch") {
-        const res = await apiFetch<{ items?: QueueItem[]; queue?: QueueItem[] }>("/api/queue");
-        setQueue(res.items || res.queue || []);
-      } else if (activeTab === "airuns") {
-        const res = await apiFetch<{ runs: AiRunItem[] }>("/api/ai-runs?limit=50");
-        const list = res.runs || [];
-        setAiRuns(list);
-        if (list.length > 0 && !selectedRun) {
-          setSelectedRun(list[0]);
+        const response = await apiFetch<{ items: QueueItem[]; jobs: JobItem[] }>("/api/queue?limit=50");
+        if (!Array.isArray(response.items) || !Array.isArray(response.jobs)) {
+          throw new Error("Phản hồi /api/queue không hợp lệ.");
         }
-      } else if (activeTab === "tech") {
-        const [incRes, qRes] = await Promise.all([
-          apiFetch<{ incidents: IncidentItem[] }>("/api/incidents"),
-          apiFetch<{ items?: QueueItem[]; queue?: QueueItem[] }>("/api/queue"),
+        if (version === requestVersion.current) {
+          setQueue(response.items);
+          setJobs(response.jobs);
+        }
+      } else if (activeTab === "airuns") {
+        const response = await apiFetch<PaginatedResponse<AiRunItem>>("/api/ai-runs?limit=50");
+        const items = hasItems(response, "/api/ai-runs");
+        if (version === requestVersion.current) {
+          setAiRuns(items);
+          setSelectedRunId((current) => current ?? items[0]?.id ?? null);
+        }
+      } else {
+        const [incidentResponse, queueResponse] = await Promise.all([
+          apiFetch<PaginatedResponse<IncidentItem>>("/api/incidents?limit=100"),
+          apiFetch<{ items: QueueItem[]; jobs: JobItem[] }>("/api/queue?limit=50"),
         ]);
-        setIncidents(incRes.incidents || []);
-        setQueue(qRes.items || qRes.queue || []);
+        const incidentItems = hasItems(incidentResponse, "/api/incidents");
+        if (!Array.isArray(queueResponse.items) || !Array.isArray(queueResponse.jobs)) {
+          throw new Error("Phản hồi /api/queue không hợp lệ.");
+        }
+        if (version === requestVersion.current) {
+          setIncidents(incidentItems);
+          setQueue(queueResponse.items);
+          setJobs(queueResponse.jobs);
+        }
       }
-    } catch (err: unknown) {
-      setError((err as Error).message || "Không thể tải dữ liệu vận hành. Vui lòng thử lại.");
+    } catch (cause) {
+      if (version === requestVersion.current) {
+        setError(cause instanceof Error ? cause.message : "Không thể tải dữ liệu vận hành");
+      }
     } finally {
-      setLoading(false);
+      if (version === requestVersion.current) setLoading(false);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (tabParam && !tabs.includes(tabParam as OperationsTab)) setSearchParams({ tab: "dispatch" }, { replace: true });
+  }, [setSearchParams, tabParam]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
+
+  useSseWakeup(shouldRefetchQueue, () => {
+    if (activeTab === "dispatch" || activeTab === "tech") void loadData();
+  });
+  useSseWakeup(shouldRefetchIncidents, () => {
+    if (activeTab === "tech") void loadData();
+  });
+  useSseWakeup(shouldRefetchAiRuns, () => {
+    if (activeTab === "airuns") void loadData();
+  });
+
+  const selectedRun = selectedRunDetail?.id === selectedRunId
+    ? selectedRunDetail
+    : aiRuns.find((run) => run.id === selectedRunId) ?? null;
+  useEffect(() => {
+    if (!selectedRunId) {
+      setSelectedRunDetail(null);
+      setSelectedRunActions([]);
+      return;
+    }
+    let cancelled = false;
+    void apiFetch<AiRunItem & { actions: OutboundActionItem[] }>(`/api/ai-runs/${selectedRunId}`)
+      .then((response) => {
+        if (!cancelled) {
+          setSelectedRunDetail(response);
+          setSelectedRunActions(Array.isArray(response.actions) ? response.actions : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSelectedRunDetail(null);
+          setSelectedRunActions([]);
+        }
+      });
+    return () => { cancelled = true; };
+  }, [selectedRunId]);
+  const visibleRuns = useMemo(() => {
+    const needle = filterText.trim().toLocaleLowerCase();
+    if (!needle) return aiRuns;
+    return aiRuns.filter((run) => [run.id, run.model, run.status, run.conversationId, run.customerName, run.conversationTitle]
+      .filter(Boolean).some((value) => String(value).toLocaleLowerCase().includes(needle)));
+  }, [aiRuns, filterText]);
+  const incidentTypes = useMemo(() => Array.from(new Set(incidents.map((incident) => incident.type))).sort(), [incidents]);
+  const visibleIncidents = useMemo(() => {
+    const needle = filterText.trim().toLocaleLowerCase();
+    return incidents.filter((incident) => {
+      if (incidentStatus !== "ALL" && incident.status !== incidentStatus) return false;
+      if (incidentType !== "ALL" && incident.type !== incidentType) return false;
+      return !needle || [incident.title, incident.description, incident.conversationId, incident.type]
+        .filter(Boolean).some((value) => String(value).toLocaleLowerCase().includes(needle));
+    });
+  }, [filterText, incidentStatus, incidentType, incidents]);
+  const openIncidentCount = incidents.filter((incident) => incident.status === "OPEN").length;
+
+  const prioritize = async (conversationId: string) => {
+    setActionInProgress(`queue:${conversationId}`);
+    try {
+      await apiFetch(`/api/queue/${conversationId}/prioritize`, { method: "POST" });
+      await loadData();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Không thể ưu tiên hội thoại");
+    } finally {
+      setActionInProgress(null);
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, [activeTab]);
+  const resolveIncident = async (incident: IncidentItem, defaultNote = "Đã xử lý") => {
+    const note = window.prompt("Nhập ghi chú xử lý sự cố (hoặc để trống):", defaultNote);
+    if (note === null) return;
+    setActionInProgress(incident.id);
+    try {
+      await apiFetch(`/api/incidents/${incident.id}/resolve`, {
+        method: "POST",
+        body: JSON.stringify({ resolutionNote: note }),
+      });
+      await loadData();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Không thể giải quyết sự cố");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
 
-  const filteredRuns = aiRuns.filter((r) => {
-    if (!filterText.trim()) return true;
-    const term = filterText.toLowerCase();
-    return (
-      (r.model && r.model.toLowerCase().includes(term)) ||
-      (r.status && r.status.toLowerCase().includes(term)) ||
-      (r.id && r.id.toLowerCase().includes(term)) ||
-      (r.responseSnapshot?.content && r.responseSnapshot.content.toLowerCase().includes(term))
-    );
+  const resolveAll = async () => {
+    if (openIncidentCount === 0 || !window.confirm(`Đóng toàn bộ ${openIncidentCount} sự cố đang mở?`)) return;
+    setActionInProgress("resolve-all");
+    try {
+      await apiFetch("/api/incidents/resolve-all", { method: "POST" });
+      await loadData();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Không thể giải quyết các sự cố");
+    } finally {
+      setActionInProgress(null);
+    }
+  };
+
+  const toggleIncident = (id: string) => setExpandedIncidentIds((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
   });
 
   return (
-    <div style={{ padding: "20px", maxWidth: "1400px", margin: "0 auto" }}>
-      {/* Page Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
+    <div style={{ maxWidth: 1400, margin: "0 auto", padding: "4px 0", color: "#1e293b" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap", marginBottom: 16 }}>
         <div>
-          <h1 style={{ fontSize: "1.35rem", fontWeight: "700", color: "#0f172a", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
-            <Workflow size={22} style={{ color: "#3b82f6" }} />
-            Không gian Vận hành
-          </h1>
-          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.85rem" }}>
-            Điều phối toàn kênh, kiểm soát hàng đợi, hoạt động AI và giám sát sự cố kỹ thuật.
-          </p>
+          <h1 style={{ margin: 0, fontSize: "1.5rem" }}>Vận hành</h1>
+          <p style={{ margin: "4px 0 0", color: "#64748b", fontSize: "0.9rem" }}>Điều phối hàng đợi, theo dõi AI và xử lý sự cố.</p>
         </div>
-
-        <button
-          onClick={loadData}
-          disabled={loading}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "6px",
-            padding: "8px 14px",
-            backgroundColor: "#ffffff",
-            border: "1px solid #cbd5e1",
-            borderRadius: "6px",
-            fontSize: "0.85rem",
-            fontWeight: 500,
-            color: "#334155",
-            cursor: loading ? "not-allowed" : "pointer",
-          }}
-        >
-          <RefreshCw size={14} className={loading ? "animate-spin" : ""} /> Làm mới
+        <button type="button" style={buttonStyle} disabled={loading} onClick={() => void loadData()}>
+          <RefreshCw size={14} style={{ verticalAlign: "-2px", marginRight: 5 }} className={loading ? "animate-spin" : ""} /> Làm mới
         </button>
       </div>
 
-      {/* Error Notice */}
-      {error && (
-        <div
-          style={{
-            padding: "12px 16px",
-            backgroundColor: "#fef2f2",
-            border: "1px solid #fecaca",
-            borderRadius: "6px",
-            color: "#991b1b",
-            fontSize: "0.85rem",
-            marginBottom: "16px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <AlertCircle size={16} />
-            <span>{error}</span>
-          </div>
-          <button
-            onClick={loadData}
-            style={{
-              background: "none",
-              border: "1px solid #dc2626",
-              color: "#991b1b",
-              borderRadius: "4px",
-              padding: "2px 8px",
-              cursor: "pointer",
-              fontSize: "0.78rem",
-              fontWeight: 600,
-            }}
-          >
-            Thử lại
-          </button>
-        </div>
-      )}
+      {error && <div role="alert" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: 12, marginBottom: 14, border: "1px solid #fecaca", borderRadius: 6, background: "#fef2f2", color: "#991b1b" }}>
+        <span><AlertCircle size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />{error}</span>
+        <button type="button" style={{ ...buttonStyle, borderColor: "#dc2626", color: "#991b1b" }} onClick={() => void loadData()}>Thử lại</button>
+      </div>}
 
-      {/* Tabs Bar */}
-      <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid #e2e8f0", marginBottom: "20px", overflowX: "auto" }}>
-        <button
-          onClick={() => setTab("dispatch")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 18px",
-            border: "none",
-            borderBottom: activeTab === "dispatch" ? "2px solid #3b82f6" : "2px solid transparent",
-            backgroundColor: "transparent",
-            color: activeTab === "dispatch" ? "#1d4ed8" : "#64748b",
-            fontWeight: activeTab === "dispatch" ? 600 : 500,
-            fontSize: "0.9rem",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <ListOrdered size={16} />
-          Điều phối & Hàng đợi
-          {queue.length > 0 && (
-            <span style={{ backgroundColor: "#dbeafe", color: "#1e40af", padding: "1px 6px", borderRadius: "10px", fontSize: "11px" }}>
-              {queue.length}
-            </span>
-          )}
-        </button>
+      <nav aria-label="Khu vực vận hành" style={{ display: "flex", gap: 6, borderBottom: "1px solid #e2e8f0", overflowX: "auto", marginBottom: 16 }}>
+        {([
+          ["dispatch", ListOrdered, "Điều phối"],
+          ["airuns", Cpu, "Hoạt động AI"],
+          ["tech", AlertTriangle, "Kỹ thuật & Sự cố"],
+        ] as const).map(([tab, Icon, label]) => <button key={tab} type="button" onClick={() => setTab(tab)} style={{ border: "none", borderBottom: activeTab === tab ? "2px solid #2563eb" : "2px solid transparent", background: "transparent", padding: "10px 14px", color: activeTab === tab ? "#1d4ed8" : "#64748b", fontWeight: activeTab === tab ? 700 : 500, cursor: "pointer", whiteSpace: "nowrap" }}>
+          <Icon size={16} style={{ verticalAlign: "-3px", marginRight: 6 }} />{label}{tab === "tech" && openIncidentCount > 0 ? ` (${openIncidentCount})` : ""}
+        </button>)}
+      </nav>
 
-        <button
-          onClick={() => setTab("airuns")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 18px",
-            border: "none",
-            borderBottom: activeTab === "airuns" ? "2px solid #3b82f6" : "2px solid transparent",
-            backgroundColor: "transparent",
-            color: activeTab === "airuns" ? "#1d4ed8" : "#64748b",
-            fontWeight: activeTab === "airuns" ? 600 : 500,
-            fontSize: "0.9rem",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <FileText size={16} />
-          Hoạt động AI (Toàn kênh)
-          {aiRuns.length > 0 && (
-            <span style={{ backgroundColor: "#f1f5f9", color: "#475569", padding: "1px 6px", borderRadius: "10px", fontSize: "11px" }}>
-              {aiRuns.length}
-            </span>
-          )}
-        </button>
+      {activeTab !== "dispatch" && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid #cbd5e1", borderRadius: 6, background: "#fff", padding: "6px 9px", flex: "1 1 260px" }}>
+          <Search size={15} color="#64748b" /><input aria-label="Tìm kiếm" value={filterText} onChange={(event) => setFilterText(event.target.value)} placeholder="Tìm khách hàng, ID, trạng thái..." style={{ border: 0, outline: 0, width: "100%" }} />
+        </label>
+        {activeTab === "tech" && <>
+          <select aria-label="Trạng thái sự cố" value={incidentStatus} onChange={(event) => setIncidentStatus(event.target.value as IncidentStatusFilter)} style={buttonStyle}><option value="OPEN">Đang mở</option><option value="RESOLVED">Đã xử lý</option><option value="ALL">Tất cả</option></select>
+          <select aria-label="Loại sự cố" value={incidentType} onChange={(event) => setIncidentType(event.target.value)} style={buttonStyle}><option value="ALL">Mọi loại</option>{incidentTypes.map((type) => <option key={type} value={type}>{type}</option>)}</select>
+        </>}
+      </div>}
 
-        <button
-          onClick={() => setTab("tech")}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: "8px",
-            padding: "10px 18px",
-            border: "none",
-            borderBottom: activeTab === "tech" ? "2px solid #3b82f6" : "2px solid transparent",
-            backgroundColor: "transparent",
-            color: activeTab === "tech" ? "#1d4ed8" : "#64748b",
-            fontWeight: activeTab === "tech" ? 600 : 500,
-            fontSize: "0.9rem",
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          <AlertTriangle size={16} />
-          Kỹ thuật & Sự cố
-          {incidents.filter((i) => i.status === "OPEN").length > 0 && (
-            <span style={{ backgroundColor: "#fee2e2", color: "#b91c1c", padding: "1px 6px", borderRadius: "10px", fontSize: "11px" }}>
-              {incidents.filter((i) => i.status === "OPEN").length}
-            </span>
-          )}
-        </button>
-      </div>
-
-      {/* Tab 1: Dispatch / Queue */}
-      {activeTab === "dispatch" && (
-        <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          <div style={{ padding: "14px 16px", borderBottom: "1px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600, color: "#1e293b", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>Các lượt đang chờ xử lý hoặc gom tin (Debouncing / Queue)</span>
-            <span style={{ fontSize: "12px", color: "#64748b" }}>{queue.length} tác vụ</span>
-          </div>
-          {queue.length === 0 ? (
-            <div style={{ padding: "40px", textAlign: "center", color: "#94a3b8" }}>
-              Hàng đợi trống. Tất cả hội thoại đang ở trạng thái nhàn rỗi hoặc đã được xử lý xong.
-            </div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ backgroundColor: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                    <th style={{ padding: "10px 16px" }}>Hội thoại</th>
-                    <th style={{ padding: "10px 16px" }}>Inbound Version</th>
-                    <th style={{ padding: "10px 16px" }}>Thời gian vào hàng đợi</th>
-                    <th style={{ padding: "10px 16px" }}>Thời điểm sẵn sàng</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right" }}>Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {queue.map((q) => (
-                    <tr key={q.queueId || q.conversationId} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "12px 16px", fontWeight: 500, color: "#0f172a" }}>
-                        <Link to={`/inbox/${q.conversationId}`} style={{ color: "#2563eb", textDecoration: "none" }}>
-                          {q.conversationId}
-                        </Link>
-                      </td>
-                      <td style={{ padding: "12px 16px" }}>v{q.inboundVersion}</td>
-                      <td style={{ padding: "12px 16px", color: "#64748b" }}>{formatTime(q.queuedAt)}</td>
-                      <td style={{ padding: "12px 16px", color: "#64748b" }}>{formatTime(q.readyAt)}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                        <Link
-                          to={`/inbox/${q.conversationId}`}
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "4px",
-                            padding: "4px 8px",
-                            backgroundColor: "#f1f5f9",
-                            borderRadius: "4px",
-                            color: "#334155",
-                            textDecoration: "none",
-                            fontSize: "12px",
-                          }}
-                        >
-                          Mở chat <ArrowRight size={12} />
-                        </Link>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tab 2: AI Runs (Inspector Integrated) */}
-      {activeTab === "airuns" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-          {/* Search bar */}
-          <div style={{ display: "flex", gap: "8px", maxWidth: "450px" }}>
-            <div style={{ position: "relative", flex: 1 }}>
-              <Search size={15} style={{ position: "absolute", left: "10px", top: "10px", color: "#94a3b8" }} />
-              <input
-                type="text"
-                value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
-                placeholder="Lọc theo model, trạng thái, ID, nội dung..."
-                style={{
-                  width: "100%",
-                  padding: "7px 10px 7px 32px",
-                  borderRadius: "6px",
-                  border: "1px solid #cbd5e1",
-                  fontSize: "13px",
-                  boxSizing: "border-box",
-                }}
-              />
-            </div>
-            {filterText && (
-              <button
-                onClick={() => setFilterText("")}
-                style={{
-                  padding: "6px 12px",
-                  backgroundColor: "#f1f5f9",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: "6px",
-                  fontSize: "12px",
-                  cursor: "pointer",
-                }}
-              >
-                Xóa lọc
-              </button>
-            )}
-          </div>
-
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))",
-              gap: "16px",
-              alignItems: "start",
-            }}
-          >
-            {/* Runs Table */}
-            <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
-              <div style={{ padding: "12px 16px", borderBottom: "1px solid #e2e8f0", backgroundColor: "#f8fafc", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontWeight: 600, color: "#1e293b", fontSize: "13px" }}>Lượt gọi AI ({filteredRuns.length})</span>
-                <span style={{ fontSize: "11px", color: "#64748b" }}>Nhấp dòng để xem chi tiết</span>
-              </div>
-
-              {filteredRuns.length === 0 ? (
-                <div style={{ padding: "30px", textAlign: "center", color: "#94a3b8" }}>
-                  {aiRuns.length === 0 ? "Chưa có bản ghi AI Run nào." : "Không có kết quả nào khớp bộ lọc."}
-                </div>
-              ) : (
-                <div style={{ maxHeight: "580px", overflowY: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
-                    <thead>
-                      <tr style={{ backgroundColor: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                        <th style={{ padding: "8px 10px" }}>Model</th>
-                        <th style={{ padding: "8px 10px" }}>Trạng thái</th>
-                        <th style={{ padding: "8px 10px" }}>Thời gian</th>
-                        <th style={{ padding: "8px 10px" }}>Phản hồi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredRuns.map((r) => {
-                        const isSelected = selectedRun?.id === r.id;
-                        const isSuccess = r.status === "SUCCESS";
-                        return (
-                          <tr
-                            key={r.id}
-                            onClick={() => setSelectedRun(r)}
-                            style={{
-                              borderBottom: "1px solid #f1f5f9",
-                              backgroundColor: isSelected ? "#eff6ff" : "transparent",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <td style={{ padding: "9px 10px", fontWeight: 500, color: "#0f172a" }}>
-                              {r.model || "—"}
-                            </td>
-                            <td style={{ padding: "9px 10px" }}>
-                              <span
-                                style={{
-                                  fontSize: "10px",
-                                  padding: "2px 5px",
-                                  borderRadius: "4px",
-                                  fontWeight: 600,
-                                  backgroundColor: isSuccess ? "#dcfce7" : "#fee2e2",
-                                  color: isSuccess ? "#15803d" : "#b91c1c",
-                                }}
-                              >
-                                {r.status}
-                              </span>
-                            </td>
-                            <td style={{ padding: "9px 10px", color: "#64748b", whiteSpace: "nowrap" }}>
-                              {formatTime(r.createdAt)}
-                            </td>
-                            <td style={{ padding: "9px 10px", color: "#334155", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                              {r.parsedOutput?.messages?.[0] || r.responseSnapshot?.content || "—"}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </div>
-
-            {/* Integrated AiRunInspector */}
-            <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden", maxHeight: "640px" }}>
-              <AiRunInspector run={selectedRun} />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 3: Technical & Incidents */}
-      {activeTab === "tech" && (
-        <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
-          <div style={{ padding: "14px 16px", borderBottom: "1px solid #e2e8f0", backgroundColor: "#f8fafc", fontWeight: 600, color: "#1e293b", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>Sự cố kỹ thuật kênh & phiên</span>
-            <span style={{ fontSize: "12px", color: "#64748b" }}>{incidents.length} sự cố</span>
-          </div>
-          {incidents.length === 0 ? (
-            <div style={{ padding: "40px", textAlign: "center", color: "#94a3b8" }}>Không có sự cố nào cần xử lý.</div>
-          ) : (
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px" }}>
-                <thead>
-                  <tr style={{ backgroundColor: "#f1f5f9", textAlign: "left", color: "#475569" }}>
-                    <th style={{ padding: "10px 16px" }}>Loại sự cố</th>
-                    <th style={{ padding: "10px 16px" }}>Trạng thái</th>
-                    <th style={{ padding: "10px 16px" }}>Thời gian tạo</th>
-                    <th style={{ padding: "10px 16px" }}>Mô tả</th>
-                    <th style={{ padding: "10px 16px", textAlign: "right" }}>Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {incidents.map((inc) => (
-                    <tr key={inc.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "12px 16px", fontWeight: 600, color: "#0f172a" }}>{inc.type}</td>
-                      <td style={{ padding: "12px 16px" }}>
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            padding: "2px 6px",
-                            borderRadius: "4px",
-                            fontWeight: 600,
-                            backgroundColor: inc.status === "OPEN" ? "#fee2e2" : "#dcfce7",
-                            color: inc.status === "OPEN" ? "#b91c1c" : "#15803d",
-                          }}
-                        >
-                          {inc.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "12px 16px", color: "#64748b" }}>{formatTime(inc.createdAt)}</td>
-                      <td style={{ padding: "12px 16px", color: "#334155" }}>{inc.description || inc.title || "—"}</td>
-                      <td style={{ padding: "12px 16px", textAlign: "right" }}>
-                        {inc.conversationId && (
-                          <Link
-                            to={`/inbox/${inc.conversationId}`}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "4px",
-                              padding: "4px 8px",
-                              backgroundColor: "#f1f5f9",
-                              borderRadius: "4px",
-                              color: "#334155",
-                              textDecoration: "none",
-                              fontSize: "12px",
-                            }}
-                          >
-                            Mở chat <ArrowRight size={12} />
-                          </Link>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      {activeTab === "dispatch" && <Dispatch queue={queue} jobs={jobs} loading={loading} actionInProgress={actionInProgress} onPrioritize={prioritize} />}
+      {activeTab === "airuns" && <AiRuns runs={visibleRuns} selectedRunId={selectedRunId} onSelect={setSelectedRunId} loading={loading} selectedRun={selectedRun} actions={selectedRunActions} />}
+      {activeTab === "tech" && <Tech incidents={visibleIncidents} jobs={jobs} loading={loading} actionInProgress={actionInProgress} expandedIds={expandedIncidentIds} openIncidentCount={openIncidentCount} onToggle={toggleIncident} onResolve={resolveIncident} onResolveAll={resolveAll} />}
     </div>
   );
 };
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return <div style={{ padding: 36, color: "#64748b", textAlign: "center" }}>{children}</div>;
+}
+
+function Panel({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+  return <section style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden", marginBottom: 16 }}><header style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "12px 16px", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", fontWeight: 700 }}>{title}{action}</header>{children}</section>;
+}
+
+function Dispatch({ queue, jobs, loading, actionInProgress, onPrioritize }: { queue: QueueItem[]; jobs: JobItem[]; loading: boolean; actionInProgress: string | null; onPrioritize: (id: string) => Promise<void> }) {
+  return <><Panel title={`Hàng đợi (${queue.length})`}><Table><thead><tr><th>Khách hàng</th><th>Lượt</th><th>Vào hàng đợi</th><th>Sẵn sàng</th><th /></tr></thead><tbody>{queue.map((item) => <tr key={item.queueId}><td><Link to={`/inbox/${item.conversationId}`}>{item.customerName || item.conversationId}</Link></td><td>v{item.inboundVersion}</td><td>{formatTime(item.queuedAt)}</td><td>{formatTime(item.readyAt)}</td><td><button type="button" style={buttonStyle} disabled={actionInProgress === `queue:${item.conversationId}`} onClick={() => void onPrioritize(item.conversationId)}>Ưu tiên</button></td></tr>)}</tbody></Table>{!loading && queue.length === 0 && <Empty>Hàng đợi trống.</Empty>}</Panel><Panel title={`Tác vụ nền (${jobs.length})`}><Table><thead><tr><th>Loại</th><th>Trạng thái</th><th>Lần thử</th><th>Sẵn sàng</th><th>Lỗi gần nhất</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td>{job.jobType}</td><td>{job.status}</td><td>{job.attempts}/{job.maxAttempts}</td><td>{formatTime(job.availableAt)}</td><td>{job.lastError || "—"}</td></tr>)}</tbody></Table>{!loading && jobs.length === 0 && <Empty>Không có tác vụ nền gần đây.</Empty>}</Panel></>;
+}
+
+function AiRuns({ runs, selectedRunId, onSelect, loading, selectedRun, actions }: { runs: AiRunItem[]; selectedRunId: string | null; onSelect: (id: string) => void; loading: boolean; selectedRun: AiRunItem | null; actions: OutboundActionItem[] }) {
+  return <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(300px, 420px)", gap: 16 }}><Panel title={`Lượt chạy AI (${runs.length})`}><Table><thead><tr><th>Khách hàng / lượt</th><th>Xử lý</th><th>Model</th><th>Thời điểm</th></tr></thead><tbody>{runs.map((run) => <tr key={run.id} onClick={() => onSelect(run.id)} style={{ cursor: "pointer", background: selectedRunId === run.id ? "#eff6ff" : undefined }}><td>{run.customerName || run.conversationTitle || run.conversationId}<br /><small>v{run.inboundVersion}</small></td><td>{run.status}</td><td>{run.model}</td><td>{formatTime(run.createdAt)}</td></tr>)}</tbody></Table>{!loading && runs.length === 0 && <Empty>Không có lượt chạy AI phù hợp.</Empty>}</Panel><div style={{ minHeight: 340, border: "1px solid #e2e8f0", borderRadius: 8, overflow: "hidden" }}><AiRunInspector run={selectedRun} actions={actions} /></div></div>;
+}
+
+function Tech({ incidents, jobs, loading, actionInProgress, expandedIds, openIncidentCount, onToggle, onResolve, onResolveAll }: { incidents: IncidentItem[]; jobs: JobItem[]; loading: boolean; actionInProgress: string | null; expandedIds: Set<string>; openIncidentCount: number; onToggle: (id: string) => void; onResolve: (item: IncidentItem, note?: string) => Promise<void>; onResolveAll: () => Promise<void> }) {
+  return <><Panel title={`Sự cố (${incidents.length})`} action={openIncidentCount > 0 ? <button type="button" style={{ ...buttonStyle, borderColor: "#dc2626", color: "#b91c1c" }} disabled={actionInProgress === "resolve-all"} onClick={() => void onResolveAll()}>Đóng tất cả</button> : undefined}><div>{incidents.map((incident) => { const expanded = expandedIds.has(incident.id); const safety = getIncidentSafetyPolicy(incident); return <article key={incident.id} style={{ padding: 14, borderBottom: "1px solid #e2e8f0" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}><button type="button" onClick={() => onToggle(incident.id)} style={{ border: 0, background: "transparent", textAlign: "left", cursor: "pointer", padding: 0, fontWeight: 700, color: "#1e293b" }}>{expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {incident.title} <small style={{ color: "#64748b" }}>({incident.type} · {incident.status})</small></button>{incident.status === "OPEN" && <button type="button" style={buttonStyle} disabled={actionInProgress === incident.id} onClick={() => void onResolve(incident, "Đã xử lý")}>Giải quyết</button>}</div><p style={{ margin: "7px 0 0", color: "#475569" }}>{incident.description}</p>{expanded && <div style={{ marginTop: 10, padding: 10, background: "#f8fafc", borderRadius: 6, fontSize: "13px" }}><p style={{ margin: 0 }}>{safety.warningMessage}</p>{incident.conversationId && <p><Link to={`/inbox/${incident.conversationId}`}>Mở hội thoại liên quan <ArrowRight size={12} /></Link></p>}{(isCheckpoint(incident) || isDomDegraded(incident)) && <p style={{ marginBottom: 0, color: "#92400e" }}>Việc giải quyết sự cố không tự tiếp tục kênh hoặc nhả chế độ người xử lý. Chỉ resume kênh sau khi đã xác minh điều kiện phục hồi.</p>}</div>}</article>; })}</div>{!loading && incidents.length === 0 && <Empty><CheckCircle2 size={22} /> Không có sự cố phù hợp.</Empty>}</Panel><Panel title={`Tác vụ nền gần đây (${jobs.length})`}><Table><thead><tr><th>Loại</th><th>Trạng thái</th><th>Lần thử</th><th>Khóa đến</th><th>Lỗi</th></tr></thead><tbody>{jobs.map((job) => <tr key={job.id}><td>{job.jobType}</td><td>{job.status}</td><td>{job.attempts}/{job.maxAttempts}</td><td>{job.lockedUntil ? formatTime(job.lockedUntil) : "—"}</td><td>{job.lastError || "—"}</td></tr>)}</tbody></Table></Panel></>;
+}
+
+function Table({ children }: { children: React.ReactNode }) {
+  return <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>{children}</table><style>{"th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #f1f5f9; } th { color: #64748b; background: #f8fafc; font-size: 12px; }"}</style></div>;
+}

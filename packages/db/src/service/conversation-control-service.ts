@@ -391,6 +391,17 @@ export class ConversationControlService {
         ? "HUMAN_SESSION_MAX_EXCEEDED"
         : "HUMAN_SESSION_EXPIRED";
 
+      const expiryCondition = isExpiredDraft
+        ? and(
+            eq(conversations.replyControlMode, "HUMAN_DRAFT"),
+            eq(conversations.controlEpoch, controlEpoch),
+            lte(conversations.draftLeaseExpiresAt, now)
+          )
+        : and(
+            eq(conversations.replyControlMode, "HUMAN_SESSION"),
+            eq(conversations.controlEpoch, controlEpoch),
+            lte(conversations.humanHoldUntil, now)
+          );
       await dbTx
         .update(conversations)
         .set({
@@ -407,15 +418,13 @@ export class ConversationControlService {
           draftLeaseExpiresAt: null,
           updatedAt: now,
         })
-        .where(eq(conversations.id, conversationId));
+        .where(and(eq(conversations.id, conversationId), expiryCondition));
 
-      return {
-        mode: "AUTO",
-        epoch,
-        holdUntil: null,
-        suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
-        changed: true,
-      };
+      const after = await this.get(conversationId, dbTx);
+      if (!after || after.mode !== "AUTO" || after.epoch !== epoch) {
+        return after;
+      }
+      return { ...after, changed: true };
     };
 
     if (tx) {

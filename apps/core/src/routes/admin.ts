@@ -1290,7 +1290,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     );
 
     // 5. AI Runs with Pagination
-    fastify.get<{ Querystring: { conversationId?: string; status?: string; limit?: string; offset?: string } }>(
+    fastify.get<{ Querystring: { conversationId?: string; status?: string; model?: string; limit?: string; offset?: string } }>(
       "/api/ai-runs",
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
@@ -1302,6 +1302,9 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         }
         if (request.query.status) {
           conditions.push(eq(aiRuns.status, request.query.status));
+        }
+        if (request.query.model) {
+          conditions.push(eq(aiRuns.model, request.query.model));
         }
 
         const [items, totalRes] = await Promise.all([
@@ -1368,6 +1371,32 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           offset,
           hasMore,
         });
+      }
+    );
+
+    fastify.get<{ Params: { id: string } }>(
+      "/api/ai-runs/:id",
+      { preHandler: [requireRole("OPERATOR")] },
+      async (request, reply) => {
+        const [run] = await db
+          .select()
+          .from(aiRuns)
+          .where(and(eq(aiRuns.id, request.params.id), eq(aiRuns.channelAccountId, channelAccountId)))
+          .limit(1);
+        if (!run) return reply.status(404).send({ error: "AI run not found" });
+
+        const actions = await db
+          .select()
+          .from(outboundActions)
+          .where(and(eq(outboundActions.sourceAiRunId, run.id), eq(outboundActions.channelAccountId, channelAccountId)))
+          .orderBy(outboundActions.responseIndex);
+        return reply.send(sanitizeApiOutput({
+          ...run,
+          requestSnapshot: run.requestSnapshot ? stripSensitiveData(run.requestSnapshot) : null,
+          responseSnapshot: run.responseSnapshot ? stripSensitiveData(run.responseSnapshot) : null,
+          usedResult: run.usedResult ? sanitizeCustomerOutput(run.usedResult) : null,
+          actions,
+        }));
       }
     );
 
@@ -1521,28 +1550,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           }
         }
 
-        // 2. Auto un-suspend channel account if no other open incidents remain
-        const targetChannelId = resolved.channelAccountId || channelAccountId;
-        const openIncidents = await incidentRepo.getOpenIncidents(targetChannelId);
-        const hasRemainingOpen = openIncidents.some((i) => i.status === "OPEN" && i.id !== incidentId);
-
-        if (!hasRemainingOpen) {
-          await db
-            .update(channelAccounts)
-            .set({
-              isSuspended: false,
-              status: "RUNNING",
-              statusReason: null,
-              updatedAt: new Date(),
-            })
-            .where(eq(channelAccounts.id, targetChannelId));
-
-          await broadcaster.broadcast("channel:status", {
-            status: "RUNNING",
-            isPaused: false,
-            isSuspended: false,
-          });
-        }
+        // Resolving an incident does not resume the channel or release conversation control.
+        // Channel recovery is a separate, explicit operator action.
 
         await broadcaster.broadcast("incident:resolved", { incidentId });
         return reply.send({ success: true, incident: resolved });
@@ -1591,22 +1600,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
           }
         }
 
-        // Auto un-suspend channel after resolving all incidents
-        await db
-          .update(channelAccounts)
-          .set({
-            isSuspended: false,
-            status: "RUNNING",
-            statusReason: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(channelAccounts.id, channelAccountId));
-
-        await broadcaster.broadcast("channel:status", {
-          status: "RUNNING",
-          isPaused: false,
-          isSuspended: false,
-        });
+        // Bulk resolution has the same safety boundary as individual resolution:
+        // only an explicit channel resume may change operational channel state.
 
         await broadcaster.broadcast("incident:resolved", { count: openItems.length });
         return reply.send({ success: true, count: openItems.length });

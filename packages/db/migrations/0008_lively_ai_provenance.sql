@@ -1,0 +1,3 @@
+ALTER TABLE "outbound_actions" ADD COLUMN "source_ai_run_id" uuid;--> statement-breakpoint
+ALTER TABLE "outbound_actions" ADD CONSTRAINT "outbound_actions_source_ai_run_id_ai_runs_id_fk" FOREIGN KEY ("source_ai_run_id") REFERENCES "public"."ai_runs"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE INDEX "outbound_actions_source_ai_run_idx" ON "outbound_actions" USING btree ("source_ai_run_id");

@@ -63,6 +63,7 @@ export const ConversationDetailPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [reconcilingId, setReconcilingId] = useState<string | null>(null);
   const [acquiringDraft, setAcquiringDraft] = useState(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
 
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
@@ -100,6 +101,7 @@ export const ConversationDetailPage: React.FC = () => {
 
       const res = await apiFetch<ConversationDetailData>(url);
       setData(res);
+      setSelectedRunId((current) => current ?? res.aiRuns?.[0]?.id ?? null);
 
       if (appendOlder) {
         setMessages((prev) => mergePaginatedMessages(res.messages || [], prev));
@@ -799,8 +801,14 @@ export const ConversationDetailPage: React.FC = () => {
         <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
           {/* AiRunInspector Integration */}
           <div style={{ backgroundColor: "#ffffff", borderRadius: "8px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", maxHeight: "420px", display: "flex", flexDirection: "column" }}>
+            {data?.aiRuns && data.aiRuns.length > 1 && <label style={{ display: "block", padding: "10px 12px 0", fontSize: "12px", color: "#475569" }}>
+              Lượt chạy AI
+              <select aria-label="Lượt chạy AI" value={selectedRunId || ""} onChange={(event) => setSelectedRunId(event.target.value)} style={{ width: "100%", marginTop: 4 }}>
+                {data.aiRuns.map((run) => <option key={run.id} value={run.id}>v{run.inboundVersion} · {run.status} · {formatTime(run.createdAt)}</option>)}
+              </select>
+            </label>}
             <AiRunInspector
-              run={data?.aiRuns?.[0] || null}
+              run={data?.aiRuns?.find((run) => run.id === selectedRunId) || null}
               actions={actions}
               messages={messages}
               compact={true}

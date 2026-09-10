@@ -499,6 +499,7 @@ export const outboundActions = pgTable(
       .notNull()
       .references(() => conversations.id, { onDelete: "cascade" }),
     turnId: uuid("turn_id").references(() => turns.id, { onDelete: "set null" }),
+    sourceAiRunId: uuid("source_ai_run_id").references(() => aiRuns.id, { onDelete: "set null" }),
     actionId: varchar("action_id", { length: 128 }).notNull().unique(), // sha256(channelAccountId + conversationId + inboundVersion + responseIndex)
     inboundVersion: integer("inbound_version").notNull(),
     responseIndex: integer("response_index").notNull().default(0),
@@ -523,6 +524,7 @@ export const outboundActions = pgTable(
   },
   (t) => [
     index("outbound_actions_conv_version_idx").on(t.conversationId, t.inboundVersion),
+    index("outbound_actions_source_ai_run_idx").on(t.sourceAiRunId),
     index("outbound_actions_status_idx").on(t.status),
   ]
 );

@@ -1,5 +1,13 @@
 export type UserRole = "OWNER" | "OPERATOR" | "VIEWER";
 
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+}
+
 export interface SessionUser {
   id: string;
   email: string;
@@ -252,6 +260,7 @@ export type OutboundActionStatus =
   | "PENDING"
   | "TYPING"
   | "SEND_INTENT"
+  | "CONFIRMED"
   | "RETRY_APPROVED"
   | "SENDING"
   | "SENT"
@@ -271,6 +280,9 @@ export interface OutboundActionItem {
   unconfirmedReason: string | null;
   errorMessage: string | null;
   createdAt: string;
+  sourceAiRunId?: string | null;
+  startedSendingAt?: string | null;
+  confirmedAt?: string | null;
 }
 
 export interface QueueItem {

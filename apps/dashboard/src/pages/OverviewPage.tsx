@@ -181,7 +181,7 @@ export const OverviewPage: React.FC = () => {
             </div>
           </div>
           <Link
-            to="/incidents"
+            to="/operations?tab=tech"
             style={{
               padding: "8px 12px",
               borderRadius: "6px",
@@ -340,7 +340,7 @@ export const OverviewPage: React.FC = () => {
           </div>
           <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
             {data.openIncidentsCount > 0 ? (
-              <Link to="/incidents" style={{ color: "#dc2626", fontWeight: "600", textDecoration: "underline" }}>
+              <Link to="/operations?tab=tech" style={{ color: "#dc2626", fontWeight: "600", textDecoration: "underline" }}>
                 Xem danh sách sự cố
               </Link>
             ) : (

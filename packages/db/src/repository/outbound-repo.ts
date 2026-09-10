@@ -8,6 +8,7 @@ export interface CreateOutboundActionParams {
   channelAccountId: string;
   conversationId: string;
   turnId?: string;
+  sourceAiRunId?: string;
   inboundVersion: number;
   responseIndex: number;
   text: string;
@@ -126,6 +127,7 @@ export class OutboundRepository {
         channelAccountId: params.channelAccountId,
         conversationId: params.conversationId,
         turnId: params.turnId || null,
+        sourceAiRunId: params.sourceAiRunId || null,
         actionId,
         inboundVersion: params.inboundVersion,
         responseIndex: params.responseIndex,

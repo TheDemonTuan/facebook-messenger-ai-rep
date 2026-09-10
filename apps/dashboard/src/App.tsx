@@ -5,13 +5,9 @@ import { SseProvider } from "./context/SseContext";
 import { TimezoneProvider } from "./context/TimezoneContext";
 import { Layout } from "./components/Layout";
 import { OverviewPage } from "./pages/OverviewPage";
-import { WorkflowPage } from "./pages/WorkflowPage";
 import { OperationsPage } from "./pages/OperationsPage";
 import { InboxPage } from "./pages/InboxPage";
 import { ConversationDetailPage } from "./pages/ConversationDetailPage";
-import { QueuePage } from "./pages/QueuePage";
-import { IncidentsPage } from "./pages/IncidentsPage";
-import { AiLogsPage } from "./pages/AiLogsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AuditPage } from "./pages/AuditPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -58,38 +54,10 @@ export const App: React.FC = () => {
                 </Layout>
               }
             />
-            <Route
-              path="/workflow"
-              element={
-                <Layout>
-                  <WorkflowPage />
-                </Layout>
-              }
-            />
-            <Route
-              path="/queue"
-              element={
-                <Layout>
-                  <QueuePage />
-                </Layout>
-              }
-            />
-            <Route
-              path="/incidents"
-              element={
-                <Layout>
-                  <IncidentsPage />
-                </Layout>
-              }
-            />
-            <Route
-              path="/ai-logs"
-              element={
-                <Layout>
-                  <AiLogsPage />
-                </Layout>
-              }
-            />
+            <Route path="/workflow" element={<Navigate to="/inbox" replace />} />
+            <Route path="/queue" element={<Navigate to="/operations?tab=dispatch" replace />} />
+            <Route path="/incidents" element={<Navigate to="/operations?tab=tech" replace />} />
+            <Route path="/ai-logs" element={<Navigate to="/operations?tab=airuns" replace />} />
             <Route
               path="/settings"
               element={

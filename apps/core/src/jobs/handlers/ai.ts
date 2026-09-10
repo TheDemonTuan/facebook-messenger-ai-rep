@@ -536,6 +536,7 @@ export function createAiHandler(deps: AiHandlerDeps) {
         channelAccountId,
         conversationId,
         turnId: turnId || undefined,
+        sourceAiRunId: runRecord?.id,
         inboundVersion,
         responseIndex: i,
         text: msgText,

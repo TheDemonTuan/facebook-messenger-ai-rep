@@ -162,9 +162,9 @@ async function mockApi(page: Page): Promise<{ finishAiCancellation: () => void }
       return json({ success: true });
     }
     if (path.endsWith("/send")) return json({ success: true, outboundActionId: "action-1" });
-    if (path === "/api/queue") return json({ items: [], hasMore: false, nextCursor: null });
-    if (path === "/api/incidents") return json({ items: [], hasMore: false, nextCursor: null });
-    if (path === "/api/ai-runs") return json({ items: [], hasMore: false, nextCursor: null });
+    if (path === "/api/queue") return json({ items: [], jobs: [] });
+    if (path === "/api/incidents") return json({ items: [], total: 0, limit: 100, offset: 0, hasMore: false });
+    if (path === "/api/ai-runs") return json({ items: [], total: 0, limit: 50, offset: 0, hasMore: false });
     if (path === "/api/ai-runs/test") return json({ success: true, response: "ok" });
     if (path === "/api/settings/test-ai") return json({ healthy: true, status: "healthy", model: "auto/best-chat", latencyMs: 120 });
     if (path === "/api/settings/ai-provider") {
@@ -256,20 +256,10 @@ async function waitForRoute(page: Page, route: string, isPaused = false): Promis
       await page.getByText("Khách thử nghiệm").first().waitFor();
       break;
     case "operations":
-      await page.getByRole("heading", { name: "Không gian Vận hành" }).waitFor();
-      await page.getByText("Điều phối & Hàng đợi").waitFor();
-      break;
     case "queue":
-      await page.getByRole("heading", { name: "Quản lý hàng đợi xử lý" }).waitFor();
-      await page.getByText("Không có tác vụ nào theo bộ lọc đã chọn!").waitFor();
-      break;
     case "incidents":
-      await page.getByRole("heading", { name: "Quản lý sự cố & Giám sát an toàn" }).waitFor();
-      await page.getByText("Không có sự cố nào cần xử lý").waitFor();
-      break;
     case "ai-logs":
-      await page.getByRole("heading", { name: "Nhật ký hoạt động AI" }).waitFor();
-      await page.getByText("Không tìm thấy lượt xử lý AI nào phù hợp bộ lọc.").waitFor();
+      await page.getByRole("heading", { name: "Vận hành" }).waitFor();
       break;
     case "settings":
       await page.getByRole("heading", { name: "Cài đặt hệ thống & Chính sách phản hồi" }).waitFor();
@@ -301,11 +291,23 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.goto(`${baseURL}/operations`);
   await waitForRoute(page, "operations");
   await page.getByRole("button", { name: /Hoạt động AI/ }).click();
-  await page.getByText(/Lượt gọi AI|kết quả/).first().waitFor();
+  await page.getByText(/Lượt chạy AI|Không có lượt chạy AI/).first().waitFor();
+  assert(new URL(page.url()).searchParams.get("tab") === "airuns", `${name}: AI tab URL was not updated`);
   await page.getByRole("button", { name: /Kỹ thuật/ }).click();
-  await page.getByText("Sự cố kỹ thuật kênh & phiên").waitFor();
+  await page.getByText(/Sự cố \(/).first().waitFor();
+  assert(new URL(page.url()).searchParams.get("tab") === "tech", `${name}: tech tab URL was not updated`);
   await page.getByRole("button", { name: /Điều phối/ }).click();
-  await page.getByText(/Các lượt đang chờ xử lý|Hàng đợi/).first().waitFor();
+  await page.getByText(/Hàng đợi/).first().waitFor();
+  assert(new URL(page.url()).searchParams.get("tab") === "dispatch", `${name}: dispatch tab URL was not updated`);
+
+  for (const [legacyRoute, tab] of [["queue", "dispatch"], ["incidents", "tech"], ["ai-logs", "airuns"]] as const) {
+    await page.goto(`${baseURL}/${legacyRoute}`);
+    await page.getByRole("heading", { name: "Vận hành" }).waitFor();
+    assert(new URL(page.url()).pathname === "/operations" && new URL(page.url()).searchParams.get("tab") === tab, `${name}: /${legacyRoute} did not redirect to Operations ${tab}`);
+  }
+  await page.goto(`${baseURL}/workflow`);
+  await page.getByRole("heading", { name: "Hộp thư khách hàng" }).waitFor();
+  assert(new URL(page.url()).pathname === "/inbox", `${name}: /workflow did not redirect to Inbox`);
 
   const bodyText = (await page.locator("body").innerText()).toLowerCase();
   assert(!bodyText.includes("novnc"), `${name}: public noVNC control is visible`);
@@ -381,7 +383,7 @@ async function exercise(browser: Browser, name: string, viewport: { width: numbe
   await page.goto(`${baseURL}/incidents`);
   await waitForRoute(page, "incidents");
   const incidentsText = await page.locator("main").innerText();
-  assert(incidentsText.includes("Quản lý sự cố & Giám sát an toàn"), `${name}: missing customer-friendly incident title`);
+  assert(incidentsText.includes("Vận hành") && incidentsText.includes("Sự cố"), `${name}: missing Operations incident workspace`);
   assert(!incidentsText.includes("fail-closed"), `${name}: raw internal jargon 'fail-closed' exposed`);
   assert(!incidentsText.includes("Circuit Breakers"), `${name}: raw 'Circuit Breakers' jargon exposed`);
 

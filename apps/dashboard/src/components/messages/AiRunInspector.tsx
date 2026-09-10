@@ -39,10 +39,10 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
   const rawContent = run.responseSnapshot?.content || "";
   const outputMessages = run.parsedOutput?.messages || run.usedResult?.messages || [];
 
-  // Match outbound action by inboundVersion and actor
-  const matchingAction = actions.length > 0
-    ? actions.find((a) => a.actor === "AI" && a.inboundVersion === run.inboundVersion)
-    : null;
+  // Only direct provenance is safe: a conversation can have multiple AI runs for one inbound version.
+  const matchingActions = actions.filter((action) => action.sourceAiRunId === run.id);
+  const confirmedActions = matchingActions.filter((action) => action.status === "CONFIRMED" || action.status === "SENT");
+  const uncertainActions = matchingActions.filter((action) => action.status === "SEND_UNCERTAIN" || action.status === "UNCONFIRMED");
 
   return (
     <div
@@ -221,36 +221,22 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
               <div style={{ color: "#64748b", fontStyle: "italic" }}>
                 Chưa tải danh sách actions gắn kèm (Mở qua chi tiết Hội thoại để xem liên kết đối soát gửi).
               </div>
-            ) : matchingAction ? (
+            ) : matchingActions.length > 0 ? (
               <>
                 <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Trạng thái gửi Messenger:</span>
-                  <span
-                    style={{
-                      fontWeight: 600,
-                      color:
-                        matchingAction.status === "SENT"
-                          ? "#16a34a"
-                          : matchingAction.status === "SEND_UNCERTAIN"
-                          ? "#dc2626"
-                          : "#ca8a04",
-                    }}
-                  >
-                    {matchingAction.status === "SENT"
-                      ? "Đã gửi thành công (SENT)"
-                      : matchingAction.status === "SEND_UNCERTAIN"
-                      ? "Cần đối soát (SEND_UNCERTAIN)"
-                      : matchingAction.status}
+                  <span style={{ color: "#64748b" }}>Delivery:</span>
+                  <span style={{ fontWeight: 600, color: uncertainActions.length > 0 ? "#dc2626" : confirmedActions.length === matchingActions.length ? "#16a34a" : "#ca8a04" }}>
+                    {confirmedActions.length}/{matchingActions.length} xác nhận{uncertainActions.length > 0 ? `, ${uncertainActions.length} cần đối soát` : ""}
                   </span>
                 </div>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <span style={{ color: "#64748b" }}>Thời điểm gửi:</span>
-                  <span>{formatTime(matchingAction.createdAt)}</span>
-                </div>
+                {matchingActions.map((action) => <div key={action.id} style={{ display: "flex", justifyContent: "space-between" }}>
+                  <span style={{ color: "#64748b" }}>Tin {action.responseIndex + 1}:</span>
+                  <span>{action.status}{action.confirmedAt ? ` · ${formatTime(action.confirmedAt)}` : ""}</span>
+                </div>)}
               </>
             ) : (
               <div style={{ color: "#64748b" }}>
-                Không tìm thấy hành động gửi trực tiếp nào gắn với phiên bản inbound v{run.inboundVersion}. (Có thể đã bị hủy hoặc đang chờ gửi).
+                Chưa có hành động gửi nào được liên kết trực tiếp với lượt chạy AI này.
               </div>
             )}
           </div>

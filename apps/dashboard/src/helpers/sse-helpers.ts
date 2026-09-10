@@ -67,6 +67,13 @@ export function shouldRefetchQueue(eventType: string): boolean {
 /**
  * Determines whether an incoming SSE event should trigger a refetch of Incidents.
  */
+/**
+ * Determines whether an incoming SSE event should refresh AI run lists.
+ */
+export function shouldRefetchAiRuns(eventType: string): boolean {
+  return ["outbox:ai_generated", "outbox:browser_confirmed", "outbound:transition", "outbound:confirmed", "outbound:uncertain", "outbound:aborted"].includes(eventType);
+}
+
 export function shouldRefetchIncidents(eventType: string): boolean {
   return [
     "incident:created",
