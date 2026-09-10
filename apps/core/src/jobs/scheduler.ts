@@ -181,7 +181,11 @@ export class CoreJobService {
     this.humanControlTimer = setInterval(async () => {
       try {
         const controlService = new ConversationControlService(this.deps.db);
-        await controlService.expireOverdueHumanSessions(new Date(), 100);
+        await controlService.expireOverdueHumanSessions(
+          new Date(),
+          100,
+          async (channelAccountId) => (await this.deps.settingsRepo.getSettings(channelAccountId)).settings.autoResumeAfterHuman
+        );
       } catch (err) {
         console.error("[CoreJobService] Periodic human control cleanup error:", err);
       }

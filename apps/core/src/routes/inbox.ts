@@ -461,8 +461,11 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
       { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
         const { conversationId, version } = request.params;
-        const inboundVersion = parseInt(version, 10);
-        if (isNaN(inboundVersion) || inboundVersion < 1) {
+        if (!/^[1-9]\d*$/.test(version)) {
+          return reply.status(400).send({ error: "Invalid version: must be a positive integer" });
+        }
+        const inboundVersion = Number(version);
+        if (!Number.isSafeInteger(inboundVersion)) {
           return reply.status(400).send({ error: "Invalid version: must be a positive integer" });
         }
 
@@ -530,7 +533,12 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           db
             .select()
             .from(conversationEvents)
-            .where(eq(conversationEvents.conversationId, conversationId))
+            .where(
+              and(
+                eq(conversationEvents.conversationId, conversationId),
+                eq(conversationEvents.inboundVersion, inboundVersion)
+              )
+            )
             .orderBy(desc(conversationEvents.createdAt))
             .limit(20),
         ]);

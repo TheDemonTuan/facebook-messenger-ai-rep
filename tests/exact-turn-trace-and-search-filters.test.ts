@@ -313,6 +313,13 @@ describe("Exact-Turn Trace & Server-Side Search/Filter Tests", () => {
         select: vi.fn((fields?: unknown) => ({
           from: vi.fn(() => ({
             where: vi.fn(() => {
+              if (fields && typeof fields === "object" && "type" in fields) {
+                return {
+                  groupBy: vi.fn(() => ({
+                    orderBy: vi.fn(async () => [{ type: "SEND_UNCERTAIN", count: 1 }]),
+                  })),
+                };
+              }
               if (fields && typeof fields === "object" && "count" in fields) {
                 return Promise.resolve([{ count: 1 }]);
               }
@@ -357,6 +364,8 @@ describe("Exact-Turn Trace & Server-Side Search/Filter Tests", () => {
       const data = JSON.parse(res.payload);
       expect(data.items).toHaveLength(1);
       expect(data.total).toBe(1);
+      expect(data.openTotal).toBe(1);
+      expect(data.typeFacets).toEqual([{ type: "SEND_UNCERTAIN", count: 1 }]);
     });
   });
 });

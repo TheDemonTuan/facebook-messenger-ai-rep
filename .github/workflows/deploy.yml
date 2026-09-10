@@ -122,12 +122,19 @@ jobs:
             fs.appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include: list })}\n`);
           '
 
+  acceptance:
+    name: Production Acceptance
+    needs: verify
+    uses: ./.github/workflows/acceptance.yml
+    with:
+      sha: ${{ github.sha }}
+
   images:
     name: Build image → GHCR (${{ matrix.name }})
     concurrency:
       group: images-${{ github.ref }}-${{ matrix.name }}
       cancel-in-progress: true
-    needs: verify
+    needs: [verify, acceptance]
     if: ${{ needs.verify.outputs.has_images == 'true' }}
     runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
     permissions:
@@ -186,10 +193,11 @@ jobs:
     concurrency:
       group: facebook-messenger-ai-production-deploy
       cancel-in-progress: false
-    needs: [verify, images]
+    needs: [verify, acceptance, images]
     if: |
       always() &&
       needs.verify.result == 'success' &&
+      needs.acceptance.result == 'success' &&
       (needs.images.result == 'success' || needs.images.result == 'skipped') &&
       !(github.event_name == 'workflow_dispatch' && inputs.skip_deploy) &&
       (needs.verify.outputs.has_images == 'true' || needs.verify.outputs.db_migration == 'true' || needs.verify.outputs.compose_config == 'true' || needs.verify.outputs.deploy_scripts == 'true' || inputs.force_all == true)

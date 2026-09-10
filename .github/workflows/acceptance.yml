@@ -3,6 +3,17 @@ name: Production Acceptance
 on:
   pull_request:
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to test (defaults to the event ref)
+        required: false
+        type: string
+  workflow_call:
+    inputs:
+      sha:
+        description: Commit SHA to test
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -41,6 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.sha || github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
@@ -68,6 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.sha || github.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
         with:
@@ -84,6 +97,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.sha || github.sha }}
           persist-credentials: false
       - name: Validate Compose configuration
         env:

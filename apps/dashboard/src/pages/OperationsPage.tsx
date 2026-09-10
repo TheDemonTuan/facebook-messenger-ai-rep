@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { apiFetch } from "../api";
 import { formatTime } from "../helpers/date-helpers";
@@ -77,6 +77,8 @@ export const OperationsPage: React.FC = () => {
   const [incidentOffset, setIncidentOffset] = useState(0);
   const [incidentTotal, setIncidentTotal] = useState(0);
   const [incidentHasMore, setIncidentHasMore] = useState(false);
+  const [incidentOpenTotal, setIncidentOpenTotal] = useState(0);
+  const [incidentTypes, setIncidentTypes] = useState<string[]>([]);
   const incidentLimit = 25;
 
   const [expandedIncidentIds, setExpandedIncidentIds] = useState<Set<string>>(new Set());
@@ -111,7 +113,9 @@ export const OperationsPage: React.FC = () => {
           setAiRuns(items);
           setAiTotal(response.total ?? items.length);
           setAiHasMore(Boolean(response.hasMore));
-          setSelectedRunId((current) => current ?? items[0]?.id ?? null);
+          setSelectedRunId((current) =>
+            current && items.some((item) => item.id === current) ? current : items[0]?.id ?? null
+          );
         }
       } else {
         const incParams = new URLSearchParams();
@@ -133,6 +137,8 @@ export const OperationsPage: React.FC = () => {
           setIncidents(incidentItems);
           setIncidentTotal(incidentResponse.total ?? incidentItems.length);
           setIncidentHasMore(Boolean(incidentResponse.hasMore));
+          setIncidentOpenTotal(typeof incidentResponse.openTotal === "number" ? incidentResponse.openTotal : incidentItems.filter((item) => item.status === "OPEN").length);
+          setIncidentTypes(Array.isArray(incidentResponse.typeFacets) ? incidentResponse.typeFacets.map((facet) => typeof facet === "string" ? facet : facet.type).filter((type): type is string => typeof type === "string").sort() : Array.from(new Set(incidentItems.map((item) => item.type))).sort());
           setQueue(queueResponse.items);
           setJobs(queueResponse.jobs);
         }
@@ -191,8 +197,7 @@ export const OperationsPage: React.FC = () => {
     return () => { cancelled = true; };
   }, [selectedRunId]);
 
-  const incidentTypes = useMemo(() => Array.from(new Set(incidents.map((incident) => incident.type))).sort(), [incidents]);
-  const openIncidentCount = incidents.filter((incident) => incident.status === "OPEN").length;
+  const openIncidentCount = incidentOpenTotal;
 
   const prioritize = async (conversationId: string) => {
     setActionInProgress(`queue:${conversationId}`);
@@ -224,7 +229,7 @@ export const OperationsPage: React.FC = () => {
   };
 
   const resolveAll = async () => {
-    if (openIncidentCount === 0 || !window.confirm(`Đóng toàn bộ ${openIncidentCount} sự cố đang mở?`)) return;
+    if (openIncidentCount === 0 || !window.confirm(`Đóng tất cả ${openIncidentCount} sự cố đang mở của toàn kênh? Bộ lọc hiện tại sẽ không giới hạn thao tác này.`)) return;
     setActionInProgress("resolve-all");
     try {
       await apiFetch("/api/incidents/resolve-all", { method: "POST" });

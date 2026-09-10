@@ -6,6 +6,8 @@ export interface PaginatedResponse<T> {
   limit: number;
   offset: number;
   hasMore: boolean;
+  openTotal?: number;
+  typeFacets?: Array<string | { type: string; count?: number }>;
 }
 
 export interface SessionUser {

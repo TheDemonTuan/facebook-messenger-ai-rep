@@ -308,7 +308,7 @@ export class ConversationControlService {
   async normalizeForInbound(
     conversationId: string,
     now: Date = new Date(),
-    options?: { maxSessionMs?: number },
+    options?: { maxSessionMs?: number; autoResumeAfterHuman?: boolean },
     tx?: DatabaseOrTx
   ): Promise<ConversationControl | null> {
     const runInTx = async (dbTx: DatabaseOrTx): Promise<ConversationControl | null> => {
@@ -383,6 +383,17 @@ export class ConversationControlService {
         };
       }
 
+      // Automatic expiry must honor the channel policy. Explicit operator release
+      // uses a separate transition and is never blocked by this setting.
+      if (options?.autoResumeAfterHuman === false) {
+        return {
+          mode,
+          epoch: controlEpoch,
+          holdUntil: humanHoldUntil,
+          suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
+        };
+      }
+
       // Transition expired human mode back to AUTO
       const epoch = controlEpoch + 1;
       const reason = isExpiredDraft
@@ -438,7 +449,7 @@ export class ConversationControlService {
   async expireSessionIfDue(
     conversationId: string,
     now: Date = new Date(),
-    options?: { maxSessionMs?: number },
+    options?: { maxSessionMs?: number; autoResumeAfterHuman?: boolean },
     tx?: DatabaseOrTx
   ): Promise<ConversationControl | null> {
     return this.normalizeForInbound(conversationId, now, options, tx);
@@ -447,9 +458,13 @@ export class ConversationControlService {
   /**
    * Periodic safety net to scan and auto-release expired human controls across conversations.
    */
-  async expireOverdueHumanSessions(now: Date = new Date(), limit: number = 100): Promise<number> {
+  async expireOverdueHumanSessions(
+    now: Date = new Date(),
+    limit: number = 100,
+    getAutoResumeAfterHuman?: (channelAccountId: string) => Promise<boolean>
+  ): Promise<number> {
     const overdue = await this.db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, channelAccountId: conversations.channelAccountId })
       .from(conversations)
       .where(
         or(
@@ -468,8 +483,12 @@ export class ConversationControlService {
     let expiredCount = 0;
     for (const row of overdue) {
       try {
-        await this.normalizeForInbound(row.id, now);
-        expiredCount++;
+        const autoResumeAfterHuman = getAutoResumeAfterHuman
+          ? await getAutoResumeAfterHuman(row.channelAccountId)
+          : true;
+        const before = await this.get(row.id);
+        const normalized = await this.normalizeForInbound(row.id, now, { autoResumeAfterHuman });
+        if (before?.mode !== normalized?.mode) expiredCount++;
       } catch (err) {
         console.warn(`[ConversationControlService] Failed to normalize conversation ${row.id}:`, err);
       }

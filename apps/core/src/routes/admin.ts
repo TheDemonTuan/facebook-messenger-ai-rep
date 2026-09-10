@@ -177,24 +177,8 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
             eq(incidents.status, "OPEN")
           )
         );
-      const openIncidentsCount = openIncidentsRes[0]?.count || 0;
-
-      // Auto-heal: If channel was suspended due to incidents that have all been resolved, and channel is not manually paused, restore it!
-      if (channel?.isSuspended && openIncidentsCount === 0 && !channel?.isPaused) {
-        await db
-          .update(channelAccounts)
-          .set({
-            isSuspended: false,
-            status: "RUNNING",
-            statusReason: null,
-            updatedAt: new Date(),
-          })
-          .where(eq(channelAccounts.id, channelAccountId));
-        channel.isSuspended = false;
-        channel.status = "RUNNING";
-        channel.statusReason = null;
-        await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
-      }
+      // Overview is read-only. Resolving incidents never resumes a suspended channel;
+      // recovery remains an explicit operator action.
 
       const oldestWaitSeconds =
         queueList.length > 0
@@ -1324,7 +1308,14 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
             ilike(aiRuns.model, searchPattern),
             ilike(aiRuns.status, searchPattern),
             sql`${aiRuns.id}::text ILIKE ${searchPattern}`,
-            sql`${aiRuns.conversationId}::text ILIKE ${searchPattern}`
+            sql`${aiRuns.conversationId}::text ILIKE ${searchPattern}`,
+            sql`EXISTS (
+              SELECT 1
+              FROM ${conversations}
+              LEFT JOIN ${customers} ON ${conversations.customerId} = ${customers.id}
+              WHERE ${conversations.id} = ${aiRuns.conversationId}
+                AND (${customers.name} ILIKE ${searchPattern} OR ${conversations.title} ILIKE ${searchPattern})
+            )`
           );
           if (qCond) conditions.push(qCond);
         }
@@ -1494,25 +1485,34 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const offset = Math.max(0, parseInt(request.query.offset || "0", 10));
 
         const conditions = [eq(incidents.channelAccountId, channelAccountId)];
+        const facetConditions = [eq(incidents.channelAccountId, channelAccountId)];
         if (request.query.status) {
-          conditions.push(eq(incidents.status, request.query.status));
+          const statusCondition = eq(incidents.status, request.query.status);
+          conditions.push(statusCondition);
+          facetConditions.push(statusCondition);
         }
         if (request.query.type) {
           conditions.push(eq(incidents.type, request.query.type));
         }
         if (request.query.conversationId) {
-          conditions.push(eq(incidents.conversationId, request.query.conversationId));
+          const conversationCondition = eq(incidents.conversationId, request.query.conversationId);
+          conditions.push(conversationCondition);
+          facetConditions.push(conversationCondition);
         }
         if (request.query.from) {
           const fromDate = new Date(request.query.from);
           if (!isNaN(fromDate.getTime())) {
-            conditions.push(gte(incidents.createdAt, fromDate));
+            const fromCondition = gte(incidents.createdAt, fromDate);
+            conditions.push(fromCondition);
+            facetConditions.push(fromCondition);
           }
         }
         if (request.query.to) {
           const toDate = new Date(request.query.to);
           if (!isNaN(toDate.getTime())) {
-            conditions.push(lt(incidents.createdAt, toDate));
+            const toCondition = lt(incidents.createdAt, toDate);
+            conditions.push(toCondition);
+            facetConditions.push(toCondition);
           }
         }
         if (request.query.q && request.query.q.trim()) {
@@ -1524,7 +1524,10 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
             sql`${incidents.id}::text ILIKE ${searchPattern}`,
             sql`${incidents.conversationId}::text ILIKE ${searchPattern}`
           );
-          if (qCond) conditions.push(qCond);
+          if (qCond) {
+            conditions.push(qCond);
+            facetConditions.push(qCond);
+          }
         }
 
         const [items, totalRes] = await Promise.all([
@@ -1544,12 +1547,27 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
         const total = totalRes[0]?.count || 0;
         const hasMore = offset + items.length < total;
 
+        const [openTotalRes, typeFacetRows] = await Promise.all([
+          db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(incidents)
+            .where(and(eq(incidents.channelAccountId, channelAccountId), eq(incidents.status, "OPEN"))),
+          db
+            .select({ type: incidents.type, count: sql<number>`count(*)::int` })
+            .from(incidents)
+            .where(and(...facetConditions))
+            .groupBy(incidents.type)
+            .orderBy(incidents.type),
+        ]);
+
         return reply.send({
           items,
           total,
           limit,
           offset,
           hasMore,
+          openTotal: openTotalRes[0]?.count || 0,
+          typeFacets: typeFacetRows,
         });
       }
     );

@@ -716,6 +716,7 @@ describe("Apps/Core Foundation Architecture & Flow Tests", () => {
           leftJoin: vi.fn(() => chain),
           where: vi.fn(() => chain),
           orderBy: vi.fn(() => chain),
+          groupBy: vi.fn(() => chain),
           limit: vi.fn(() => chain),
           offset: vi.fn(() => chain),
           then: (resolve: (val: unknown[]) => unknown) => resolve([userRecord]),
