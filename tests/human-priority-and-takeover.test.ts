@@ -916,6 +916,35 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
       expect(isBot).toBe(true);
     });
 
+    it("isBotOutbound recognizes a recent AI action on the exact Messenger thread when DOM and persisted refs differ", async () => {
+      let query = 0;
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => {
+            query++;
+            if (query <= 2) {
+              return {
+                where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
+              };
+            }
+            return {
+              innerJoin: vi.fn(() => ({
+                where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ id: "action-recent-ai" }]) })),
+              })),
+            };
+          }),
+        })),
+      } as unknown as Database;
+
+      const outboundRepo = new OutboundRepository(mockDb);
+      const isBot = await outboundRepo.isBotOutbound({
+        channelAccountId: "acc-1",
+        externalMessageRef: "mid.dom.stable-id",
+        externalThreadId: "thread-1",
+      });
+      expect(isBot).toBe(true);
+    });
+
     it("isBotOutbound returns false when no match exists (confirms external human response)", async () => {
       const mockDb = {
         select: vi.fn((_sel) => ({

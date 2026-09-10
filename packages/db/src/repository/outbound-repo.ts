@@ -1,4 +1,4 @@
-import { eq, and, sql, notInArray, gte } from "drizzle-orm";
+import { eq, and, sql, notInArray, inArray, gte } from "drizzle-orm";
 import type { Database, DatabaseOrTx } from "../client.js";
 import { outboundActions, conversations, messages } from "../schema/index.js";
 import type { OutboundActionStatus, SenderActor } from "@messenger/contracts";
@@ -432,7 +432,7 @@ export class OutboundRepository {
     externalThreadId?: string;
   }, tx?: DatabaseOrTx): Promise<boolean> {
     const executor = tx || this.db;
-    const { channelAccountId, externalMessageRef, text } = params;
+    const { channelAccountId, externalMessageRef, text, externalThreadId } = params;
 
     // 1. Check if externalMessageRef matches an outbound action or bot message
     if (externalMessageRef) {
@@ -461,7 +461,29 @@ export class OutboundRepository {
       if (msgs.length > 0 && msgs[0]?.actor === "AI") return true;
     }
 
-    // 2. Check recent bot actions matching text or textHash within last 15 minutes
+    // 2. The observed DOM uses stable mid.* ids while send confirmation can persist
+    // Messenger's numeric message ref. Match the exact thread and recent AI send time
+    // before falling back to text so a bot echo cannot trigger human takeover.
+    if (externalThreadId) {
+      const recentThreshold = new Date(Date.now() - 60 * 1000);
+      const matching = await executor
+        .select({ id: outboundActions.id })
+        .from(outboundActions)
+        .innerJoin(conversations, eq(outboundActions.conversationId, conversations.id))
+        .where(
+          and(
+            eq(outboundActions.channelAccountId, channelAccountId),
+            eq(outboundActions.actor, "AI"),
+            eq(conversations.externalThreadId, externalThreadId),
+            inArray(outboundActions.status, ["CLAIMED", "TYPING", "SENT", "CONFIRMED", "SEND_UNCERTAIN"]),
+            gte(outboundActions.createdAt, recentThreshold)
+          )
+        )
+        .limit(1);
+      if (matching.length > 0) return true;
+    }
+
+    // 3. Check recent bot actions matching text or textHash within last 15 minutes
     if (text && text.trim().length > 0) {
       const textHash = createHash("sha256").update(text.trim()).digest("hex");
       const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
