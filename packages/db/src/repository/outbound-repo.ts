@@ -514,7 +514,6 @@ export class OutboundRepository {
 
     // 3. Check recent bot actions matching text, textHash, or fuzzy text within last 15 minutes
     if (text && text.trim().length > 0) {
-      const textHash = createHash("sha256").update(text.trim()).digest("hex");
       const recentThreshold = new Date(Date.now() - 15 * 60 * 1000);
       const matching = await executor
         .select({ id: outboundActions.id, text: outboundActions.text, status: outboundActions.status })
