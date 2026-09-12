@@ -1285,5 +1285,122 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         })
       );
     });
+
+    it("protects active HUMAN_DRAFT lease from being overwritten by technical REVIEW_HOLD", async () => {
+      const { ConversationControlService } = await import("../packages/db/src/service/conversation-control-service.js");
+      const activeDraftExpiry = new Date(Date.now() + 60_000);
+      const convState = {
+        id: "conv-draft-1",
+        inboundVersion: 2,
+        controlEpoch: 5,
+        replyControlMode: "HUMAN_DRAFT",
+        humanHoldUntil: null,
+        draftLeaseExpiresAt: activeDraftExpiry,
+      };
+
+      let updateCalled = false;
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([convState]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => {
+            updateCalled = true;
+            return {
+              where: vi.fn().mockReturnValue({
+                returning: vi.fn().mockResolvedValue([{ id: "conv-draft-1" }]),
+              }),
+            };
+          }),
+        })),
+      };
+
+      const control = new ConversationControlService(mockDb as unknown as Database);
+      const res = await control.acquireReviewHold("conv-draft-1", "SEND_UNCERTAIN");
+
+      // HUMAN_DRAFT must prevail fail-safe; mode should remain HUMAN_DRAFT, changed = false, update not executed
+      expect(res.mode).toBe("HUMAN_DRAFT");
+      expect(res.changed).toBe(false);
+      expect(updateCalled).toBe(false);
+    });
+
+    it("retries up to 3 times when CAS epoch conflict occurs during human takeover", async () => {
+      const { ConversationControlService } = await import("../packages/db/src/service/conversation-control-service.js");
+
+      let attemptCount = 0;
+      let updateCalls = 0;
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockImplementation(() => {
+                attemptCount++;
+                return Promise.resolve([
+                  {
+                    id: "conv-race-cas",
+                    inboundVersion: 1,
+                    controlEpoch: attemptCount,
+                    replyControlMode: "AUTO",
+                    humanSessionStartedAt: null,
+                    humanHoldUntil: null,
+                  },
+                ]);
+              }),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(() => {
+              updateCalls++;
+              return {
+                returning: vi.fn().mockImplementation(() => {
+                  if (updateCalls === 1) return Promise.resolve([]); // CAS mismatch on attempt 1
+                  return Promise.resolve([{ id: "conv-race-cas" }]); // CAS success on attempt 2
+                }),
+              };
+            }),
+          })),
+        })),
+      };
+
+      const control = new ConversationControlService(mockDb as unknown as Database);
+      const res = await control.acquireOrRefreshSession("conv-race-cas");
+
+      expect(attemptCount).toBe(2);
+      expect(res.mode).toBe("HUMAN_SESSION");
+      expect(res.changed).toBe(true);
+    });
+
+    it("does not suppress human external outbound when human sends identical phrase to bot", async () => {
+      const { PlaywrightMessengerAdapter } = await import("../apps/browser-agent/src/messenger-adapter.js");
+      const adapter = new PlaywrightMessengerAdapter({
+        profileDir: "/tmp/fake-profile",
+      });
+      adapter.setDurableBotOutboundChecker(vi.fn().mockResolvedValue("STRICT_TEXT_MATCH")); // only text match, not EXACT_EXTERNAL_REF!
+
+      // Bot sent "Dạ còn hàng nha" 30s ago
+      adapter.rememberBotSentText("Dạ còn hàng nha", "t_123");
+
+      // Mock senderPage with human bubble having the exact same text
+      (adapter as unknown as { senderPage: unknown }).senderPage = {};
+      (adapter as unknown as { readBubblesFromPage: (page: unknown, opt: unknown) => Promise<unknown> }).readBubblesFromPage = vi.fn().mockResolvedValue({
+        bubbles: [
+          {
+            id: "bubble_human_1",
+            text: "Dạ còn hàng nha",
+            isOutgoing: true,
+          },
+        ],
+      });
+
+      // Crucial: checkLastBubbleIsExternalOutbound must return true because text-matching is not hard proof of bot
+      const isExternal = await adapter.checkLastBubbleIsExternalOutbound("t_123");
+      expect(isExternal).toBe(true);
+    });
   });
 });

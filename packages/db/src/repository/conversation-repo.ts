@@ -161,15 +161,6 @@ export class ConversationRepository {
                 actor: "SYSTEM",
                 payload: { reason: "human_session_expired" },
               });
-            } else if (normalized.changed && previousMode === "REVIEW_HOLD" && normalized.mode === "AUTO") {
-              await this.db.insert(conversationEvents).values({
-                channelAccountId: payload.channelAccountId,
-                conversationId: existingConvRow.id,
-                type: "CONVERSATION_RELEASED",
-                inboundVersion: existingConvRow.inboundVersion,
-                actor: "SYSTEM",
-                payload: { reason: "send_uncertain_auto_resumed" },
-              });
             }
           }
         } catch {
@@ -826,6 +817,49 @@ export class ConversationRepository {
         await tx
           .delete(conversationQueue)
           .where(eq(conversationQueue.conversationId, conversationId));
+      }
+
+      // Check for technical REVIEW_HOLD auto-release:
+      // A technical hold (e.g. SEND_UNCERTAIN) can be released back to AUTO
+      // ONLY AFTER verifying that this inbound message is a genuine, new inbound
+      // and its timestamp is strictly after the uncertain action's send cutoff (startedSendingAt or createdAt).
+      if (existingConv.length > 0 && existingConv[0]?.replyControlMode === "REVIEW_HOLD") {
+        try {
+          const msgCutoff = (payload.timestamp || now);
+          const staleUncertain = await tx
+            .select({ id: outboundActions.id })
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.conversationId, conversationId),
+                sql`${outboundActions.status} IN ('SEND_UNCERTAIN', 'UNCONFIRMED')`,
+                sql`COALESCE(${outboundActions.startedSendingAt}, ${outboundActions.createdAt}) < ${msgCutoff}`
+              )
+            )
+            .limit(1);
+
+          if (staleUncertain.length > 0) {
+            const released = await this.controlService.releaseTechnicalReviewHold(conversationId, "SEND_UNCERTAIN", tx);
+            if (released) {
+              existingConv[0].replyControlMode = "AUTO";
+              existingConv[0].manualMode = false;
+              if (existingConvRow) {
+                existingConvRow.replyControlMode = "AUTO";
+                existingConvRow.manualMode = false;
+              }
+              await tx.insert(conversationEvents).values({
+                channelAccountId: payload.channelAccountId,
+                conversationId,
+                type: "CONVERSATION_RELEASED",
+                inboundVersion: newInboundVersion,
+                actor: "SYSTEM",
+                payload: { reason: "send_uncertain_auto_resumed_by_new_inbound" },
+              });
+            }
+          }
+        } catch {
+          // Ignore in mocks
+        }
       }
 
       // 7. Evaluate shared reply eligibility synchronously and persist decision

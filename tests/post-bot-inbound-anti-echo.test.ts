@@ -431,7 +431,7 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
   });
 
   describe("5. Technical Hold Normalization with autoResumeAfterHuman=false", () => {
-    it("auto-resumes REVIEW_HOLD + SEND_UNCERTAIN to AUTO even when autoResumeAfterHuman is false", async () => {
+    it("preserves REVIEW_HOLD in normalizeForInbound so technical hold is only released after new message dedupe & insert", async () => {
       let updatedMode: string | null = null;
       let updatedReason: string | null = null;
       const convState = {
@@ -458,10 +458,6 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
           set: vi.fn((vals) => {
             updatedMode = vals.replyControlMode;
             updatedReason = vals.controlReason;
-            convState.mode = vals.replyControlMode;
-            convState.replyControlMode = vals.replyControlMode;
-            convState.controlEpoch = vals.controlEpoch;
-            convState.controlReason = vals.controlReason;
             return {
               where: vi.fn().mockResolvedValue([{ id: "conv-unc-1" }]),
             };
@@ -476,9 +472,9 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
         autoResumeAfterHuman: false,
       });
 
-      expect(updatedMode).toBe("AUTO");
-      expect(updatedReason).toBe("SEND_UNCERTAIN_AUTO_RESUMED");
-      expect(result?.mode).toBe("AUTO");
+      // Technical hold must NOT be prematurely released by normalizeForInbound before deduplication!
+      expect(result?.mode).toBe("REVIEW_HOLD");
+      expect(updatedMode).toBeUndefined();
     });
 
     it("retains HUMAN_SESSION when autoResumeAfterHuman is false", async () => {
@@ -753,6 +749,65 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
       expect(isIncomingEchoSuppressed("STRICT_TEXT_MATCH")).toBe(false);
       expect(isIncomingEchoSuppressed("NONE")).toBe(false);
       expect(isIncomingEchoSuppressed("EXACT_EXTERNAL_REF")).toBe(true);
+    });
+  });
+
+  describe("11. Ingest Inbound Technical Hold Release Ordering", () => {
+    it("does not release REVIEW_HOLD if inbound message is a duplicate", async () => {
+      const { ConversationRepository } = await import("../packages/db/src/repository/conversation-repo.js");
+      const releaseHoldMock = vi.fn();
+      const mockControlService = {
+        normalizeForInbound: vi.fn().mockResolvedValue({ mode: "REVIEW_HOLD", epoch: 1, holdUntil: null }),
+        releaseTechnicalReviewHold: releaseHoldMock,
+      };
+
+      const mockDb = {
+        transaction: vi.fn(async (cb) => {
+          const innerTx = {
+            select: vi.fn(() => ({
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([
+                    // Existing message found -> duplicate!
+                    {
+                      id: "msg-exist-1",
+                      conversationId: "conv-1",
+                      inboundVersion: 1,
+                      text: "Hello again",
+                      contentStatus: "READY",
+                      contentRevision: 1,
+                    },
+                  ]),
+                })),
+              })),
+            })),
+            update: vi.fn(),
+            insert: vi.fn(),
+          };
+          return cb(innerTx);
+        }),
+      };
+
+      const repo = new ConversationRepository(
+        mockDb as unknown as Database,
+        mockControlService as unknown as ConversationControlService,
+        { evaluatePrePersist: vi.fn().mockResolvedValue({ passed: true, reason: "OK" }), evaluateInbound: vi.fn() } as unknown as ReplyPolicyService
+      );
+
+      const res = await repo.ingestInboundMessage({
+        channelAccountId: "acc-1",
+        externalConversationId: "conv-1",
+        externalThreadId: "thread-1",
+        externalMessageId: "msg-dup-1",
+        text: "Hello again",
+        senderExternalId: "sender-1",
+        senderName: "Customer",
+        timestamp: new Date(),
+      } as unknown as InboundMessagePayload);
+
+      expect(res.isDuplicate).toBe(true);
+      // Crucial: releaseTechnicalReviewHold must NEVER have been called on duplicate!
+      expect(releaseHoldMock).not.toHaveBeenCalled();
     });
   });
 });

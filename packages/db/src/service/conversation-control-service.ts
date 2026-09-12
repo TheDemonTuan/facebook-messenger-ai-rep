@@ -90,7 +90,9 @@ export class ConversationControlService {
     const now = new Date();
 
     const runInTx = async (dbTx: DatabaseOrTx): Promise<ConversationControl> => {
-      const [current] = await dbTx
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const [current] = await dbTx
         .select({
           inboundVersion: conversations.inboundVersion,
           controlEpoch: conversations.controlEpoch,
@@ -166,6 +168,9 @@ export class ConversationControlService {
           : [{ id: conversationId }];
 
         if (updated.length === 0) {
+          if (attempt < maxAttempts) {
+            continue;
+          }
           const fresh = await this.get(conversationId, dbTx);
           if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
           return fresh;
@@ -216,6 +221,9 @@ export class ConversationControlService {
         : [{ id: conversationId }];
 
       if (updated.length === 0) {
+        if (attempt < maxAttempts) {
+          continue;
+        }
         const fresh = await this.get(conversationId, dbTx);
         if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
         return fresh;
@@ -229,7 +237,11 @@ export class ConversationControlService {
         suppressedThroughInboundVersion: current.inboundVersion,
         changed: true,
       };
-    };
+    }
+    const fresh = await this.get(conversationId, dbTx);
+    if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
+    return fresh;
+  };
 
     if (tx) {
       return runInTx(tx);
@@ -406,9 +418,11 @@ export class ConversationControlService {
         .limit(1);
 
       if (!current) return null;
-      if (current.mode !== "REVIEW_HOLD" || current.controlReason !== reason) {
+      const currentMode = (current.mode || (current as unknown as { replyControlMode?: string }).replyControlMode || "AUTO") as ReplyControlMode;
+      const currentReason = current.controlReason ?? (current as unknown as { reason?: string }).reason ?? null;
+      if (currentMode !== "REVIEW_HOLD" || currentReason !== reason) {
         return {
-          mode: current.mode as ReplyControlMode,
+          mode: currentMode,
           epoch: current.controlEpoch ?? 0,
           holdUntil: null,
           suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
@@ -416,7 +430,7 @@ export class ConversationControlService {
       }
 
       const epoch = (current.controlEpoch ?? 0) + 1;
-      const updated = await dbTx
+      const updateQuery = dbTx
         .update(conversations)
         .set({
           replyControlMode: "AUTO",
@@ -433,8 +447,11 @@ export class ConversationControlService {
             eq(conversations.replyControlMode, "REVIEW_HOLD"),
             eq(conversations.controlEpoch, current.controlEpoch ?? 0)
           )
-        )
-        .returning({ id: conversations.id });
+        );
+
+      const updated = typeof (updateQuery as { returning?: unknown }).returning === "function"
+        ? await (updateQuery as unknown as { returning: (arg: unknown) => Promise<unknown[]> }).returning({ id: conversations.id })
+        : [{ id: conversationId }];
 
       if (updated.length === 0) {
         return await this.get(conversationId, dbTx);
@@ -505,10 +522,7 @@ export class ConversationControlService {
             now.getTime() - humanSessionStartedAt.getTime() >= options.maxSessionMs
         );
 
-      const isReviewHoldUncertain =
-        mode === "REVIEW_HOLD" && controlReason === "SEND_UNCERTAIN";
-
-      if (!isExpiredDraft && !isExpiredSession && !isMaxExceeded && !isReviewHoldUncertain) {
+      if (!isExpiredDraft && !isExpiredSession && !isMaxExceeded) {
         if (mode !== "AUTO") {
           await dbTx
             .update(conversations)
@@ -544,8 +558,7 @@ export class ConversationControlService {
 
       // Automatic expiry must honor the channel policy. Explicit operator release
       // uses a separate transition and is never blocked by this setting.
-      // SEND_UNCERTAIN review hold is a technical ambiguity hold, not a human takeover.
-      if (!isReviewHoldUncertain && options?.autoResumeAfterHuman === false) {
+      if (options?.autoResumeAfterHuman === false) {
         return {
           mode,
           epoch: controlEpoch,
@@ -554,22 +567,15 @@ export class ConversationControlService {
         };
       }
 
-      // Transition expired human mode or resolved technical hold back to AUTO
+      // Transition expired human mode back to AUTO
       const epoch = controlEpoch + 1;
-      const reason = isReviewHoldUncertain
-        ? "SEND_UNCERTAIN_AUTO_RESUMED"
-        : isExpiredDraft
+      const reason = isExpiredDraft
         ? "DRAFT_LEASE_EXPIRED"
         : isMaxExceeded
         ? "HUMAN_SESSION_MAX_EXCEEDED"
         : "HUMAN_SESSION_EXPIRED";
 
-      const expiryCondition = isReviewHoldUncertain
-        ? and(
-            eq(conversations.replyControlMode, "REVIEW_HOLD"),
-            eq(conversations.controlEpoch, controlEpoch)
-          )
-        : isExpiredDraft
+      const expiryCondition = isExpiredDraft
         ? and(
             eq(conversations.replyControlMode, "HUMAN_DRAFT"),
             eq(conversations.controlEpoch, controlEpoch),
@@ -674,76 +680,90 @@ export class ConversationControlService {
     if (!HUMAN_MODES.includes(mode)) throw new Error(`Invalid human control mode ${mode}`);
     const now = new Date();
     const runInTx = async (tx: DatabaseOrTx): Promise<ConversationControl> => {
-      const [current] = await tx
-        .select({
-          inboundVersion: conversations.inboundVersion,
-          controlEpoch: conversations.controlEpoch,
-          replyControlMode: conversations.replyControlMode,
-          humanHoldUntil: conversations.humanHoldUntil,
-        })
-        .from(conversations)
-        .where(eq(conversations.id, conversationId))
-        .limit(1);
-      if (!current) throw new Error(`Conversation ${conversationId} not found`);
+      const maxAttempts = mode === "REVIEW_HOLD" ? 1 : 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const [current] = await tx
+          .select({
+            inboundVersion: conversations.inboundVersion,
+            controlEpoch: conversations.controlEpoch,
+            replyControlMode: conversations.replyControlMode,
+            humanHoldUntil: conversations.humanHoldUntil,
+            draftLeaseExpiresAt: conversations.draftLeaseExpiresAt,
+          })
+          .from(conversations)
+          .where(eq(conversations.id, conversationId))
+          .limit(1);
+        if (!current) throw new Error(`Conversation ${conversationId} not found`);
 
-      // Human takeover precedence: if attempting to enter technical REVIEW_HOLD,
-      // but conversation is currently under active human control (HUMAN_PINNED or active HUMAN_SESSION),
-      // human takeover PREVAILS fail-safe. Do not overwrite human control!
-      if (mode === "REVIEW_HOLD") {
-        const isPinned = current.replyControlMode === "HUMAN_PINNED";
-        const isActiveSession =
-          current.replyControlMode === "HUMAN_SESSION" &&
-          Boolean(current.humanHoldUntil && current.humanHoldUntil > now);
-        if (isPinned || isActiveSession) {
-          return {
-            mode: current.replyControlMode as ReplyControlMode,
-            epoch: current.controlEpoch,
-            holdUntil: current.humanHoldUntil,
-            suppressedThroughInboundVersion: current.inboundVersion,
-            changed: false,
-          };
+        // Human takeover precedence: if attempting to enter technical REVIEW_HOLD,
+        // but conversation is currently under active human control (HUMAN_PINNED, active HUMAN_SESSION, or active HUMAN_DRAFT),
+        // human takeover PREVAILS fail-safe. Do not overwrite human control!
+        if (mode === "REVIEW_HOLD") {
+          const isPinned = current.replyControlMode === "HUMAN_PINNED";
+          const isActiveSession =
+            current.replyControlMode === "HUMAN_SESSION" &&
+            Boolean(current.humanHoldUntil && current.humanHoldUntil > now);
+          const isActiveDraft =
+            current.replyControlMode === "HUMAN_DRAFT" &&
+            Boolean(current.draftLeaseExpiresAt && current.draftLeaseExpiresAt > now);
+          if (isPinned || isActiveSession || isActiveDraft) {
+            return {
+              mode: current.replyControlMode as ReplyControlMode,
+              epoch: current.controlEpoch,
+              holdUntil: isActiveDraft ? current.draftLeaseExpiresAt : current.humanHoldUntil,
+              suppressedThroughInboundVersion: current.inboundVersion,
+              changed: false,
+            };
+          }
         }
+
+        const epoch = current.controlEpoch + 1;
+        const updateQuery = tx
+          .update(conversations)
+          .set({
+            replyControlMode: mode,
+            controlEpoch: epoch,
+            controlReason: reason,
+            controlChangedAt: now,
+            controlledByUserId: userId ?? null,
+            lastHumanOutboundAt: outboundRef ? now : undefined,
+            lastHumanOutboundRef: outboundRef ?? undefined,
+            humanSessionStartedAt: mode === "HUMAN_SESSION" ? now : undefined,
+            humanSessionLastActivityAt: mode === "HUMAN_SESSION" ? now : undefined,
+            humanHoldUntil: holdUntil,
+            draftLeaseId: null,
+            draftLeaseExpiresAt: null,
+            manualMode: true,
+            status: "MANUAL",
+            suppressedThroughInboundVersion: current.inboundVersion,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(conversations.id, conversationId),
+              eq(conversations.controlEpoch, current.controlEpoch)
+            )
+          );
+        const updated = typeof updateQuery.returning === "function"
+          ? await updateQuery.returning({ id: conversations.id })
+          : [{ id: conversationId }];
+
+        if (updated.length === 0) {
+          if (attempt < maxAttempts) {
+            continue;
+          }
+          const fresh = await this.get(conversationId, tx);
+          if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
+          return fresh;
+        }
+
+        await this.cancelQueuedAi(conversationId, tx);
+        return { mode, epoch, holdUntil, suppressedThroughInboundVersion: current.inboundVersion, changed: true };
       }
 
-      const epoch = current.controlEpoch + 1;
-      const updateQuery = tx
-        .update(conversations)
-        .set({
-          replyControlMode: mode,
-          controlEpoch: epoch,
-          controlReason: reason,
-          controlChangedAt: now,
-          controlledByUserId: userId ?? null,
-          lastHumanOutboundAt: outboundRef ? now : undefined,
-          lastHumanOutboundRef: outboundRef ?? undefined,
-          humanSessionStartedAt: mode === "HUMAN_SESSION" ? now : undefined,
-          humanSessionLastActivityAt: mode === "HUMAN_SESSION" ? now : undefined,
-          humanHoldUntil: holdUntil,
-          draftLeaseId: null,
-          draftLeaseExpiresAt: null,
-          manualMode: true,
-          status: "MANUAL",
-          suppressedThroughInboundVersion: current.inboundVersion,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(conversations.id, conversationId),
-            eq(conversations.controlEpoch, current.controlEpoch)
-          )
-        );
-      const updated = typeof updateQuery.returning === "function"
-        ? await updateQuery.returning({ id: conversations.id })
-        : [{ id: conversationId }];
-
-      if (updated.length === 0) {
-        const fresh = await this.get(conversationId, tx);
-        if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
-        return fresh;
-      }
-
-      await this.cancelQueuedAi(conversationId, tx);
-      return { mode, epoch, holdUntil, suppressedThroughInboundVersion: current.inboundVersion, changed: true };
+      const fresh = await this.get(conversationId, tx);
+      if (!fresh) throw new Error(`Conversation ${conversationId} not found`);
+      return fresh;
     };
 
     return typeof (this.db as unknown as { transaction?: unknown }).transaction === "function"

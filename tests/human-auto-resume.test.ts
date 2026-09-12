@@ -265,7 +265,7 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     expect(state.conv.manualMode).toBe(true);
   });
 
-  it("H5b: REVIEW_HOLD with SEND_UNCERTAIN automatically releases back to AUTO on customer inbound", async () => {
+  it("H5b: REVIEW_HOLD with SEND_UNCERTAIN safely releases back to AUTO via releaseTechnicalReviewHold", async () => {
     const { mockDb, state } = createMockDb({
       replyControlMode: "REVIEW_HOLD",
       controlEpoch: 35,
@@ -274,10 +274,10 @@ describe("Human Handoff & Auto Resume Tests (H1 - H8)", () => {
     });
 
     const controlService = new ConversationControlService(mockDb);
-    const normalized = await controlService.normalizeForInbound("conv-h-1", new Date());
+    const released = await controlService.releaseTechnicalReviewHold("conv-h-1", "SEND_UNCERTAIN");
 
-    expect(normalized?.mode).toBe("AUTO");
-    expect(normalized?.epoch).toBe(36);
+    expect(released?.mode).toBe("AUTO");
+    expect(released?.epoch).toBe(36);
     expect(state.conv.replyControlMode).toBe("AUTO");
     expect(state.conv.manualMode).toBe(false);
     expect(state.conv.status).toBe("WAITING_CUSTOMER");

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { closeDb, getDb, getSql, JobRepository, jobs } from "../packages/db/src/index.js";
+import { closeDb, getDb, getSql, JobRepository, jobs, conversations, outboundActions, OutboundRepository } from "../packages/db/src/index.js";
 import { eq } from "drizzle-orm";
 
 const accountId = process.env.DEFAULT_CHANNEL_ACCOUNT_ID || "personal-messenger";

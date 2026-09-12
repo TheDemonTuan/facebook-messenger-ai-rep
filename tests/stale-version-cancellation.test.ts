@@ -206,4 +206,124 @@ describe("Stale Inbound Version Cancellation Race Protection", () => {
       })
     );
   });
+
+  describe("OutboundRepository Invariant Protections", () => {
+    it("abortStaleActions only cancels PENDING and TYPING, strictly preserving SEND_INTENT and SEND_UNCERTAIN", async () => {
+      let whereClausePassed: unknown;
+      let setValsPassed: { status?: string } = {};
+      const mockDb = {
+        update: vi.fn(() => ({
+          set: vi.fn((vals) => {
+            setValsPassed = vals;
+            return {
+              where: vi.fn((whereClause) => {
+                whereClausePassed = whereClause;
+                return Promise.resolve({ rowCount: 1 });
+              }),
+            };
+          }),
+        })),
+      };
+
+      const { OutboundRepository } = await import("../packages/db/src/repository/outbound-repo.js");
+      const repo = new OutboundRepository(mockDb as unknown as Database);
+
+      await repo.abortStaleActions("conv-stale-1", 5);
+
+      expect(mockDb.update).toHaveBeenCalled();
+      expect(setValsPassed.status).toBe("CANCELLED");
+      expect(whereClausePassed).toBeDefined();
+    });
+
+    it("confirmSent rejects resurrecting CANCELLED or ABORTED actions", async () => {
+      const { OutboundRepository } = await import("../packages/db/src/repository/outbound-repo.js");
+
+      // Mock action with status CANCELLED
+      const mockCancelledAction = {
+        id: "act-uuid-1",
+        actionId: "act-cancelled-1",
+        conversationId: "conv-1",
+        channelAccountId: "acc-1",
+        status: "CANCELLED",
+        text: "Hello",
+        inboundVersion: 1,
+        responseIndex: 0,
+      };
+
+      const mockDb = {
+        transaction: vi.fn(async (cb) => {
+          const innerTx = {
+            select: vi.fn(() => ({
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([mockCancelledAction]),
+                })),
+              })),
+            })),
+            update: vi.fn(),
+            insert: vi.fn(),
+          };
+          return cb(innerTx);
+        }),
+      };
+
+      const repo = new OutboundRepository(mockDb as unknown as Database);
+
+      await expect(
+        repo.confirmSent("act-cancelled-1", "msg-ref-1")
+      ).rejects.toThrow(/Cannot confirm action act-cancelled-1: status is CANCELLED/);
+    });
+
+    it("confirmSent succeeds for SEND_INTENT and returns updated action", async () => {
+      const { OutboundRepository } = await import("../packages/db/src/repository/outbound-repo.js");
+
+      const mockSendIntentAction = {
+        id: "act-uuid-2",
+        actionId: "act-intent-1",
+        conversationId: "conv-1",
+        channelAccountId: "acc-1",
+        status: "SEND_INTENT",
+        text: "Hello",
+        inboundVersion: 1,
+        responseIndex: 0,
+        textHash: "hash",
+      };
+
+      const confirmedAction = {
+        ...mockSendIntentAction,
+        status: "CONFIRMED",
+      };
+
+      const mockDb = {
+        transaction: vi.fn(async (cb) => {
+          const innerTx = {
+            select: vi.fn(() => ({
+              from: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([mockSendIntentAction]),
+                })),
+              })),
+            })),
+            update: vi.fn(() => ({
+              set: vi.fn(() => ({
+                where: vi.fn(() => ({
+                  returning: vi.fn().mockResolvedValue([confirmedAction]),
+                })),
+              })),
+            })),
+            insert: vi.fn(() => ({
+              values: vi.fn(() => ({
+                onConflictDoNothing: vi.fn().mockResolvedValue({}),
+              })),
+            })),
+          };
+          return cb(innerTx);
+        }),
+      };
+
+      const repo = new OutboundRepository(mockDb as unknown as Database);
+      const result = await repo.confirmSent("act-intent-1", "msg-ref-2");
+      expect(result.status).toBe("CONFIRMED");
+    });
+  });
 });

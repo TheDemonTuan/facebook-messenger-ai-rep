@@ -40,6 +40,7 @@ export interface TransitionActionOptions {
 }
 
 const TERMINAL_STATUSES: OutboundActionStatus[] = ["CONFIRMED", "SENT", "CANCELLED", "ABORTED"];
+const CONFIRMABLE_STATUSES: OutboundActionStatus[] = ["SEND_INTENT", "SENDING", "SEND_UNCERTAIN", "UNCONFIRMED"];
 
 const VALID_TRANSITIONS: Record<string, OutboundActionStatus[]> = {
   PENDING: ["TYPING", "CANCELLED", "FAILED", "ABORTED"],
@@ -339,6 +340,28 @@ export class OutboundRepository {
         return action;
       }
 
+      // Disallow resurrecting CANCELLED or ABORTED actions; only allow confirmable active send states
+      if (!CONFIRMABLE_STATUSES.includes(action.status as OutboundActionStatus)) {
+        throw new Error(
+          `Cannot confirm action ${actionId}: status is ${action.status} (expected one of ${CONFIRMABLE_STATUSES.join(", ")})`
+        );
+      }
+
+      const whereConditions = [
+        eq(outboundActions.id, action.id),
+        inArray(outboundActions.status, CONFIRMABLE_STATUSES),
+      ];
+      if (options?.ownerToken) {
+        whereConditions.push(
+          sql`(${outboundActions.ownerToken} = ${options.ownerToken} OR ${outboundActions.claimToken} = ${options.ownerToken} OR ${outboundActions.ownerToken} IS NULL)`
+        );
+      }
+      if (options?.fencingEpoch !== undefined) {
+        whereConditions.push(
+          sql`(${outboundActions.fencingEpoch} = ${options.fencingEpoch} OR ${outboundActions.fencingToken} = ${options.fencingEpoch} OR ${outboundActions.fencingEpoch} = 0)`
+        );
+      }
+
       // Update action status to CONFIRMED
       const [updated] = await innerTx
         .update(outboundActions)
@@ -356,8 +379,12 @@ export class OutboundRepository {
             : {}),
           updatedAt: now,
         })
-        .where(eq(outboundActions.id, action.id))
+        .where(and(...whereConditions))
         .returning();
+
+      if (!updated) {
+        throw new Error(`Failed to confirm action ${actionId}: status or fencing token mismatch`);
+      }
 
       // Insert outbound message row
       const externalMsgId = externalMessageRef || `outbound-${action.actionId}`;
@@ -437,7 +464,7 @@ export class OutboundRepository {
         and(
           eq(outboundActions.conversationId, conversationId),
           sql`${outboundActions.inboundVersion} < ${currentInboundVersion}`,
-          notInArray(outboundActions.status, TERMINAL_STATUSES)
+          inArray(outboundActions.status, ["PENDING", "TYPING"])
         )
       );
   }

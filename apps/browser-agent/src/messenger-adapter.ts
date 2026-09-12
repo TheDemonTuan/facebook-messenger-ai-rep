@@ -358,19 +358,15 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           bubbleId: lastBubble.id,
           text: outText,
         });
-        const isBot = typeof res === "string" ? res !== "NONE" : Boolean(res);
+        const isBot = typeof res === "string" ? res === "EXACT_EXTERNAL_REF" : Boolean(res);
         if (isBot) return false;
       }
 
-      const recentSends = this.getRecentBotSends(threadId);
-      const normOut = normalizeForTextComparison(outText);
-      const isBotSent = recentSends.some((botMsg) => {
-        return (
-          botMsg.text.toLowerCase() === outText.toLowerCase() ||
-          (normOut.length >= 5 && botMsg.normalizedText === normOut)
-        );
-      });
-      return !isBotSent;
+      if (this.confirmedOutboundMessageIds.has(lastBubble.id)) {
+        return false;
+      }
+
+      return true;
     } catch {
       return false;
     }
@@ -1039,17 +1035,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
 
-          const recentSends = this.getRecentBotSends(threadInfo.threadId, now);
-          const normOut = normalizeForTextComparison(outText);
-          const isRecentBotSent = recentSends.some((botMsg) => {
-            return (
-              botMsg.text.toLowerCase() === outText.toLowerCase() ||
-              (normOut.length >= 5 && botMsg.normalizedText === normOut)
-            );
-          });
-
           const isConfirmedBotId = this.confirmedOutboundMessageIds.has(lastOutBubble.id);
-          const isBot = isConfirmedBotId || isDurableBot || isRecentBotSent;
+          const isBot = isConfirmedBotId || isDurableBot;
 
           if (isBot) {
             // Already confirmed bot send, record as seen
