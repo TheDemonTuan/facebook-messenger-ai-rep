@@ -26,6 +26,7 @@ export class MockChannelAdapter implements ChannelAdapter {
   public currentOpenRef: ActiveConversationRef | null = null;
   public composerText: string = "";
   public sentMessages: MockSentMessage[] = [];
+  public recentBotSends = new Map<string, Array<{ text: string; sentAt: number }>>();
   public isHealthy: boolean = true;
   public checkpointTriggered: boolean = false;
   public rateLimitTriggered: boolean = false;
@@ -160,6 +161,17 @@ export class MockChannelAdapter implements ChannelAdapter {
     });
     this.composerText = "";
     return { sent: true };
+  }
+
+  rememberBotSentText(text: string, threadId?: string): void {
+    if (!threadId || !text.trim()) return;
+    const recent = this.recentBotSends.get(threadId) ?? [];
+    recent.push({ text: text.trim(), sentAt: Date.now() });
+    this.recentBotSends.set(threadId, recent);
+  }
+
+  getRecentBotSends(threadId: string): Array<{ text: string; sentAt: number }> {
+    return this.recentBotSends.get(threadId) ?? [];
   }
 
   async verifySent(

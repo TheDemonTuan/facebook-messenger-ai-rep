@@ -173,7 +173,7 @@ async function main() {
   // Register durable bot checker so process restarts do not mistake bot actions for human outbound
   if (typeof adapter.setDurableBotOutboundChecker === "function") {
     adapter.setDurableBotOutboundChecker(async ({ threadId, bubbleId, text }) => {
-      return await outboundRepo.isBotOutbound({
+      return await outboundRepo.checkBotOutboundEvidence({
         channelAccountId: env.DEFAULT_CHANNEL_ACCOUNT_ID,
         externalMessageRef: bubbleId,
         text,

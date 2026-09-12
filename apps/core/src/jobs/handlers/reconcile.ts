@@ -1,7 +1,7 @@
 import type { JobExecutionContext } from "@messenger/db";
 import type { Database, JobRepository, EventRepository, OutboxRepository } from "@messenger/db";
 import { channelAccounts, conversations, turns, outboundActions, incidents, messages, ConversationControlService } from "@messenger/db";
-import { eq, and, or, sql, lte, gte, isNotNull, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, sql, lte, gte, gt, isNotNull, isNull, inArray } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../../sse/outbox-broadcaster.js";
 
 export interface ReconcileHandlerDeps {
@@ -150,7 +150,8 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
       });
     }
 
-    // 6. Reconcile outbound actions stuck in SEND_INTENT (phase-aware: Enter was pressed, must transition to SEND_UNCERTAIN and suspend channel)
+    // 6. Reconcile outbound actions stuck in SEND_INTENT (phase-aware: Enter was pressed, must transition to SEND_UNCERTAIN)
+    // CRITICAL: Isolate failure to the specific conversation via REVIEW_HOLD. Do NOT suspend the entire channel account!
     const staleSendIntent = await db
       .update(outboundActions)
       .set({
@@ -182,20 +183,7 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
         payload: { actionId: a.id, reason: "Send verification timed out after send intent" },
       });
 
-      // Suspend channel account fail-closed
-      await db
-        .update(channelAccounts)
-        .set({
-          isSuspended: true,
-          status: "SUSPENDED",
-          statusReason: `Uncertain outbound delivery for action ${a.id} - suspended by reconciler`,
-          updatedAt: now,
-        })
-        .where(eq(channelAccounts.id, a.channelAccountId));
-
-      await broadcaster.broadcast("channel:status", { status: "SUSPENDED", isSuspended: true });
-
-      // Isolate to conversation using REVIEW_HOLD
+      // Isolate to conversation using REVIEW_HOLD (channel remains RUNNING for other customers)
       const controlService = new ConversationControlService(db);
       await controlService.acquireReviewHold(a.conversationId, "SEND_UNCERTAIN").catch(() => {});
 
@@ -229,6 +217,7 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
           conversationId: outboundActions.conversationId,
           channelAccountId: outboundActions.channelAccountId,
           createdAt: outboundActions.createdAt,
+          startedSendingAt: outboundActions.startedSendingAt,
         })
         .from(outboundActions)
         .where(
@@ -240,13 +229,15 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
         .limit(20);
 
       for (const a of uncertainActions) {
+        const sendCutoff = a.startedSendingAt ?? a.createdAt;
         const [laterMsg] = await db
           .select({ id: messages.id })
           .from(messages)
           .where(
             and(
               eq(messages.conversationId, a.conversationId),
-              gte(messages.createdAt, a.createdAt)
+              eq(messages.direction, "INBOUND"),
+              gt(messages.createdAt, sendCutoff)
             )
           )
           .limit(1);

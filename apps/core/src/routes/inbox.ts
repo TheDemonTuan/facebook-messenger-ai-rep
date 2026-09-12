@@ -29,7 +29,7 @@ import {
   ConversationControlService,
   SettingsRepository,
 } from "@messenger/db";
-import { eq, and, or, desc, sql, ne, inArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, ne, inArray, isNull } from "drizzle-orm";
 import type { OutboxBroadcaster } from "../sse/outbox-broadcaster.js";
 import { getHumanReadableReason, type SessionUser, type MessagePart } from "@messenger/contracts";
 import { requireRole, hasRolePermission } from "../auth/roles.js";
@@ -865,7 +865,15 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             await db
               .update(channelAccounts)
               .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
-              .where(eq(channelAccounts.id, targetChannelAccountId));
+              .where(
+                and(
+                  eq(channelAccounts.id, targetChannelAccountId),
+                  or(
+                    isNull(channelAccounts.statusReason),
+                    sql`${channelAccounts.statusReason} ILIKE '%uncertain%'`
+                  )
+                )
+              );
 
             await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
           }
@@ -950,13 +958,35 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             payload: { actionId, retryApproved: true },
           });
 
-          // Safely resume channel before enqueue
-          await db
-            .update(channelAccounts)
-            .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
-            .where(eq(channelAccounts.id, targetChannelAccountId));
+          // Safely resume channel before enqueue if no other uncertain action remains
+          const remainingUncertain = await db
+            .select({ id: outboundActions.id })
+            .from(outboundActions)
+            .where(
+              and(
+                eq(outboundActions.channelAccountId, targetChannelAccountId),
+                ne(outboundActions.actionId, action.actionId),
+                sql`${outboundActions.status} IN ('SEND_UNCERTAIN', 'UNCONFIRMED')`
+              )
+            )
+            .limit(1);
 
-          await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
+          if (remainingUncertain.length === 0) {
+            await db
+              .update(channelAccounts)
+              .set({ isSuspended: false, status: "RUNNING", statusReason: null, updatedAt: new Date() })
+              .where(
+                and(
+                  eq(channelAccounts.id, targetChannelAccountId),
+                  or(
+                    isNull(channelAccounts.statusReason),
+                    sql`${channelAccounts.statusReason} ILIKE '%uncertain%'`
+                  )
+                )
+              );
+
+            await broadcaster.broadcast("channel:status", { status: "RUNNING", isPaused: false, isSuspended: false });
+          }
 
           if (jobRepo) {
             const convData = await convRepo.getConversationById(conversationId);
@@ -1015,9 +1045,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             .where(eq(conversations.id, conversationId))
             .limit(1);
 
-          if (convRetry && (convRetry.mode === "REVIEW_HOLD" || convRetry.reason === "SEND_UNCERTAIN" || convRetry.reason === "MANUAL_MODE_SET")) {
+          if (convRetry && convRetry.mode === "REVIEW_HOLD" && convRetry.reason === "SEND_UNCERTAIN") {
             const controlService = new ConversationControlService(db);
-            await controlService.release(conversationId, "RECONCILED_RETRY");
+            await controlService.releaseTechnicalReviewHold(conversationId, "SEND_UNCERTAIN");
           }
 
           return reply.send({ success: true, actionId, status: "PENDING" });

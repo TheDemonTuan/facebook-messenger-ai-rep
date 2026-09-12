@@ -412,6 +412,9 @@ describe("Browser Agent PostgreSQL Foundation & Resilient DOM Architecture", () 
         expect.stringMatching(/^mid\.\$mock_/),
         expect.objectContaining({ ownerToken: "owner-token-presend" })
       );
+      expect(adapter.getRecentBotSends("thread-presend")).toEqual([
+        expect.objectContaining({ text: "Dạ chào bạn, đơn hàng của bạn đã được xác nhận!" }),
+      ]);
       expect(mockTurnRepo.transitionStatus).toHaveBeenCalledWith(
         "11111111-1111-4111-8111-111111111111",
         "DRAFT_READY",

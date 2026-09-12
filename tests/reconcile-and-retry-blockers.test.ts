@@ -380,7 +380,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       expect(mockBroadcaster.broadcast).not.toHaveBeenCalledWith("channel:status", expect.objectContaining({ status: "SUSPENDED" }));
     });
 
-    it("stale SEND_INTENT enters SEND_UNCERTAIN via startedSendingAt and suspends channel fail-closed", async () => {
+    it("stale SEND_INTENT enters SEND_UNCERTAIN via startedSendingAt and isolates failure to conversation REVIEW_HOLD without suspending channel", async () => {
       const updatedActions: Record<string, unknown>[] = [];
       const updatedChannels: Record<string, unknown>[] = [];
       const recordedEvents: Record<string, unknown>[] = [];
@@ -408,7 +408,7 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
         })),
       };
 
-      // Also track direct channel update on suspension
+      // Also track direct channel update if any
       mockDb.update.mockImplementation((table: Record<string | symbol, unknown>) => ({
         set: vi.fn((setData: Record<string, unknown>) => ({
           where: vi.fn(() => {
@@ -467,15 +467,13 @@ describe("High Blockers: Retry Channel Resumption, Phase-Aware Outbound Reconcil
       // Event recorded as SEND_UNCERTAIN
       expect(recordedEvents.some((e) => e.type === "SEND_UNCERTAIN")).toBe(true);
 
-      // Crucially: Channel IS suspended!
-      expect(updatedChannels.length).toBeGreaterThanOrEqual(1);
-      expect(updatedChannels[0].isSuspended).toBe(true);
-      expect(updatedChannels[0].status).toBe("SUSPENDED");
+      // Crucially: Channel is NOT suspended fail-closed (isolated to conversation)
+      expect(updatedChannels.some((c) => c.isSuspended === true)).toBe(false);
 
-      // Broadcaster informed of suspension
-      expect(mockBroadcaster.broadcast).toHaveBeenCalledWith(
+      // Broadcaster does NOT announce channel suspension
+      expect(mockBroadcaster.broadcast).not.toHaveBeenCalledWith(
         "channel:status",
-        expect.objectContaining({ status: "SUSPENDED", isSuspended: true })
+        expect.objectContaining({ status: "SUSPENDED" })
       );
     });
 

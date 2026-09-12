@@ -13,6 +13,8 @@ export interface PreSendMarker {
   capturedAt: Date;
 }
 
+export type BotOutboundEvidence = "EXACT_EXTERNAL_REF" | "STRICT_TEXT_MATCH" | "NONE";
+
 export interface ChannelAdapterOptions {
   channelAccountId?: string;
   timeZone?: string;
@@ -104,6 +106,11 @@ export interface ChannelAdapter {
   ): Promise<{ verified: boolean; messageRef?: string }>;
 
   /**
+   * Registers a confirmed bot send before durable persistence completes.
+   */
+  rememberBotSentText?(text: string, threadId?: string): void;
+
+  /**
    * Run a health check against the channel (DOM locator check, session validity, checkpoints).
    */
   health(): Promise<ChannelHealthReport>;
@@ -153,4 +160,11 @@ export interface ChannelAdapter {
    * Release send lock to resume observer.
    */
   releaseSendLock?: () => void;
+
+  /**
+   * Register durable bot checker to differentiate bot from external human outbound and anti-echo.
+   */
+  setDurableBotOutboundChecker?(
+    checker: (info: { threadId: string; bubbleId?: string; text?: string }) => Promise<BotOutboundEvidence | boolean>
+  ): void;
 }

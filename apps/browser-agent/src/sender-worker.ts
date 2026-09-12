@@ -608,7 +608,9 @@ export class SenderWorkerService {
     );
 
     if (sendResult.sent && verifyResult.verified && verifyResult.messageRef) {
-      // Send CONFIRMED!
+      // Register the bot send before the observer can classify the new outgoing bubble.
+      const confirmedThreadId = externalThreadRef.match(/\/messages\/(?:e2ee\/)?t\/([^/?#]+)/i)?.[1] || externalThreadRef;
+      this.adapter.rememberBotSentText?.(text, confirmedThreadId);
       console.log(`[Sender Worker] Message delivery confirmed: ${verifyResult.messageRef}`);
       await this.outboundRepo.confirmSent(actionId, verifyResult.messageRef, { ownerToken, fencingEpoch });
 

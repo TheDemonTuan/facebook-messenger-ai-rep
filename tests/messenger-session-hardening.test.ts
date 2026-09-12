@@ -928,6 +928,43 @@ describe("Messenger session hardening", () => {
     expect(internals(adapter).confirmedOutboundMessageIds.has("mid.reused-latest")).toBe(true);
   });
 
+  it("does not classify a just-confirmed bot bubble as external human outbound", async () => {
+    const adapter = new PlaywrightMessengerAdapter({
+      profileDir: "./test-profile",
+      channelAccountId: "account-1",
+    });
+    const externalOutboundCallback = vi.fn().mockResolvedValue(undefined);
+    Object.assign(internals(adapter), {
+      externalOutboundCallback,
+      threadBaselinesEstablished: new Set(["thread-1"]),
+      seenOutgoingBubbleIds: new Set<string>(),
+      confirmedOutboundMessageIds: new Set(["mid.confirmed-bot"]),
+    });
+
+    await internals(adapter).processInboundBubbles(
+      {
+        ok: true,
+        isDegraded: false,
+        bubbles: [{
+          id: "mid.confirmed-bot",
+          text: "Dạ shop nhận được tin nhắn rồi nha 😄",
+          isOutgoing: true,
+          threadKind: "DIRECT",
+          threadReliability: "VERIFIED",
+          threadEvidence: [],
+          senderEvidence: [],
+          mentions: [],
+          observedTimestamp: new Date(),
+        }],
+        threadClassification: { kind: "DIRECT", reliability: "VERIFIED", evidence: [] },
+      },
+      { threadId: "thread-1", customerName: "Customer", avatarUrl: null },
+      true
+    );
+
+    expect(externalOutboundCallback).not.toHaveBeenCalled();
+  });
+
   it("does not emit a confirmed outgoing id when the DOM later misclassifies it as incoming", async () => {
     const adapter = new PlaywrightMessengerAdapter({
       profileDir: "./test-profile",

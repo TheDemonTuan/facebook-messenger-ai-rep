@@ -141,10 +141,12 @@ export class ConversationRepository {
         // Mock / fallback
       }
 
-      if (existingConvRow && options?.autoResumeAfterHuman !== false) {
+      if (existingConvRow) {
         try {
           const previousMode = existingConvRow.replyControlMode;
-          const normalized = await this.controlService.normalizeForInbound(existingConvRow.id, now);
+          const normalized = await this.controlService.normalizeForInbound(existingConvRow.id, now, {
+            autoResumeAfterHuman: options?.autoResumeAfterHuman,
+          });
           if (normalized) {
             existingConvRow.replyControlMode = normalized.mode;
             existingConvRow.humanHoldUntil = normalized.holdUntil;
@@ -158,6 +160,15 @@ export class ConversationRepository {
                 inboundVersion: existingConvRow.inboundVersion,
                 actor: "SYSTEM",
                 payload: { reason: "human_session_expired" },
+              });
+            } else if (normalized.changed && previousMode === "REVIEW_HOLD" && normalized.mode === "AUTO") {
+              await this.db.insert(conversationEvents).values({
+                channelAccountId: payload.channelAccountId,
+                conversationId: existingConvRow.id,
+                type: "CONVERSATION_RELEASED",
+                inboundVersion: existingConvRow.inboundVersion,
+                actor: "SYSTEM",
+                payload: { reason: "send_uncertain_auto_resumed" },
               });
             }
           }
@@ -792,7 +803,7 @@ export class ConversationRepository {
 
         // Abort stale outbound actions for this conversation
         // Crucial invariant: NEVER cancel actions that have reached send intent or are uncertain!
-        // Stale actions in PENDING, TYPING, or CLAIMED can be cancelled, but SEND_INTENT, SENDING,
+        // Stale actions in PENDING or TYPING can be cancelled, but SEND_INTENT, SENDING,
         // SEND_UNCERTAIN, and UNCONFIRMED must be preserved for audit and reconciliation.
         await tx
           .update(outboundActions)
@@ -805,7 +816,7 @@ export class ConversationRepository {
             and(
               eq(outboundActions.conversationId, conversationId),
               sql`${outboundActions.inboundVersion} < ${newInboundVersion}`,
-              inArray(outboundActions.status, ["PENDING", "TYPING", "CLAIMED"])
+              inArray(outboundActions.status, ["PENDING", "TYPING"])
             )
           );
       }

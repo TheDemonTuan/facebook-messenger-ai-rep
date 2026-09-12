@@ -1,5 +1,5 @@
 import { chromium, type BrowserContext, type Page } from "playwright";
-import type { ChannelAdapter, PreSendMarker, BubbleParseResult, ParsedSidebarThread } from "@messenger/channel";
+import type { ChannelAdapter, PreSendMarker, BubbleParseResult, ParsedSidebarThread, BotOutboundEvidence } from "@messenger/channel";
 import {
   TypingEngine,
   parseMessengerBubblesFromHtml,
@@ -131,7 +131,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private recentBotSends = new Map<string, Array<{ text: string; normalizedText: string; sentAt: number }>>();
   private seenOutgoingBubbleIds = new Set<string>();
   private threadBaselinesEstablished = new Set<string>();
-  private isDurableBotOutboundChecker: ((info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>) | null = null;
+  private isDurableBotOutboundChecker: ((info: { threadId: string; bubbleId?: string; text?: string }) => Promise<BotOutboundEvidence | boolean>) | null = null;
   private externalOutboundCallback: ((outbound: {
     threadId: string;
     text: string;
@@ -298,7 +298,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   }
 
   setDurableBotOutboundChecker(
-    checker: (info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>
+    checker: (info: { threadId: string; bubbleId?: string; text?: string }) => Promise<BotOutboundEvidence | boolean>
   ): void {
     this.isDurableBotOutboundChecker = checker;
   }
@@ -353,11 +353,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (!outText && !hasMedia) return false;
 
       if (this.isDurableBotOutboundChecker) {
-        const isBot = await this.isDurableBotOutboundChecker({
+        const res = await this.isDurableBotOutboundChecker({
           threadId,
           bubbleId: lastBubble.id,
           text: outText,
         });
+        const isBot = typeof res === "string" ? res !== "NONE" : Boolean(res);
         if (isBot) return false;
       }
 
@@ -1030,11 +1031,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           let isDurableBot = false;
           if (this.isDurableBotOutboundChecker) {
             try {
-              isDurableBot = await this.isDurableBotOutboundChecker({
+              const res = await this.isDurableBotOutboundChecker({
                 threadId: threadInfo.threadId,
                 bubbleId: lastOutBubble.id,
                 text: outText,
               });
+              isDurableBot = typeof res === "string" ? res !== "NONE" : Boolean(res);
             } catch {
               // Ignore
             }
@@ -1049,7 +1051,8 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             );
           });
 
-          const isBot = isDurableBot || isRecentBotSent;
+          const isConfirmedBotId = this.confirmedOutboundMessageIds.has(lastOutBubble.id);
+          const isBot = isConfirmedBotId || isDurableBot || isRecentBotSent;
 
           if (!isBot && (outText.length > 0 || hasMedia)) {
             console.log(
@@ -1114,20 +1117,32 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         return false;
       });
 
-      let isDurableBotReply = this.confirmedOutboundMessageIds.has(bubble.id);
-      if (!isDurableBotReply && !isExactRecentBotReply && this.isDurableBotOutboundChecker) {
+      let durableBotEvidence: BotOutboundEvidence = this.confirmedOutboundMessageIds.has(bubble.id)
+        ? "EXACT_EXTERNAL_REF"
+        : "NONE";
+
+      if (durableBotEvidence === "NONE" && this.isDurableBotOutboundChecker) {
         try {
-          isDurableBotReply = await this.isDurableBotOutboundChecker({
+          const res = await this.isDurableBotOutboundChecker({
             threadId: threadInfo.threadId,
             bubbleId: bubble.id,
             text: bubbleTrimmed,
           });
+          if (typeof res === "string") {
+            durableBotEvidence = res;
+          } else if (res === true) {
+            durableBotEvidence = "STRICT_TEXT_MATCH";
+          }
         } catch {
           // Ignore
         }
       }
 
-      const shouldSuppressAsBotEcho = isDurableBotReply || (!isVerifiedCustomer && isExactRecentBotReply);
+      // If customer identity is verified (PERSON with verified reliability), text matching alone must NEVER suppress it!
+      // Only exact confirmed message ID/ref can suppress a verified customer bubble.
+      const shouldSuppressAsBotEcho =
+        durableBotEvidence === "EXACT_EXTERNAL_REF" ||
+        (!isVerifiedCustomer && (durableBotEvidence === "STRICT_TEXT_MATCH" || isExactRecentBotReply));
 
       if (shouldSuppressAsBotEcho) {
         console.log(`[BrowserAdapter] Anti-echo: Suppressed bot reply bubble "${bubble.text.slice(0, 30)}..." from customer inbound ingestion`);
@@ -1960,7 +1975,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           const textMatches =
             normBubble === normExp ||
             (normBubbleClean.length >= 5 && normBubbleClean === normExpClean) ||
-            fuzzyMatchesOutboundText(expectedText, bubbleText);
+            (b.isOutgoing && fuzzyMatchesOutboundText(expectedText, bubbleText));
           if (!textMatches) continue;
 
           const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();

@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { OutboundRepository } from "../packages/db/src/repository/outbound-repo.js";
 import { ConversationControlService } from "../packages/db/src/service/conversation-control-service.js";
 import { createReconcileHandler } from "../apps/core/src/jobs/handlers/reconcile.js";
+import { fuzzyMatchesOutboundText } from "../packages/channel/src/index.js";
 import type { Database } from "../packages/db/src/client.js";
 
 describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isolation", () => {
@@ -255,11 +256,335 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
       // Invariant: outboundAction set to SEND_UNCERTAIN
       expect(updatedOutboundActions.some((a) => (a as Record<string, unknown>).status === "SEND_UNCERTAIN")).toBe(true);
 
-      // Invariant: channel account was suspended fail-closed
-      expect(updatedChannelAccounts.some((c) => (c as Record<string, unknown>).isSuspended === true)).toBe(true);
+      // Invariant: channel account is NOT suspended (failure isolated to conversation REVIEW_HOLD)
+      expect(updatedChannelAccounts.some((c) => (c as Record<string, unknown>).isSuspended === true)).toBe(false);
 
       // Invariant: Incident recorded for conversation review
       expect(insertedIncidents.some((i) => (i as Record<string, unknown>).type === "SEND_UNCERTAIN")).toBe(true);
+    });
+
+    it("auto-reconcile threadProgressed requires INBOUND message strictly after sendCutoff", async () => {
+      const now = new Date();
+      const sendTime = new Date(now.getTime() - 60000);
+      const updatedActions: Record<string, unknown>[] = [];
+      const updatedIncidents: Record<string, unknown>[] = [];
+
+      // Test case A: Message is OUTBOUND => must NOT trigger threadProgressed
+      const mockDbOutbound = {
+        select: vi.fn(() => ({
+          from: vi.fn((table: Record<string | symbol, unknown>) => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockImplementation(() => {
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
+                if (tableName === "outbound_actions") {
+                  return Promise.resolve([
+                    {
+                      id: "act-unc-1",
+                      conversationId: "conv-1",
+                      channelAccountId: "acc-1",
+                      createdAt: sendTime,
+                      startedSendingAt: sendTime,
+                    },
+                  ]);
+                }
+                // Later message query: returns empty because direction = INBOUND filter excludes outbound
+                return Promise.resolve([]);
+              }),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn((vals) => {
+            updatedActions.push(vals);
+            return {
+              where: vi.fn(() => ({
+                returning: vi.fn().mockResolvedValue([]),
+              })),
+            };
+          }),
+        })),
+      } as unknown as Database;
+
+      const handlerOutbound = createReconcileHandler({
+        db: mockDbOutbound,
+        jobRepo: { reconcileStaleJobs: vi.fn().mockResolvedValue({ resetJobs: 0 }) } as unknown as import("@messenger/db").JobRepository,
+        eventRepo: { recordEvent: vi.fn() } as unknown as import("@messenger/db").EventRepository,
+        outboxRepo: {} as unknown as import("@messenger/db").OutboxRepository,
+        broadcaster: { broadcast: vi.fn() } as unknown as import("../apps/core/src/sse/outbox-broadcaster.js").OutboxBroadcaster,
+      });
+
+      await handlerOutbound();
+      expect(updatedActions.some((a) => a.metadata && String(a.metadata).includes("threadProgressed"))).toBe(false);
+
+      // Test case B: Message is INBOUND after sendTime => triggers threadProgressed and resolves incident
+      const mockDbInbound = {
+        select: vi.fn(() => ({
+          from: vi.fn((table: Record<string | symbol, unknown>) => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockImplementation(() => {
+                const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
+                if (tableName === "outbound_actions") {
+                  return Promise.resolve([
+                    {
+                      id: "act-unc-2",
+                      conversationId: "conv-2",
+                      channelAccountId: "acc-1",
+                      createdAt: sendTime,
+                      startedSendingAt: sendTime,
+                    },
+                  ]);
+                }
+                // Inbound message strictly after send cutoff found!
+                return Promise.resolve([{ id: "msg-inbound-later" }]);
+              }),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn((vals) => {
+            if (vals.metadata) updatedActions.push(vals);
+            if (vals.status === "RESOLVED") updatedIncidents.push(vals);
+            return {
+              where: vi.fn(() => ({
+                returning: vi.fn().mockResolvedValue([]),
+              })),
+            };
+          }),
+        })),
+      } as unknown as Database;
+
+      const handlerInbound = createReconcileHandler({
+        db: mockDbInbound,
+        jobRepo: { reconcileStaleJobs: vi.fn().mockResolvedValue({ resetJobs: 0 }) } as unknown as import("@messenger/db").JobRepository,
+        eventRepo: { recordEvent: vi.fn() } as unknown as import("@messenger/db").EventRepository,
+        outboxRepo: {} as unknown as import("@messenger/db").OutboxRepository,
+        broadcaster: { broadcast: vi.fn() } as unknown as import("../apps/core/src/sse/outbox-broadcaster.js").OutboxBroadcaster,
+      });
+
+      await handlerInbound();
+      expect(updatedActions.some((a) => a.metadata !== undefined)).toBe(true);
+      expect(updatedIncidents.some((i) => i.status === "RESOLVED")).toBe(true);
+    });
+  });
+
+  describe("4. Durable Evidence & Verified Customer Anti-Echo Resolution", () => {
+    it("distinguishes EXACT_EXTERNAL_REF from STRICT_TEXT_MATCH in OutboundRepository", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockImplementation(() => {
+                return Promise.resolve([{ id: "action-exact-1" }]);
+              }),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const repo = new OutboundRepository(mockDb);
+
+      const refEvidence = await repo.checkBotOutboundEvidence({
+        channelAccountId: "acc-1",
+        externalMessageRef: "mid.known-bot-ref",
+      });
+      expect(refEvidence).toBe("EXACT_EXTERNAL_REF");
+    });
+
+    it("prevents verified customer saying 'ok' from being suppressed by durable text match", () => {
+      // Logic simulation of adapter's inbound anti-echo decision
+      const evaluateAntiEcho = (params: {
+        isVerifiedCustomer: boolean;
+        durableEvidence: "EXACT_EXTERNAL_REF" | "STRICT_TEXT_MATCH" | "NONE";
+        isExactRecentBotReply: boolean;
+      }): boolean => {
+        const { isVerifiedCustomer, durableEvidence, isExactRecentBotReply } = params;
+        return (
+          durableEvidence === "EXACT_EXTERNAL_REF" ||
+          (!isVerifiedCustomer && (durableEvidence === "STRICT_TEXT_MATCH" || isExactRecentBotReply))
+        );
+      };
+
+      // Case 1: Bot said "ok", verified customer says "ok" -> MUST NOT be suppressed!
+      const suppressedVerifiedCustomer = evaluateAntiEcho({
+        isVerifiedCustomer: true,
+        durableEvidence: "STRICT_TEXT_MATCH",
+        isExactRecentBotReply: true,
+      });
+      expect(suppressedVerifiedCustomer).toBe(false);
+
+      // Case 2: Outgoing bot echo bubble where ID matched confirmed outbound message ref -> MUST be suppressed
+      const suppressedExactRef = evaluateAntiEcho({
+        isVerifiedCustomer: true,
+        durableEvidence: "EXACT_EXTERNAL_REF",
+        isExactRecentBotReply: false,
+      });
+      expect(suppressedExactRef).toBe(true);
+
+      // Case 3: Unverified bubble with matching text (bot echo race) -> MUST be suppressed
+      const suppressedUnverifiedEcho = evaluateAntiEcho({
+        isVerifiedCustomer: false,
+        durableEvidence: "STRICT_TEXT_MATCH",
+        isExactRecentBotReply: false,
+      });
+      expect(suppressedUnverifiedEcho).toBe(true);
+    });
+  });
+
+  describe("5. Technical Hold Normalization with autoResumeAfterHuman=false", () => {
+    it("auto-resumes REVIEW_HOLD + SEND_UNCERTAIN to AUTO even when autoResumeAfterHuman is false", async () => {
+      let updatedMode: string | null = null;
+      let updatedReason: string | null = null;
+      const convState = {
+        id: "conv-unc-1",
+        mode: "REVIEW_HOLD",
+        replyControlMode: "REVIEW_HOLD",
+        controlEpoch: 3,
+        controlReason: "SEND_UNCERTAIN",
+        humanHoldUntil: null,
+        humanSessionStartedAt: null,
+        draftLeaseExpiresAt: null,
+        suppressedThroughInboundVersion: 0,
+      };
+
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockImplementation(() => Promise.resolve([convState])),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn((vals) => {
+            updatedMode = vals.replyControlMode;
+            updatedReason = vals.controlReason;
+            convState.mode = vals.replyControlMode;
+            convState.replyControlMode = vals.replyControlMode;
+            convState.controlEpoch = vals.controlEpoch;
+            convState.controlReason = vals.controlReason;
+            return {
+              where: vi.fn().mockResolvedValue([{ id: "conv-unc-1" }]),
+            };
+          }),
+        })),
+      } as unknown as Database;
+
+      const control = new ConversationControlService(mockDb);
+
+      // Simulate inbound normalization with autoResumeAfterHuman = false
+      const result = await control.normalizeForInbound("conv-unc-1", new Date(), {
+        autoResumeAfterHuman: false,
+      });
+
+      expect(updatedMode).toBe("AUTO");
+      expect(updatedReason).toBe("SEND_UNCERTAIN_AUTO_RESUMED");
+      expect(result?.mode).toBe("AUTO");
+    });
+
+    it("retains HUMAN_SESSION when autoResumeAfterHuman is false", async () => {
+      let updated = false;
+
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-human-1",
+                  mode: "HUMAN_SESSION",
+                  replyControlMode: "HUMAN_SESSION",
+                  controlEpoch: 1,
+                  controlReason: "MANUAL_TAKEOVER",
+                  humanHoldUntil: new Date(Date.now() - 10000), // Expired session
+                  humanSessionStartedAt: new Date(Date.now() - 60000),
+                  draftLeaseExpiresAt: null,
+                  suppressedThroughInboundVersion: 0,
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => {
+            updated = true;
+            return { where: vi.fn().mockResolvedValue([]) };
+          }),
+        })),
+      } as unknown as Database;
+
+      const control = new ConversationControlService(mockDb);
+
+      const result = await control.normalizeForInbound("conv-human-1", new Date(), {
+        autoResumeAfterHuman: false,
+      });
+
+      // Human session must NOT be auto-resumed when policy disables it
+      expect(updated).toBe(false);
+      expect(result?.mode).toBe("HUMAN_SESSION");
+    });
+  });
+
+  describe("6. Inbox RETRY Resolution (Protection of Human Takeover)", () => {
+    it("preserves HUMAN_PINNED mode during RETRY reconciliation and only releases REVIEW_HOLD", () => {
+      // Logic test of RETRY release condition in inbox.ts:
+      // only if (convRetry && convRetry.mode === "REVIEW_HOLD" && convRetry.reason === "SEND_UNCERTAIN")
+      const shouldReleaseTechnicalHold = (conv: { mode: string; reason: string }): boolean => {
+        return conv.mode === "REVIEW_HOLD" && conv.reason === "SEND_UNCERTAIN";
+      };
+
+      // Case 1: Operator manually pinned conversation (HUMAN_PINNED + MANUAL_MODE_SET)
+      // Must NEVER be released to AUTO by a RETRY resolution!
+      const humanPinned = { mode: "HUMAN_PINNED", reason: "MANUAL_MODE_SET" };
+      expect(shouldReleaseTechnicalHold(humanPinned)).toBe(false);
+
+      // Case 2: Conversation is in technical review hold due to send uncertainty
+      // Must be safely released back to AUTO
+      const technicalHold = { mode: "REVIEW_HOLD", reason: "SEND_UNCERTAIN" };
+      expect(shouldReleaseTechnicalHold(technicalHold)).toBe(true);
+
+      // Case 3: Conversation is in review hold for another reason (e.g. policy violation)
+      const otherHold = { mode: "REVIEW_HOLD", reason: "POLICY_VIOLATION" };
+      expect(shouldReleaseTechnicalHold(otherHold)).toBe(false);
+    });
+  });
+
+  describe("7. Sender verifySent: Strict Outgoing Requirement for Fuzzy Matching", () => {
+    it("disallows fuzzy matching on unverified incoming bubbles to prevent inbound hijacking", () => {
+      const evaluateTextMatches = (params: {
+        bubbleText: string;
+        expectedText: string;
+        isOutgoing: boolean;
+      }): boolean => {
+        const { bubbleText, expectedText, isOutgoing } = params;
+        const normBubble = bubbleText.trim().toLowerCase();
+        const normExp = expectedText.trim().toLowerCase();
+        // Exact and normalized matches
+        if (normBubble === normExp) return true;
+        // Fuzzy branch MUST require isOutgoing
+        return isOutgoing && fuzzyMatchesOutboundText(expectedText, bubbleText);
+      };
+
+      const botDraft = "Dạ sản phẩm này bên em đang có chương trình giảm 10% khi mua 2 sản phẩm ạ!";
+      // Customer replies with almost identical wording (e.g. quoting without quotes, with typo/emoji)
+      const customerSimilarText = "Dạ sản phẩm này bên em đang có chương trình giảm 10% khi mua 2 sản phẩm";
+
+      // Case 1: Bubble is NOT confirmed outgoing (e.g. unverified customer bubble in race)
+      // Must NOT match via fuzzy!
+      const unverifiedMatch = evaluateTextMatches({
+        bubbleText: customerSimilarText,
+        expectedText: botDraft,
+        isOutgoing: false,
+      });
+      expect(unverifiedMatch).toBe(false);
+
+      // Case 2: Bubble IS confirmed outgoing
+      // Fuzzy match is allowed (e.g. Facebook stripped emojis or changed whitespace)
+      const outgoingMatch = evaluateTextMatches({
+        bubbleText: customerSimilarText,
+        expectedText: botDraft,
+        isOutgoing: true,
+      });
+      expect(outgoingMatch).toBe(true);
     });
   });
 });

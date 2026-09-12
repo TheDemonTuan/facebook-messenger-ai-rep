@@ -57,6 +57,8 @@ const VALID_TRANSITIONS: Record<string, OutboundActionStatus[]> = {
   UNCONFIRMED: ["CONFIRMED", "RETRY_APPROVED"],
 };
 
+export type BotOutboundEvidence = "EXACT_EXTERNAL_REF" | "STRICT_TEXT_MATCH" | "NONE";
+
 export class OutboundRepository {
   constructor(private db: Database) {}
 
@@ -441,15 +443,17 @@ export class OutboundRepository {
   }
 
   /**
-   * Durable bot identity check: verifies if an observed outgoing bubble was produced by the bot,
-   * checking durable outbound action records and message history (survives process restart).
+   * Durable bot identity check: returns specific evidence type for an observed bubble.
+   * - EXACT_EXTERNAL_REF: bubble ID directly matches a recorded bot outbound action or AI message.
+   * - STRICT_TEXT_MATCH: bubble text matches recent bot actions on this thread/channel within 3 minutes.
+   * - NONE: no bot outbound evidence found.
    */
-  async isBotOutbound(params: {
+  async checkBotOutboundEvidence(params: {
     channelAccountId: string;
     externalMessageRef?: string;
     text?: string;
     externalThreadId?: string;
-  }, tx?: DatabaseOrTx): Promise<boolean> {
+  }, tx?: DatabaseOrTx): Promise<BotOutboundEvidence> {
     const executor = tx || this.db;
     const { channelAccountId, externalMessageRef, text, externalThreadId } = params;
 
@@ -465,7 +469,7 @@ export class OutboundRepository {
           )
         )
         .limit(1);
-      if (actions.length > 0) return true;
+      if (actions.length > 0) return "EXACT_EXTERNAL_REF";
 
       const msgs = await executor
         .select({ id: messages.id, actor: messages.actor, direction: messages.direction })
@@ -477,7 +481,7 @@ export class OutboundRepository {
           )
         )
         .limit(1);
-      if (msgs.length > 0 && msgs[0]?.actor === "AI" && msgs[0]?.direction === "OUTBOUND") return true;
+      if (msgs.length > 0 && msgs[0]?.actor === "AI" && msgs[0]?.direction === "OUTBOUND") return "EXACT_EXTERNAL_REF";
     }
 
     // 2. Strong text match against recent bot actions scoped to the exact thread (if available) or channel.
@@ -504,9 +508,9 @@ export class OutboundRepository {
           .limit(25);
 
         for (const m of matching) {
-          if (m.text.trim().toLowerCase() === trimmedText.toLowerCase()) return true;
+          if (m.text.trim().toLowerCase() === trimmedText.toLowerCase()) return "STRICT_TEXT_MATCH";
           const normExpected = normalizeTextForMatch(m.text);
-          if (normExpected && normActual && normExpected === normActual) return true;
+          if (normExpected && normActual && normExpected === normActual) return "STRICT_TEXT_MATCH";
         }
       } else {
         const matching = await executor
@@ -523,13 +527,27 @@ export class OutboundRepository {
           .limit(25);
 
         for (const m of matching) {
-          if (m.text.trim().toLowerCase() === trimmedText.toLowerCase()) return true;
+          if (m.text.trim().toLowerCase() === trimmedText.toLowerCase()) return "STRICT_TEXT_MATCH";
           const normExpected = normalizeTextForMatch(m.text);
-          if (normExpected && normActual && normExpected === normActual) return true;
+          if (normExpected && normActual && normExpected === normActual) return "STRICT_TEXT_MATCH";
         }
       }
     }
 
-    return false;
+    return "NONE";
+  }
+
+  /**
+   * Durable bot identity check: verifies if an observed outgoing bubble was produced by the bot,
+   * checking durable outbound action records and message history (survives process restart).
+   */
+  async isBotOutbound(params: {
+    channelAccountId: string;
+    externalMessageRef?: string;
+    text?: string;
+    externalThreadId?: string;
+  }, tx?: DatabaseOrTx): Promise<boolean> {
+    const evidence = await this.checkBotOutboundEvidence(params, tx);
+    return evidence !== "NONE";
   }
 }
