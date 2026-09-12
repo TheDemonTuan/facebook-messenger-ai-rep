@@ -114,7 +114,7 @@ describe("PostgreSQL production acceptance", () => {
     const db = getDb();
     const outboundRepo = new OutboundRepository(db);
 
-    const convId = `conv-pg-race-${randomUUID()}`;
+    const convId = randomUUID();
     const threadId = `thread-pg-race-${randomUUID()}`;
     const actionId = `act-pg-race-${randomUUID()}`;
 
@@ -123,6 +123,7 @@ describe("PostgreSQL production acceptance", () => {
       id: convId,
       channelAccountId: accountId,
       externalThreadId: threadId,
+      externalThreadRef: `https://www.facebook.com/messages/t/${threadId}`,
       inboundVersion: 1,
       replyControlMode: "AUTO",
       manualMode: false,
