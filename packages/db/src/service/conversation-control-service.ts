@@ -301,6 +301,78 @@ export class ConversationControlService {
   }
 
   /**
+   * Safely releases a technical REVIEW_HOLD (e.g. SEND_UNCERTAIN) back to AUTO using CAS.
+   * Crucial invariant: Only releases if current mode is REVIEW_HOLD and reason matches (default SEND_UNCERTAIN).
+   * Must NEVER release HUMAN_PINNED, HUMAN_SESSION, or operator manual modes!
+   */
+  async releaseTechnicalReviewHold(
+    conversationId: string,
+    reason = "SEND_UNCERTAIN",
+    tx?: DatabaseOrTx
+  ): Promise<ConversationControl | null> {
+    const now = new Date();
+    const runInTx = async (dbTx: DatabaseOrTx): Promise<ConversationControl | null> => {
+      const [current] = await dbTx
+        .select({
+          mode: conversations.replyControlMode,
+          controlEpoch: conversations.controlEpoch,
+          controlReason: conversations.controlReason,
+          suppressedThroughInboundVersion: conversations.suppressedThroughInboundVersion,
+        })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1);
+
+      if (!current) return null;
+      if (current.mode !== "REVIEW_HOLD" || current.controlReason !== reason) {
+        return {
+          mode: current.mode as ReplyControlMode,
+          epoch: current.controlEpoch ?? 0,
+          holdUntil: null,
+          suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
+        };
+      }
+
+      const epoch = (current.controlEpoch ?? 0) + 1;
+      const updated = await dbTx
+        .update(conversations)
+        .set({
+          replyControlMode: "AUTO",
+          controlEpoch: epoch,
+          controlReason: `${reason}_RESOLVED`,
+          controlChangedAt: now,
+          manualMode: false,
+          status: "WAITING_CUSTOMER",
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.replyControlMode, "REVIEW_HOLD"),
+            eq(conversations.controlEpoch, current.controlEpoch ?? 0)
+          )
+        )
+        .returning({ id: conversations.id });
+
+      if (updated.length === 0) {
+        return await this.get(conversationId, dbTx);
+      }
+
+      return {
+        mode: "AUTO",
+        epoch,
+        holdUntil: null,
+        suppressedThroughInboundVersion: current.suppressedThroughInboundVersion ?? 0,
+      };
+    };
+
+    if (tx) return runInTx(tx);
+    return typeof (this.db as unknown as { transaction?: unknown }).transaction === "function"
+      ? this.db.transaction(runInTx)
+      : runInTx(this.db);
+  }
+
+  /**
    * Normalizes conversation control mode before evaluating inbound message policy.
    * Auto-releases expired HUMAN_DRAFT and HUMAN_SESSION back to AUTO.
    * Never auto-releases HUMAN_PINNED or REVIEW_HOLD.

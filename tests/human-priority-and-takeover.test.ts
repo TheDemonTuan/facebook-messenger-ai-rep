@@ -916,7 +916,29 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
       expect(isBot).toBe(true);
     });
 
-    it("isBotOutbound recognizes a recent AI action on the exact Messenger thread when DOM and persisted refs differ", async () => {
+    it("isBotOutbound returns false when externalMessageRef does not match and no matching text exists", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })),
+            innerJoin: vi.fn(() => ({
+              where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ id: "action-recent-ai" }]) })),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const outboundRepo = new OutboundRepository(mockDb);
+      const isBot = await outboundRepo.isBotOutbound({
+        channelAccountId: "acc-1",
+        externalMessageRef: "mid.dom.stable-id",
+        externalThreadId: "thread-1",
+      });
+      // Crucial P0 invariant: same-thread alone without matching ref or text must NEVER suppress customer messages
+      expect(isBot).toBe(false);
+    });
+
+    it("isBotOutbound recognizes a recent AI action on the exact Messenger thread when normalized text matches", async () => {
       let query = 0;
       const mockDb = {
         select: vi.fn(() => ({
@@ -929,7 +951,9 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
             }
             return {
               innerJoin: vi.fn(() => ({
-                where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ id: "action-recent-ai" }]) })),
+                where: vi.fn(() => ({
+                  limit: vi.fn().mockResolvedValue([{ id: "action-recent-ai", text: "Dạ shop còn hàng bạn nhé!" }]),
+                })),
               })),
             };
           }),
@@ -941,6 +965,7 @@ describe("Human Priority & Anti-Bot Collision (Uu Tien Nguoi That)", () => {
         channelAccountId: "acc-1",
         externalMessageRef: "mid.dom.stable-id",
         externalThreadId: "thread-1",
+        text: "Dạ shop còn hàng bạn nhé! 🥰",
       });
       expect(isBot).toBe(true);
     });

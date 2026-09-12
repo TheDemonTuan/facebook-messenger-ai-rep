@@ -194,11 +194,33 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
         .where(eq(channelAccounts.id, a.channelAccountId));
 
       await broadcaster.broadcast("channel:status", { status: "SUSPENDED", isSuspended: true });
+
+      // Isolate to conversation using REVIEW_HOLD
+      const controlService = new ConversationControlService(db);
+      await controlService.acquireReviewHold(a.conversationId, "SEND_UNCERTAIN").catch(() => {});
+
+      if (typeof db.insert === "function") {
+        await db
+          .insert(incidents)
+          .values({
+            channelAccountId: a.channelAccountId,
+            conversationId: a.conversationId,
+            outboundActionId: a.id,
+            type: "SEND_UNCERTAIN",
+            title: `Outbound action ${a.id} timed out after send intent (isolated to conversation)`,
+            description: "Enter was pressed but verification timed out. Conversation placed in REVIEW_HOLD fail-closed.",
+            metadata: { actionId: a.id, timeoutAfterMs: 90000 },
+            status: "OPEN",
+            createdAt: now,
+            updatedAt: now,
+          })
+          .catch(() => {});
+      }
     }
 
     // 7. Auto-reconcile SEND_UNCERTAIN outbound actions:
-    // If subsequent messages exist in the conversation, the thread has progressed past the uncertainty.
-    // Confirm the action, resolve open incidents, and auto-release the conversation to AUTO.
+    // If subsequent customer messages exist in the conversation, the thread has progressed past the uncertainty.
+    // Unblock the conversation review hold so AI can continue serving customer, but do NOT fake CONFIRMED delivery!
     if (typeof db.select === "function") {
       const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000);
       const uncertainActions = await db
@@ -233,8 +255,7 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
           await db
             .update(outboundActions)
             .set({
-              status: "CONFIRMED",
-              unconfirmedReason: null,
+              metadata: sql`jsonb_set(COALESCE(${outboundActions.metadata}, '{}'::jsonb), '{threadProgressed}', 'true'::jsonb)`,
               updatedAt: now,
             })
             .where(eq(outboundActions.id, a.id));
@@ -242,9 +263,9 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
           await eventRepo.recordEvent({
             channelAccountId: a.channelAccountId,
             conversationId: a.conversationId,
-            type: "SEND_CONFIRMED",
+            type: "CONVERSATION_RELEASED",
             actor: "RECONCILER",
-            payload: { actionId: a.id, autoReconciled: true },
+            payload: { actionId: a.id, reason: "Customer activity observed after uncertain send" },
           });
 
           await db
@@ -253,7 +274,7 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
               status: "RESOLVED",
               resolvedAt: now,
               resolvedBy: "system:reconciler",
-              resolutionNote: "Tự động đối soát thành công từ tiến trình hội thoại",
+              resolutionNote: "Khách đã gửi tin nhắn mới sau hành động gửi chưa chắc chắn; gỡ chặn hội thoại để tiếp tục phục vụ",
               updatedAt: now,
             })
             .where(
@@ -267,20 +288,8 @@ export function createReconcileHandler(deps: ReconcileHandlerDeps) {
               )
             );
 
-          const [conv] = await db
-            .select({
-              id: conversations.id,
-              mode: conversations.replyControlMode,
-              reason: conversations.controlReason,
-            })
-            .from(conversations)
-            .where(eq(conversations.id, a.conversationId))
-            .limit(1);
-
-          if (conv && conv.mode === "REVIEW_HOLD" && conv.reason === "SEND_UNCERTAIN") {
-            const controlService = new ConversationControlService(db);
-            await controlService.release(a.conversationId, "AUTO_RECONCILED");
-          }
+          const controlService = new ConversationControlService(db);
+          await controlService.releaseTechnicalReviewHold(a.conversationId, "SEND_UNCERTAIN");
         }
       }
     }

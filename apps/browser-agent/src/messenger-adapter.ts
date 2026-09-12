@@ -6,6 +6,7 @@ import {
   parseSidebarThreadsFromHtml,
   isSnippetOutgoing,
   fuzzyMatchesOutboundText,
+  normalizeForTextComparison,
 } from "@messenger/channel";
 import type {
   InboundMessagePayload,
@@ -127,7 +128,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   private hasReportedHealthySession = false;
   private lastSuccessfulPollAt: Date | null = null;
   private consecutiveEmptyInboxPolls = 0;
-  private recentBotSentTexts: Array<{ text: string; sentAt: number }> = [];
+  private recentBotSends = new Map<string, Array<{ text: string; normalizedText: string; sentAt: number }>>();
   private seenOutgoingBubbleIds = new Set<string>();
   private threadBaselinesEstablished = new Set<string>();
   private isDurableBotOutboundChecker: ((info: { threadId: string; bubbleId?: string; text?: string }) => Promise<boolean>) | null = null;
@@ -302,12 +303,40 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     this.isDurableBotOutboundChecker = checker;
   }
 
-  rememberBotSentText(text: string): void {
+  getRecentBotSends(
+    threadId: string,
+    now = Date.now()
+  ): Array<{ text: string; normalizedText: string; sentAt: number }> {
+    const ttlMs = 120_000; // 2 minutes TTL
+    const current = this.recentBotSends.get(threadId) ?? [];
+    const alive = current.filter((item) => now - item.sentAt <= ttlMs);
+    if (alive.length === 0) {
+      this.recentBotSends.delete(threadId);
+    } else {
+      this.recentBotSends.set(threadId, alive);
+    }
+    return alive;
+  }
+
+  rememberBotSent(threadId: string, text: string): void {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    this.recentBotSentTexts.push({ text: trimmed, sentAt: Date.now() });
-    if (this.recentBotSentTexts.length > 50) {
-      this.recentBotSentTexts.shift();
+    if (!trimmed || !threadId) return;
+    const now = Date.now();
+    const alive = this.getRecentBotSends(threadId, now);
+    alive.push({
+      text: trimmed,
+      normalizedText: normalizeForTextComparison(trimmed),
+      sentAt: now,
+    });
+    if (alive.length > 25) {
+      alive.shift();
+    }
+    this.recentBotSends.set(threadId, alive);
+  }
+
+  rememberBotSentText(text: string, threadId?: string): void {
+    if (threadId) {
+      this.rememberBotSent(threadId, text);
     }
   }
 
@@ -332,11 +361,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
         if (isBot) return false;
       }
 
-      const isBotSent = this.recentBotSentTexts.some((botMsg) => {
+      const recentSends = this.getRecentBotSends(threadId);
+      const normOut = normalizeForTextComparison(outText);
+      const isBotSent = recentSends.some((botMsg) => {
         return (
-          fuzzyMatchesOutboundText(botMsg.text, outText) ||
-          botMsg.text === outText ||
-          (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
+          botMsg.text.toLowerCase() === outText.toLowerCase() ||
+          (normOut.length >= 5 && botMsg.normalizedText === normOut)
         );
       });
       return !isBotSent;
@@ -1010,12 +1040,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             }
           }
 
-          this.recentBotSentTexts = this.recentBotSentTexts.filter((item) => now - item.sentAt < 180000);
-          const isRecentBotSent = this.recentBotSentTexts.some((botMsg) => {
+          const recentSends = this.getRecentBotSends(threadInfo.threadId, now);
+          const normOut = normalizeForTextComparison(outText);
+          const isRecentBotSent = recentSends.some((botMsg) => {
             return (
-              fuzzyMatchesOutboundText(botMsg.text, outText) ||
-              botMsg.text === outText ||
-              (outText.length > 5 && (botMsg.text.includes(outText) || outText.includes(botMsg.text)))
+              botMsg.text.toLowerCase() === outText.toLowerCase() ||
+              (normOut.length >= 5 && botMsg.normalizedText === normOut)
             );
           });
 
@@ -1045,7 +1075,7 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
     // 2. Mark all bubbles up to and including lastOutgoingIdx as already handled/seen
     for (let i = 0; i <= lastOutgoingIdx; i++) {
       const b = bubbleResult.bubbles[i];
-      if (b) {
+      if (b && (b.isOutgoing || isThreadFirstBaseline)) {
         this.lastSeenMessageIds.add(b.id);
       }
     }
@@ -1066,24 +1096,40 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
       if (!bubble || bubble.isOutgoing) continue;
 
       // ANTI-ECHO GUARD: A bot reply bubble must NEVER be misclassified and ingested as customer inbound.
-      // If this bubble matches any recent bot message or durable bot action, treat it as outgoing and suppress it.
-      const isRecentBotReply = this.recentBotSentTexts.some((botMsg) =>
-        fuzzyMatchesOutboundText(botMsg.text, bubble.text)
+      // If customer identity is verified (PERSON with verified reliability), text matching alone must NEVER suppress it!
+      const isVerifiedCustomer = Boolean(
+        bubble.senderId &&
+        bubble.senderReliability === "VERIFIED" &&
+        bubble.senderKind === "PERSON" &&
+        bubble.senderId !== this.botParticipantId
       );
+
+      const recentSends = this.getRecentBotSends(threadInfo.threadId);
+      const bubbleTrimmed = bubble.text.trim();
+      const normBubble = normalizeForTextComparison(bubbleTrimmed);
+
+      const isExactRecentBotReply = recentSends.some((botMsg) => {
+        if (botMsg.text.toLowerCase() === bubbleTrimmed.toLowerCase()) return true;
+        if (normBubble.length >= 5 && botMsg.normalizedText === normBubble) return true;
+        return false;
+      });
+
       let isDurableBotReply = this.confirmedOutboundMessageIds.has(bubble.id);
-      if (!isDurableBotReply && !isRecentBotReply && this.isDurableBotOutboundChecker) {
+      if (!isDurableBotReply && !isExactRecentBotReply && this.isDurableBotOutboundChecker) {
         try {
           isDurableBotReply = await this.isDurableBotOutboundChecker({
             threadId: threadInfo.threadId,
             bubbleId: bubble.id,
-            text: bubble.text.trim(),
+            text: bubbleTrimmed,
           });
         } catch {
           // Ignore
         }
       }
 
-      if (isRecentBotReply || isDurableBotReply) {
+      const shouldSuppressAsBotEcho = isDurableBotReply || (!isVerifiedCustomer && isExactRecentBotReply);
+
+      if (shouldSuppressAsBotEcho) {
         console.log(`[BrowserAdapter] Anti-echo: Suppressed bot reply bubble "${bubble.text.slice(0, 30)}..." from customer inbound ingestion`);
         bubble.isOutgoing = true;
         this.lastSeenMessageIds.add(bubble.id);
@@ -1771,8 +1817,6 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
   ): Promise<{ completed: boolean; aborted?: boolean }> {
     if (!this.senderPage) return { completed: false, aborted: true };
 
-    this.rememberBotSentText(text);
-
     const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
     try {
       await composer.click({ timeout: 5000 });
@@ -1899,14 +1943,24 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
           const b = bubbles[index];
           if (!b) continue;
 
+          // Never treat a verified customer bubble as the bot's outgoing message
+          const isVerifiedCustomer = Boolean(
+            !b.isOutgoing &&
+            b.senderId &&
+            b.senderReliability === "VERIFIED" &&
+            b.senderKind === "PERSON" &&
+            b.senderId !== this.botParticipantId
+          );
+          if (isVerifiedCustomer) continue;
+
           const bubbleText = b.text.trim();
           const normBubble = bubbleText.toLowerCase();
+          const normBubbleClean = normalizeForTextComparison(bubbleText);
+          const normExpClean = normalizeForTextComparison(expectedText);
           const textMatches =
-            fuzzyMatchesOutboundText(expectedText, bubbleText) ||
             normBubble === normExp ||
-            normBubble.includes(normExp) ||
-            normExp.includes(normBubble) ||
-            (normBubble.length > 15 && normExp.slice(0, 20) === normBubble.slice(0, 20));
+            (normBubbleClean.length >= 5 && normBubbleClean === normExpClean) ||
+            fuzzyMatchesOutboundText(expectedText, bubbleText);
           if (!textMatches) continue;
 
           const composer = this.senderPage.locator('div[role="textbox"][contenteditable="true"]').first();
@@ -1938,10 +1992,12 @@ export class PlaywrightMessengerAdapter implements ChannelAdapter {
             const currentUrl = typeof this.senderPage.url === "function"
               ? this.senderPage.url()
               : (this.senderPage as unknown as { url?: string }).url || "";
+            const currentThreadId = extractMessengerThreadId(currentUrl) || "unknown";
             this.rememberActiveBubbleSequence(
-              extractMessengerThreadId(currentUrl) || "unknown",
+              currentThreadId,
               { ok: true, bubbles: [b], isDegraded: false }
             );
+            this.rememberBotSent(currentThreadId, expectedText);
             return { verified: true, messageRef: b.id };
           }
         }

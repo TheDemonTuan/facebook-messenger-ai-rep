@@ -1,4 +1,4 @@
-import { eq, and, or, desc, sql, gte, isNull, inArray, notInArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, gte, isNull, inArray } from "drizzle-orm";
 import type { Database } from "../client.js";
 import {
   customers,
@@ -791,6 +791,9 @@ export class ConversationRepository {
           );
 
         // Abort stale outbound actions for this conversation
+        // Crucial invariant: NEVER cancel actions that have reached send intent or are uncertain!
+        // Stale actions in PENDING, TYPING, or CLAIMED can be cancelled, but SEND_INTENT, SENDING,
+        // SEND_UNCERTAIN, and UNCONFIRMED must be preserved for audit and reconciliation.
         await tx
           .update(outboundActions)
           .set({
@@ -802,7 +805,7 @@ export class ConversationRepository {
             and(
               eq(outboundActions.conversationId, conversationId),
               sql`${outboundActions.inboundVersion} < ${newInboundVersion}`,
-              notInArray(outboundActions.status, ["CONFIRMED", "CANCELLED", "FAILED", "SENT", "ABORTED"])
+              inArray(outboundActions.status, ["PENDING", "TYPING", "CLAIMED"])
             )
           );
       }

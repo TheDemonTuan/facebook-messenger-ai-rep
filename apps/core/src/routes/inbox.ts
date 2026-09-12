@@ -827,6 +827,10 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
           return reply.status(404).send({ error: "Action not found" });
         }
 
+        if (action.conversationId !== conversationId) {
+          return reply.status(400).send({ error: "Action does not belong to this conversation" });
+        }
+
         const isUncertain = action.status === "SEND_UNCERTAIN" || action.status === "UNCONFIRMED";
         if (!isUncertain) {
           return reply.status(400).send({ error: `Action is in status ${action.status}, not uncertain/unconfirmed` });
@@ -841,7 +845,7 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             conversationId,
             type: "SEND_CONFIRMED",
             actor: user.email,
-            payload: { actionId, reconciled: true },
+            payload: { actionId, reconciled: true, operator: user.email },
           });
 
           // Resume channel only if no other uncertain action remains
@@ -889,7 +893,8 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
               )
             );
 
-          // If conversation is in a technical hold due to send uncertainty, release back to AUTO
+          // If conversation is in a technical hold due to send uncertainty, release back to AUTO using CAS
+          // Crucial invariant: NEVER release HUMAN_PINNED or HUMAN_SESSION!
           const [conv] = await db
             .select({
               id: conversations.id,
@@ -900,9 +905,9 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
             .where(eq(conversations.id, conversationId))
             .limit(1);
 
-          if (conv && (conv.mode === "REVIEW_HOLD" || conv.reason === "SEND_UNCERTAIN" || conv.reason === "MANUAL_MODE_SET")) {
+          if (conv && conv.mode === "REVIEW_HOLD" && conv.reason === "SEND_UNCERTAIN") {
             const controlService = new ConversationControlService(db);
-            await controlService.release(conversationId, "RECONCILED_MARK_SENT");
+            await controlService.releaseTechnicalReviewHold(conversationId, "SEND_UNCERTAIN");
           }
 
           return reply.send({ success: true, actionId, status: "CONFIRMED" });
