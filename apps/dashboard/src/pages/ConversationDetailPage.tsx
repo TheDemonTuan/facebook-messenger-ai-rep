@@ -69,15 +69,23 @@ export const ConversationDetailPage: React.FC = () => {
   const [traceData, setTraceData] = useState<TurnTraceData | null>(null);
   const [_traceLoading, setTraceLoading] = useState(false);
 
+  // Reset trace context and scroll state whenever active conversationId changes
+  useEffect(() => {
+    setTraceData(null);
+    setSelectedRunId(null);
+    setSelectedVersion(null);
+    initialScrolledRef.current = false;
+  }, [conversationId]);
+
   useEffect(() => {
     const version = selectedVersion ?? data?.conversation?.inboundVersion;
-    if (!conversationIdRef.current || !version) {
+    if (!conversationId || !version) {
       setTraceData(null);
       return;
     }
     let cancelled = false;
     setTraceLoading(true);
-    void apiFetch<TurnTraceData>(`/api/inbox/${conversationIdRef.current}/turns/${version}/trace`)
+    void apiFetch<TurnTraceData>(`/api/inbox/${conversationId}/turns/${version}/trace`)
       .then((res) => {
         if (!cancelled) {
           setTraceData(res);
@@ -95,7 +103,7 @@ export const ConversationDetailPage: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [selectedVersion, data?.conversation?.inboundVersion]);
+  }, [conversationId, selectedVersion, data?.conversation?.inboundVersion]);
 
   const conversationIdRef = useRef(conversationId);
   conversationIdRef.current = conversationId;
@@ -133,7 +141,11 @@ export const ConversationDetailPage: React.FC = () => {
 
       const res = await apiFetch<ConversationDetailData>(url);
       setData(res);
-      setSelectedRunId((current) => current ?? res.aiRuns?.[0]?.id ?? null);
+      setSelectedRunId((current) => {
+        if (!res.aiRuns || res.aiRuns.length === 0) return null;
+        if (current && res.aiRuns.some((r) => r.id === current)) return current;
+        return res.aiRuns[0].id;
+      });
 
       if (appendOlder) {
         setMessages((prev) => mergePaginatedMessages(res.messages || [], prev));

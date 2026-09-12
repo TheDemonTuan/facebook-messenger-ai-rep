@@ -26,7 +26,7 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
         <Cpu size={32} style={{ margin: "0 auto 10px", color: "#94a3b8", display: "block" }} />
         <p style={{ margin: 0, fontWeight: 500 }}>Chưa có lượt chạy AI nào được chọn</p>
         <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#94a3b8" }}>
-          Chọn một tin nhắn hoặc một lượt chạy AI để xem chi tiết prompt, suy luận và phản hồi.
+          Chọn một tin nhắn hoặc một lượt chạy AI để xem chi tiết thực thi (Execution), tuyển chọn (Disposition) và phân phát (Delivery).
         </p>
       </div>
     );
@@ -37,7 +37,8 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
   const latencyMs = run.latencyMs ?? null;
   const isSuccess = run.status === "SUCCESS";
   const rawContent = run.responseSnapshot?.content || "";
-  const outputMessages = run.parsedOutput?.messages || run.usedResult?.messages || [];
+  const candidateMessages = run.parsedOutput?.messages || [];
+  const selectedMessages = run.usedResult?.messages || [];
 
   // Only direct provenance is safe: a conversation can have multiple AI runs for one inbound version.
   const matchingActions = actions.filter((action) => action.sourceAiRunId === run.id);
@@ -68,7 +69,7 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
       >
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <Sparkles size={16} style={{ color: "#3b82f6" }} />
-          <span style={{ fontWeight: 600, color: "#0f172a" }}>Chi tiết AI Run</span>
+          <span style={{ fontWeight: 600, color: "#0f172a" }}>Chi tiết AI Run (v{run.inboundVersion ?? "—"})</span>
           <span
             style={{
               fontSize: "11px",
@@ -102,7 +103,7 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
 
       {/* Body */}
       <div style={{ flex: 1, overflowY: "auto", padding: "16px", display: "flex", flexDirection: "column", gap: "16px" }}>
-        {/* Run Metadata Card */}
+        {/* Semantic 1: Run Execution Metadata */}
         <div
           style={{
             backgroundColor: "#f8fafc",
@@ -115,7 +116,7 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
           }}
         >
           <div>
-            <div style={{ fontSize: "11px", color: "#64748b" }}>Model</div>
+            <div style={{ fontSize: "11px", color: "#64748b" }}>1. Thực thi (Model)</div>
             <div style={{ fontWeight: 500, color: "#1e293b" }}>{run.model || "—"}</div>
           </div>
           <div>
@@ -171,39 +172,101 @@ export const AiRunInspector: React.FC<AiRunInspectorProps> = ({
           </div>
         )}
 
-        {/* Draft Response Text */}
+        {/* Semantic 2: Disposition & Selected Result */}
         <div>
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "#475569", marginBottom: "6px" }}>
-            Câu trả lời được sinh (Parsed Output)
+          <div style={{ fontSize: "12px", fontWeight: 600, color: "#475569", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <Sparkles size={14} color="#8b5cf6" /> 2. Tuyển chọn nội dung (Disposition & Selected Result)
           </div>
           <div
             style={{
-              backgroundColor: "#f1f5f9",
+              backgroundColor: "#f8fafc",
               padding: "12px",
               borderRadius: "6px",
-              border: "1px solid #cbd5e1",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              color: "#0f172a",
-              fontSize: "13px",
-              lineHeight: 1.5,
-              minHeight: "48px",
+              border: "1px solid #e2e8f0",
+              display: "flex",
+              flexDirection: "column",
+              gap: "8px",
             }}
           >
-            {outputMessages.length > 0 ? (
-              outputMessages.join("\n\n")
-            ) : rawContent ? (
-              rawContent
-            ) : (
-              <span style={{ color: "#94a3b8", fontStyle: "italic" }}>Không có nội dung text</span>
+            <div>
+              <div style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>
+                Kết quả thực tế được chọn gửi (usedResult):
+              </div>
+              <div
+                style={{
+                  backgroundColor: selectedMessages.length > 0 ? "#f0fdf4" : "#f1f5f9",
+                  border: `1px solid ${selectedMessages.length > 0 ? "#bbf7d0" : "#cbd5e1"}`,
+                  borderRadius: "6px",
+                  padding: "10px",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                  color: selectedMessages.length > 0 ? "#14532d" : "#64748b",
+                  fontSize: "13px",
+                  lineHeight: 1.5,
+                }}
+              >
+                {selectedMessages.length > 0 ? (
+                  selectedMessages.join("\n\n")
+                ) : (
+                  <span style={{ fontStyle: "italic" }}>
+                    {isSuccess ? "Không có tin nhắn nào được chọn làm phản hồi cuối cùng (dropped hoặc superseded)" : "Chưa có kết quả do thực thi thất bại"}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {candidateMessages.length > 0 && candidateMessages.join("\n") !== selectedMessages.join("\n") && (
+              <div>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>
+                  Tin nhắn ứng viên ban đầu (parsedOutput):
+                </div>
+                <div
+                  style={{
+                    backgroundColor: "#ffffff",
+                    border: "1px dashed #cbd5e1",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    color: "#475569",
+                    fontSize: "12px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {candidateMessages.join("\n\n")}
+                </div>
+              </div>
+            )}
+
+            {!candidateMessages.length && !selectedMessages.length && rawContent && (
+              <div>
+                <div style={{ fontSize: "11px", fontWeight: 600, color: "#64748b", marginBottom: "4px" }}>
+                  Nội dung thô phản hồi từ LLM (rawContent):
+                </div>
+                <div
+                  style={{
+                    backgroundColor: "#ffffff",
+                    border: "1px dashed #cbd5e1",
+                    borderRadius: "6px",
+                    padding: "8px 10px",
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    color: "#475569",
+                    fontSize: "12px",
+                    lineHeight: 1.4,
+                  }}
+                >
+                  {rawContent}
+                </div>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Provenance and Delivery Trace */}
+        {/* Semantic 3: Messenger Delivery Trace */}
         <div>
           <div style={{ fontSize: "12px", fontWeight: 600, color: "#475569", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px" }}>
-            <Send size={14} color="#3b82f6" /> Truy vết gửi tin (Delivery Trace)
+            <Send size={14} color="#3b82f6" /> 3. Phân phát tin nhắn Messenger (Delivery Trace)
           </div>
           <div
             style={{

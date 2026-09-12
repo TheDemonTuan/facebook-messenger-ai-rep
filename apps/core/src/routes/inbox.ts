@@ -554,7 +554,13 @@ export function createInboxRoutes(options: InboxRoutesOptions): FastifyPluginAsy
         const completeness = {
           messages: inboundList.length > 0 ? "AVAILABLE" : "NOT_CAPTURED",
           aiRuns: runRows.length > 0 ? "AVAILABLE" : "NOT_CAPTURED",
-          snapshots: runRows.some((r) => r.requestSnapshot || r.responseSnapshot) ? "AVAILABLE" : "NOT_CAPTURED",
+          snapshots: runRows.length > 0
+            ? runRows.every((r) => r.requestSnapshot && r.responseSnapshot)
+              ? "AVAILABLE"
+              : runRows.some((r) => r.requestSnapshot || r.responseSnapshot)
+              ? "PARTIAL"
+              : "NOT_CAPTURED"
+            : "NOT_CAPTURED",
           delivery: actionRows.length > 0
             ? actionRows.every((a) => a.status === "CONFIRMED" || a.status === "SENT")
               ? "AVAILABLE"

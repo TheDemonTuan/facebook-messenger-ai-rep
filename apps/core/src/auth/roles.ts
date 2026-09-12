@@ -7,8 +7,9 @@ export const ROLE_HIERARCHY: Record<UserRole, number> = {
   OWNER: 3,
 };
 
-export function hasRolePermission(userRole: UserRole, requiredRole: UserRole): boolean {
-  const userLevel = ROLE_HIERARCHY[userRole] || 0;
+export function hasRolePermission(userRole: UserRole | string, requiredRole: UserRole): boolean {
+  const normalizedRole = userRole === "ADMIN" ? "OWNER" : userRole;
+  const userLevel = ROLE_HIERARCHY[normalizedRole as UserRole] || 0;
   const requiredLevel = ROLE_HIERARCHY[requiredRole] || 0;
   return userLevel >= requiredLevel;
 }

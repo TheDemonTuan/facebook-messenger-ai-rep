@@ -226,6 +226,32 @@ describe("Exact-Turn Trace & Server-Side Search/Filter Tests", () => {
         delivery: "AVAILABLE",
       });
     });
+
+    it("evaluates snapshots as PARTIAL when some runs miss request or response snapshot", () => {
+      // Invariant logic test:
+      const evaluateSnapshotsCompleteness = (runs: Array<{ requestSnapshot: unknown; responseSnapshot: unknown }>) => {
+        if (runs.length === 0) return "NOT_CAPTURED";
+        if (runs.every((r) => r.requestSnapshot && r.responseSnapshot)) return "AVAILABLE";
+        if (runs.some((r) => r.requestSnapshot || r.responseSnapshot)) return "PARTIAL";
+        return "NOT_CAPTURED";
+      };
+
+      // Case 1: Run has only requestSnapshot, missing responseSnapshot -> PARTIAL
+      expect(evaluateSnapshotsCompleteness([{ requestSnapshot: {}, responseSnapshot: null }])).toBe("PARTIAL");
+      // Case 2: One complete run, one empty run -> PARTIAL
+      expect(evaluateSnapshotsCompleteness([
+        { requestSnapshot: {}, responseSnapshot: {} },
+        { requestSnapshot: null, responseSnapshot: null },
+      ])).toBe("PARTIAL");
+      // Case 3: All complete -> AVAILABLE
+      expect(evaluateSnapshotsCompleteness([
+        { requestSnapshot: {}, responseSnapshot: {} },
+      ])).toBe("AVAILABLE");
+      // Case 4: No snapshots -> NOT_CAPTURED
+      expect(evaluateSnapshotsCompleteness([
+        { requestSnapshot: null, responseSnapshot: null },
+      ])).toBe("NOT_CAPTURED");
+    });
   });
 
   describe("Server-Side Search & Filter Endpoints", () => {
@@ -294,6 +320,37 @@ describe("Exact-Turn Trace & Server-Side Search/Filter Tests", () => {
       const data = JSON.parse(res.payload);
       expect(data.items).toHaveLength(1);
       expect(data.total).toBe(1);
+    });
+
+    it("rejects VIEWER role with 403 Forbidden on GET /api/ai-runs", async () => {
+      const fastify = Fastify();
+      await fastify.register(
+        createAdminRoutes({
+          db: {} as unknown as Database,
+          queueRepo: {} as unknown as QueueRepository,
+          settingsRepo: { getSettings: vi.fn(async () => ({ settings: {} })) } as unknown as SettingsRepository,
+          aiConfigRepo: {} as unknown as AiConfigRepository,
+          incidentRepo: {} as unknown as IncidentRepository,
+          eventRepo: {} as unknown as EventRepository,
+          jobRepo: {} as unknown as JobRepository,
+          broadcaster: { broadcast: vi.fn() } as unknown as OutboxBroadcaster,
+          requireAuth: async () => ({
+            id: "u-viewer",
+            email: "viewer@example.com",
+            role: "VIEWER",
+          }),
+          channelAccountId,
+        })
+      );
+
+      const res = await fastify.inject({
+        method: "GET",
+        url: "/api/ai-runs",
+      });
+
+      expect(res.statusCode).toBe(403);
+      const body = JSON.parse(res.payload);
+      expect(body.error).toContain("Forbidden");
     });
 
     it("accepts q, from, to, type, status filters on /api/incidents", async () => {

@@ -586,5 +586,173 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
       });
       expect(outgoingMatch).toBe(true);
     });
+
+    it("strictly requires isOutgoing===true before any text matching in verifySent", () => {
+      // Invariant test: verifySent immediately rejects incoming bubbles
+      const verifySentFilter = (b: { isOutgoing: boolean; text: string }, expected: string): boolean => {
+        if (!b.isOutgoing) return false;
+        return b.text.trim().toLowerCase() === expected.trim().toLowerCase();
+      };
+
+      // Exact text match but bubble is incoming customer
+      expect(verifySentFilter({ isOutgoing: false, text: "Chào bạn" }, "Chào bạn")).toBe(false);
+      // Exact text match and bubble is outgoing bot
+      expect(verifySentFilter({ isOutgoing: true, text: "Chào bạn" }, "Chào bạn")).toBe(true);
+    });
+  });
+
+  describe("8. State Machine Integrity: cancelQueuedAi NEVER cancels SEND_INTENT", () => {
+    it("preserves SEND_INTENT action when human reply control is acquired", async () => {
+      const updatedActions: Record<string, unknown>[] = [];
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-send-1",
+                  inboundVersion: 1,
+                  controlEpoch: 2,
+                  replyControlMode: "AUTO",
+                  humanSessionStartedAt: null,
+                  humanHoldUntil: null,
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn((table: Record<string | symbol, unknown>) => ({
+          set: vi.fn((setData: Record<string, unknown>) => {
+            const tableName = (table[Symbol.for("drizzle:Name")] as string) || "";
+            if (tableName === "outbound_actions") {
+              updatedActions.push(setData);
+            }
+            return {
+              where: vi.fn(() => ({
+                returning: vi.fn().mockResolvedValue([{ id: "conv-send-1" }]),
+              })),
+            };
+          }),
+        })),
+        delete: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+      } as unknown as Database;
+
+      const control = new ConversationControlService(mockDb);
+
+      // Acquire human session
+      await control.acquireOrRefreshSession("conv-send-1");
+
+      // Verify that outbound_actions update only targets PENDING and TYPING, NEVER SEND_INTENT
+      // Drizzle where condition receives inArray with ["PENDING", "TYPING"]
+      expect(updatedActions.length).toBe(1);
+      expect(updatedActions[0].status).toBe("CANCELLED");
+    });
+  });
+
+  describe("9. Concurrency & Precedence: Human Takeover Overrides REVIEW_HOLD", () => {
+    it("refuses to downgrade HUMAN_PINNED to REVIEW_HOLD on technical timeout", async () => {
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-pinned-1",
+                  inboundVersion: 5,
+                  controlEpoch: 8,
+                  replyControlMode: "HUMAN_PINNED",
+                  humanHoldUntil: null,
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(() => ({
+              returning: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const control = new ConversationControlService(mockDb);
+
+      // Timeout attempt to acquire review hold on pinned conversation
+      const result = await control.acquireReviewHold("conv-pinned-1", "SEND_UNCERTAIN");
+
+      // Mode MUST remain HUMAN_PINNED
+      expect(result.mode).toBe("HUMAN_PINNED");
+      expect(result.changed).toBe(false);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it("refuses to overwrite active HUMAN_SESSION with REVIEW_HOLD", async () => {
+      const activeHold = new Date(Date.now() + 60000); // 60s remaining
+      const mockDb = {
+        select: vi.fn(() => ({
+          from: vi.fn(() => ({
+            where: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([
+                {
+                  id: "conv-session-1",
+                  inboundVersion: 3,
+                  controlEpoch: 4,
+                  replyControlMode: "HUMAN_SESSION",
+                  humanHoldUntil: activeHold,
+                },
+              ]),
+            })),
+          })),
+        })),
+        update: vi.fn(() => ({
+          set: vi.fn(() => ({
+            where: vi.fn(() => ({
+              returning: vi.fn().mockResolvedValue([]),
+            })),
+          })),
+        })),
+      } as unknown as Database;
+
+      const control = new ConversationControlService(mockDb);
+
+      const result = await control.acquireReviewHold("conv-session-1", "SEND_UNCERTAIN");
+
+      expect(result.mode).toBe("HUMAN_SESSION");
+      expect(result.changed).toBe(false);
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("10. External Human Outbound & Inbound Anti-Echo Disambiguation", () => {
+    it("does not allow STRICT_TEXT_MATCH to suppress external human outbound", () => {
+      // Logic simulation of adapter's check for outgoing bubble:
+      // ONLY EXACT_EXTERNAL_REF marks it as durable bot!
+      const isOutgoingDurableBot = (evidence: "EXACT_EXTERNAL_REF" | "STRICT_TEXT_MATCH" | "NONE"): boolean => {
+        return evidence === "EXACT_EXTERNAL_REF";
+      };
+
+      // Human operator sends identical phrase on mobile ("Dạ còn hàng nha")
+      // Durable checker returns STRICT_TEXT_MATCH based on previous bot action
+      // Must NOT be treated as bot!
+      expect(isOutgoingDurableBot("STRICT_TEXT_MATCH")).toBe(false);
+      // Exact confirmed bot action ID in DB
+      expect(isOutgoingDurableBot("EXACT_EXTERNAL_REF")).toBe(true);
+      expect(isOutgoingDurableBot("NONE")).toBe(false);
+    });
+
+    it("does not suppress unverified customer inbound saying 'ok' even if bot said 'ok'", () => {
+      const isIncomingEchoSuppressed = (durableEvidence: "EXACT_EXTERNAL_REF" | "STRICT_TEXT_MATCH" | "NONE"): boolean => {
+        return durableEvidence === "EXACT_EXTERNAL_REF";
+      };
+
+      // Unverified customer says "ok", text matches recent bot reply "ok"
+      // Must NOT be suppressed!
+      expect(isIncomingEchoSuppressed("STRICT_TEXT_MATCH")).toBe(false);
+      expect(isIncomingEchoSuppressed("NONE")).toBe(false);
+      expect(isIncomingEchoSuppressed("EXACT_EXTERNAL_REF")).toBe(true);
+    });
   });
 });

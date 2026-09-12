@@ -1276,6 +1276,7 @@ export function createAdminRoutes(options: AdminRoutesOptions): FastifyPluginAsy
     // 5. AI Runs with Pagination & Search
     fastify.get<{ Querystring: { conversationId?: string; status?: string; model?: string; q?: string; from?: string; to?: string; limit?: string; offset?: string } }>(
       "/api/ai-runs",
+      { preHandler: [requireRole("OPERATOR")] },
       async (request, reply) => {
         const limit = Math.min(Math.max(1, parseInt(request.query.limit || "50", 10)), 100);
         const offset = Math.max(0, parseInt(request.query.offset || "0", 10));
