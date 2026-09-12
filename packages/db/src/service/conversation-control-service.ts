@@ -501,7 +501,6 @@ export class ConversationControlService {
 
       const mode = (current.mode || (current as unknown as { replyControlMode?: string }).replyControlMode || "AUTO") as ReplyControlMode;
       const controlEpoch = current.controlEpoch ?? (current as unknown as { epoch?: number }).epoch ?? 0;
-      const controlReason = current.controlReason ?? (current as unknown as { reason?: string }).reason ?? null;
       const humanHoldUntil = current.humanHoldUntil ?? (current as unknown as { holdUntil?: Date | null }).holdUntil ?? null;
       const humanSessionStartedAt = current.humanSessionStartedAt ?? null;
       const draftLeaseExpiresAt = current.draftLeaseExpiresAt ?? null;

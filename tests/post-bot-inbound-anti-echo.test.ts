@@ -433,7 +433,6 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
   describe("5. Technical Hold Normalization with autoResumeAfterHuman=false", () => {
     it("preserves REVIEW_HOLD in normalizeForInbound so technical hold is only released after new message dedupe & insert", async () => {
       let updatedMode: string | null = null;
-      let updatedReason: string | null = null;
       const convState = {
         id: "conv-unc-1",
         mode: "REVIEW_HOLD",
@@ -457,7 +456,6 @@ describe("P0 Regression: Post-Bot Inbound Loss, Anti-Echo & SEND_UNCERTAIN Isola
         update: vi.fn(() => ({
           set: vi.fn((vals) => {
             updatedMode = vals.replyControlMode;
-            updatedReason = vals.controlReason;
             return {
               where: vi.fn().mockResolvedValue([{ id: "conv-unc-1" }]),
             };

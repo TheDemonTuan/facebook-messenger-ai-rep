@@ -108,4 +108,78 @@ describe("PostgreSQL production acceptance", () => {
     const persisted = await db.select().from(jobs).where(eq(jobs.idempotencyKey, key));
     expect(persisted).toHaveLength(1);
   });
+
+  it("SEND_INTENT -> customer inbound -> action remains SEND_INTENT and confirms cleanly", async (ctx) => {
+    if (!hasDb) return ctx.skip();
+    const db = getDb();
+    const outboundRepo = new OutboundRepository(db);
+
+    const convId = `conv-pg-race-${randomUUID()}`;
+    const threadId = `thread-pg-race-${randomUUID()}`;
+    const actionId = `act-pg-race-${randomUUID()}`;
+
+    // 1. Create conversation with inboundVersion = 1
+    await db.insert(conversations).values({
+      id: convId,
+      channelAccountId: accountId,
+      externalThreadId: threadId,
+      inboundVersion: 1,
+      replyControlMode: "AUTO",
+      manualMode: false,
+    });
+
+    // 2. Insert action that has reached SEND_INTENT (Enter pressed)
+    await db.insert(outboundActions).values({
+      id: randomUUID(),
+      channelAccountId: accountId,
+      conversationId: convId,
+      actionId,
+      inboundVersion: 1,
+      responseIndex: 0,
+      text: "Xin chào quý khách",
+      textHash: "hash123",
+      actor: "AI",
+      status: "SEND_INTENT",
+    });
+
+    // 3. Customer replies quickly -> inboundVersion advances to 2, abortStaleActions called
+    await outboundRepo.abortStaleActions(convId, 2);
+
+    // 4. Invariant assertion: SEND_INTENT must NOT be cancelled!
+    const [freshAction] = await db
+      .select({ status: outboundActions.status })
+      .from(outboundActions)
+      .where(eq(outboundActions.actionId, actionId));
+
+    expect(freshAction?.status).toBe("SEND_INTENT");
+
+    // 5. Delivery verification succeeds -> confirmSent updates to CONFIRMED
+    const confirmed = await outboundRepo.confirmSent(actionId, `msg-ref-${actionId}`);
+    expect(confirmed.status).toBe("CONFIRMED");
+
+    // 6. Resurrect prevention: if action were CANCELLED, confirmSent must reject
+    const cancelledActionId = `act-pg-canc-${randomUUID()}`;
+    await db.insert(outboundActions).values({
+      id: randomUUID(),
+      channelAccountId: accountId,
+      conversationId: convId,
+      actionId: cancelledActionId,
+      inboundVersion: 1,
+      responseIndex: 0,
+      text: "Tin nhắn bị hủy",
+      textHash: "hash456",
+      actor: "AI",
+      status: "CANCELLED",
+    });
+
+    await expect(
+      outboundRepo.confirmSent(cancelledActionId, `msg-ref-resurrect`)
+    ).rejects.toThrow(/Cannot confirm action/);
+
+    const [stillCancelled] = await db
+      .select({ status: outboundActions.status })
+      .from(outboundActions)
+      .where(eq(outboundActions.actionId, cancelledActionId));
+    expect(stillCancelled?.status).toBe("CANCELLED");
+  });
 });
