@@ -62,10 +62,11 @@ Hệ thống AI CSKH tự động cho Facebook Messenger cá nhân, vận hành 
 - **Microservices tối giản**: Toàn bộ logic API, Dashboard static files, Background Job Scheduler và AI Worker được hợp nhất trong `apps/core`, giao tiếp với `apps/browser-agent` qua mạng nội bộ cô lập.
 
 ### Cô lập Mạng (Network Segmentation)
-Hệ thống sử dụng 3 Docker networks riêng biệt:
-1. `data` (`internal: true`): Chỉ chứa `postgres`, `migrate`, `core`, và `browser-agent`. Hoàn toàn không có đường ra internet trực tiếp từ mạng này.
+Hệ thống dùng các mạng Docker sau:
+1. `data` (`internal: true`): Chứa `postgres`, `migrate`, `core`, và `browser-agent`; không publish cổng host.
 2. `app` (`internal: true`): Giao tiếp API và Sender Worker nội bộ giữa `core` và `browser-agent`.
-3. `edge`: Kết nối giữa `core` và `cloudflared` (Cloudflare Tunnel). Chỉ có `cloudflared` mở kết nối ra ngoài tới Cloudflare Edge; không mở bất kỳ public port nào trên host VPS.
+3. `edge` (`messenger_edge`): Legacy rollback bridge, giữ trong cửa sổ cutover; không còn sở hữu tunnel production sau khi chuyển đổi.
+4. `edge-portfolio` (external, shared): Kết nối `core` tới shared `edge-traefik`; alias ổn định `messenger-core`. Shared `edge-cloudflared` là tunnel duy nhất; production không publish host port.
 
 ### Siết chặt Container (Hardening)
 - `read_only: true`: Root filesystem ở chế độ chỉ đọc.
@@ -76,7 +77,7 @@ Hệ thống sử dụng 3 Docker networks riêng biệt:
   - `core`: user `bun` (UID 1000:1000).
   - `browser-agent`: user `pwuser` (UID 1000:1000).
   - `postgres`: user `postgres` (UID 70:70).
-  - `cloudflared`: user `nonroot` (UID 65532:65532).
+  - Shared `edge-cloudflared` and `edge-traefik` are hardened by the gateway repository.
 - `tmpfs`: Gắn thư mục tạm `/tmp` (và `/dev/shm` 1GB cho trình duyệt Chromium) vào RAM.
 - **Resource Limits**: Đặt trần CPU và RAM cho từng dịch vụ để chống DoS và cạn kiệt tài nguyên host.
 
@@ -153,7 +154,19 @@ Mỗi commit push lên `main` sẽ kích hoạt pipeline tự động:
 sudo ./scripts/bootstrap-vps.sh
 # Tạo file /opt/facebook-messenger-ai-rep/.env với các khóa bí mật production
 chmod 600 /opt/facebook-messenger-ai-rep/.env
+# Preflight shared edge trước deploy: edge-portfolio phải tồn tại và internal
 ```
+
+### 1a. Cutover sang shared edge (không downtime chủ động)
+1. Backup Messenger PostgreSQL; xác nhận `core`, `browser-agent`, `postgres` healthy và `edge-portfolio` tồn tại/internal.
+2. Cài `messenger.yml` vào shared Traefik dynamic config; chỉ reload file provider, không restart shared edge stack.
+3. Recreate riêng `messenger-core` để nhận `edge-portfolio`; probe `/readyz` từ namespace `edge-cloudflared`/`edge-traefik`.
+4. Trong Cloudflare Zero Trust, đổi Public Hostname `messenger.tuannguyenviet.site` sang shared tunnel với origin `http://172.31.250.4:8080`; giữ Access policy/DNS.
+5. Probe hostname, private paths, authenticated API và `/events` SSE; theo dõi `edge-traefik`, `edge-cloudflared` logs.
+6. Giữ `messenger-cloudflared` và `messenger_edge` trong rollback window. Chỉ sau khi traffic ổn định mới dừng/xóa dedicated tunnel/container/orphan.
+7. Ghi rollback receipt gồm DB backup, route file, hostname ingress cũ/mới, image state, thời điểm retire. Rollback chỉ hostname/route/app; không tự rollback DB schema.
+
+Cloudflare Tunnel ingress nằm ngoài repository; token/API credential không được commit.
 
 ### 2. Quản trị Deploy (`scripts/deploy.sh`):
 ```bash

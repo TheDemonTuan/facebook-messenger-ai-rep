@@ -16,5 +16,18 @@ grep -q '\-\-migrate' "$script"
 grep -q '\-\-reconcile' "$script"
 grep -q 'trap .* ERR INT TERM HUP' "$script"
 grep -q 'ensure_infra' "$script"
+! grep -q 'CLOUDFLARE_TUNNEL_TOKEN' "$script"
+! grep -q 'cloudflared' "$script"
+
+compose='compose.prod.yml'
+! grep -q '^  cloudflared:' "$compose"
+grep -q 'edge-portfolio:' "$compose"
+grep -q 'external: true' "$compose"
+grep -q 'messenger-core' "$compose"
+! grep -q '^[[:space:]]*ports:' "$compose"
+
+grep -q 'CLOUDFLARE_ACCESS_TEAM_NAME' '.env.example'
+grep -q 'CLOUDFLARE_ACCESS_AUD' '.env.example'
+! grep -q 'CLOUDFLARE_TUNNEL_TOKEN' '.env.example'
 
 echo "deploy script checks passed"

@@ -29,11 +29,12 @@ cat <<EOF
 VPS bootstrap complete.
 
 Next:
-1. Edit $APP_DIR/.env and replace every placeholder (Postgres password, session secrets, xAI key, Cloudflare token).
-2. Configure GitHub Actions production secrets (VPS_HOST, VPS_USER, VPS_SSH_KEY).
-3. For first-time Facebook login:
+1. Edit $APP_DIR/.env and replace every placeholder (Postgres password, session secrets, xAI key, Cloudflare Access settings).
+2. Confirm the shared edge stack owns the Cloudflare tunnel and the external edge-portfolio network exists.
+3. Configure GitHub Actions production secrets (VPS_HOST, VPS_USER, VPS_SSH_KEY).
+4. For first-time Facebook login:
    docker compose -f compose.prod.yml -f compose.debug.yml up -d
    ssh -L 6080:127.0.0.1:6080 user@vps
    Open http://localhost:6080/vnc.html to log in.
-4. Production operation runs with noVNC disabled by default.
+5. Production operation runs with noVNC disabled by default.
 EOF

@@ -130,6 +130,9 @@ services:
       edge:
         aliases:
           - control-plane
+      edge-portfolio:
+        aliases:
+          - messenger-core
       app:
         aliases:
           - control-plane
@@ -194,37 +197,6 @@ services:
       retries: 3
       start_period: 15s
 
-  cloudflared:
-    image: cloudflare/cloudflared:2025.2.0
-    container_name: messenger-cloudflared
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN}
-    depends_on:
-      core:
-        condition: service_healthy
-    networks:
-      - edge
-    read_only: true
-    security_opt:
-      - no-new-privileges:true
-    init: true
-    cap_drop:
-      - ALL
-    user: "65532:65532"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.5"
-          memory: 256M
-          pids: 50
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
 volumes:
   messenger_postgres_data:
   messenger_browser_profile:
@@ -241,3 +213,6 @@ networks:
     name: messenger_data
     internal: true
     driver: bridge
+  edge-portfolio:
+    external: true
+    name: edge-portfolio

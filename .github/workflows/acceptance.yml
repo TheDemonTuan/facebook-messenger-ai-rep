@@ -106,7 +106,6 @@ jobs:
           INTERNAL_HMAC_SECRET: acceptance-ci-hmac-placeholder-min32chars
           ADMIN_EMAIL: admin@example.com
           XAI_API_KEY: acceptance-placeholder
-          CLOUDFLARE_TUNNEL_TOKEN: acceptance-placeholder
           CLOUDFLARE_ACCESS_TEAM_NAME: acceptance-team
           CLOUDFLARE_ACCESS_AUD: acceptance-audience
         run: docker compose -f compose.prod.yml config --quiet

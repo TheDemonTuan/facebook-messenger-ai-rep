@@ -36,7 +36,7 @@ status() {
   printf '=== Facebook Messenger AI Deployment Status ===\n'
   printf 'Active images:\n%s\n' "$(cat "$IMAGES_STATE" 2>/dev/null || echo "none")"
   printf 'Previous images:\n%s\n' "$(cat "$PREVIOUS_IMAGES_STATE" 2>/dev/null || echo "none")"
-  for svc in postgres core browser-agent cloudflared; do
+  for svc in postgres core browser-agent; do
     printf '%s Health: %s\n' "$svc" "$(health_status "$svc")"
   done
   dc ps
@@ -122,6 +122,14 @@ command -v curl >/dev/null || die "curl is required"
 [ -f "$COMPOSE" ] || die "$COMPOSE is missing"
 [ -f "$APP_ENV" ] || die "$APP_ENV is missing"
 chmod 600 "$APP_ENV"
+
+# Shared Traefik must be able to resolve messenger-core on its isolated network.
+if ! docker network inspect edge-portfolio >/dev/null 2>&1; then
+  die "shared edge-portfolio network is missing"
+fi
+if [[ "$(docker network inspect edge-portfolio --format '{{.Internal}}' 2>/dev/null || true)" != "true" ]]; then
+  die "shared edge-portfolio network must be internal"
+fi
 
 mkdir -p "$APP_DIR" "$BACKUP_DIR"
 exec 9>"$LOCK_FILE"
@@ -240,10 +248,8 @@ elif [[ "$RECONCILE" == true ]]; then
   dc up -d --no-build
 fi
 
-# Ensure cloudflared tunnel is running
-if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" || -n "$(grep -E '^CLOUDFLARE_TUNNEL_TOKEN=' "$APP_ENV" 2>/dev/null | cut -d= -f2- | tr -d '\r"' || true)" ]]; then
-  dc up -d --no-deps --no-build cloudflared 2>/dev/null || true
-fi
+# Shared edge owns Cloudflare Tunnel lifecycle; do not start or remove its services here.
+# Keep the legacy messenger_edge network/container available during the cutover rollback window.
 
 # Health check deployed or reconciled services
 CHECK_SERVICES=("${DEPLOYED_SERVICES[@]}")

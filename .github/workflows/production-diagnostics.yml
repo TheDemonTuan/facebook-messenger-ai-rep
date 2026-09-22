@@ -52,6 +52,11 @@ jobs:
           docker logs --tail 250 messenger-core 2>&1 || true
           echo '=== Browser agent recent logs ==='
           docker logs --tail 100 messenger-browser-agent 2>&1 || true
+          echo '=== Shared edge status ==='
+          docker inspect edge-traefik --format '{{.State.Status}}' 2>&1 || true
+          docker inspect edge-cloudflared --format '{{.State.Status}}' 2>&1 || true
+          docker logs --tail 100 edge-traefik 2>&1 || true
+          docker logs --tail 100 edge-cloudflared 2>&1 || true
           echo '=== Database migrations ==='
           docker exec messenger-postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "select id, created_at from __drizzle_migrations order by created_at desc limit 10;"' 2>&1 || true
           REMOTE
